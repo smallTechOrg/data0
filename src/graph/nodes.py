@@ -304,9 +304,10 @@ def _assemble_plan_prompt(state: AgentState, wrap_up: bool) -> str:
         )
 
     parts.append(
-        "Now reply with EITHER a single pandas expression to run next — just the "
-        "raw code, with NO backticks, NO ```python fence, and NO surrounding prose "
-        "— OR `FINAL ANSWER:` followed by your answer."
+        "Now reply with EITHER an action — an optional `REASONING:` line then a "
+        "single bare pandas expression to run next, just the raw code, with NO "
+        "backticks, NO ```python fence, and NO surrounding prose — OR "
+        "`FINAL ANSWER:` followed by your answer."
     )
     return "\n\n".join(parts)
 
@@ -352,6 +353,38 @@ def plan_action(state: AgentState) -> AgentState:
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
     }
+
+
+# Leading `REASONING:` marker (case-insensitive, optional leading whitespace) that
+# a planner reply may prefix its action with (C33 per-step reasoning).
+_REASONING_RE = re.compile(r"^[ \t]*reasoning[ \t]*:", re.IGNORECASE)
+
+
+def _split_reasoning(text: str) -> tuple[str, str]:
+    """Split an OPTIONAL leading `REASONING:` line off a planner reply (C33).
+
+    If the FIRST non-empty line, after optional leading whitespace, starts with the
+    `REASONING:` marker (case-insensitive), returns
+    `(reasoning, remainder)` where `reasoning` is the trimmed text after the marker
+    on that line and `remainder` is everything AFTER that first line (unchanged).
+    Otherwise returns `("", text)` with the ORIGINAL text untouched, so a bare
+    expression reply (today's behaviour, and the stub's `df.describe().to_string()`)
+    flows through `_extract_code` byte-for-byte as it does today.
+    """
+    if not text:
+        return "", text
+    lines = text.splitlines(keepends=True)
+    # Find the first non-empty (non-whitespace-only) line.
+    for idx, line in enumerate(lines):
+        if line.strip():
+            match = _REASONING_RE.match(line)
+            if not match:
+                return "", text
+            reasoning = line[match.end():].strip()
+            remainder = "".join(lines[idx + 1:])
+            return reasoning, remainder
+    # All-blank reply: no reasoning, original text unchanged.
+    return "", text
 
 
 # A ```python … ``` (or bare ``` … ```) fenced code block. Some models wrap the
@@ -406,9 +439,14 @@ def execute_action(state: AgentState) -> AgentState:
     The planner reply is run through `_extract_code` first, so a model that wraps
     its action in a ```python fence (with reasoning prose around it) still has its
     REAL code executed instead of eval() choking on the prose.
+
+    An OPTIONAL leading `REASONING:` line (C33) is split off the raw reply BEFORE
+    `_extract_code` runs, so the executed expression is byte-for-byte what it is for
+    a bare reply; the rationale is recorded on the step (default `""`).
     """
     run_id = state.get("run_id", "")
-    expr = _extract_code(state.get("llm_response", ""))
+    reasoning, remainder = _split_reasoning(state.get("llm_response", ""))
+    expr = _extract_code(remainder)
     action_history = list(state.get("action_history") or [])
     charts = list(state.get("charts") or [])
 
@@ -459,6 +497,7 @@ def execute_action(state: AgentState) -> AgentState:
         "action": expr,
         "result": error_str if is_error else result_str,
         "is_error": is_error,
+        "reasoning": reasoning,
     }
     action_history.append(step)
 

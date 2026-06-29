@@ -222,6 +222,7 @@ export interface AskStep {
   action: string
   result: string
   is_error: boolean
+  reasoning?: string
 }
 
 /**
