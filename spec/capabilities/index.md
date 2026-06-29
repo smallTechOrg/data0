@@ -38,6 +38,7 @@
 | C30 | On-demand dataset notes generation | 4 | [dataset-notes-generation.md](dataset-notes-generation.md) |
 | C31 | Semantic context compression | 4 | [context-compression.md](context-compression.md) |
 | C32 | Collapsible conversation turns | 3 | [collapsible-turns.md](collapsible-turns.md) |
+| C33 | Per-step reasoning | 5 | [per-step-reasoning.md](per-step-reasoning.md) |
 
 > **C28:** intentionally absent in the source numbering — no capability, no file.
 

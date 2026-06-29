@@ -149,3 +149,26 @@ Today these users either learn pandas/SQL, wait on an analyst, or fight with spr
   The e2e suite includes a **real-key chart test** (ask a question that yields a chart → assert a Plotly figure JSON is captured and returned) and a **derived-dataset test** (a question that triggers `save_dataset` → a new derived dataset is registered with lineage). Plus a **visual smoke**: `python agent.py --run`, drive `/ask` to produce a chart and `curl` the page / API to confirm chart JSON and the ER-diagram dataset payload are present.
 
 - **How the user tests it (handoff seed):** Rebuild and run; ask a question that warrants a chart (e.g. "show the distribution of column X") — an inline chart renders. Ask something that creates a new table (e.g. "create a cleaned version with nulls dropped and save it") — a Derived dataset appears under Tables with a green badge. Open the Database tab: the ER diagram shows each dataset as a card with inferred FK edges; click a card to see its description, keys, columns, and preview; edit context notes; click "Generate notes". **All surfaces are now real.** No remaining stubs.
+
+### Phase 5 — Per-step reasoning
+
+- **Goal:** Each ReAct step now carries a SHORT natural-language rationale, captured inline from the SAME `plan_action` LLM call (no extra calls, no added latency/cost), stored on each `action_history` entry, and shown next to that step's code in the Steps inspector. Existing execution is byte-for-byte unchanged; the offline stub suite stays green. Delivers C33 (see [capabilities/per-step-reasoning.md](capabilities/per-step-reasoning.md)). NO DB migration, NO new `AgentState` field.
+
+- **Independent slices (parallel build units):**
+  - `slice-5a` (backend — prompt + parse + tests) — instruct the model to emit an optional leading `REASONING:` line before the bare expression (the exact reply contract is in the capability file), parse it off `llm_response` in `execute_action` BEFORE `_extract_code` runs, store `reasoning` (default `""`) on each `action_history` step, and keep `_extract_code` producing today's identical bare expression. Parsing stays in `src/graph/nodes.py` (NOT `sandbox.py`). Plus a stub/unit test (reasoning parsed + stored; execution unchanged; bare-reply → `reasoning=""`) and a real-Gemini integration test (a real run records non-empty reasoning on ≥1 step). **Deps: none.**
+  - `slice-5b` (frontend — inspector + type) — add `reasoning?: string` to the `AskStep` type in `frontend/src/lib/api.ts`, and render the per-step rationale next to each action in `StepsInspector.tsx`; when `reasoning` is absent/empty render NOTHING (no layout break). Builds against the agreed `AskStep` shape. Never touches `src/`. **Deps: none.**
+
+- **Key surfaces / files (disjoint by path):**
+  - `slice-5a` owns: `src/prompts/plan_action.md` (ADD the `REASONING:` instruction), `src/graph/nodes.py` (split the optional `REASONING:` line in `execute_action`; store `reasoning` on the step dict; `_extract_code` unchanged), `tests/unit/test_reasoning.py` (NEW, offline/stub — reasoning parsed + execution unchanged + bare-reply fallback), `tests/integration/test_reasoning_real.py` (NEW, real Gemini — non-empty reasoning on ≥1 step). Does NOT touch `src/graph/sandbox.py` (parsing lives in `nodes.py`). Does NOT touch the stub (`src/llm/providers/stub.py`) — its bare expression parses to `reasoning=""` under the contract.
+  - `slice-5b` owns: `frontend/src/lib/api.ts` (ADD `reasoning?: string` to `AskStep` only), `frontend/src/components/analyse/StepsInspector.tsx` (render the rationale; graceful absence). Never touches `src/`.
+
+- **Gate command (REAL Gemini from `.env`, per rules #6/#7):**
+
+  ```bash
+  uv run pytest tests/unit/ -q
+  uv run pytest tests/integration/ tests/e2e/ -q
+  ```
+
+  The first line is the offline stub suite (zero env, in-memory SQLite, no network) — it must stay **fully green** (no new failures vs the measured baseline of 213 passed / 0 failed on `main`), including the new `tests/unit/test_reasoning.py`. The second line is the **authoritative real-key gate**: it requires `AGENT_GEMINI_API_KEY` in `.env` and includes `tests/integration/test_reasoning_real.py`, which drives a real upload → ask round-trip and asserts that at least one `action_history` step has non-empty `reasoning` (and that the run still completes with a non-empty answer and unchanged execution semantics).
+
+- **How the user tests it (handoff seed):** From the repo root run `python agent.py --run` and open `http://localhost:8001/app/`. Upload a small CSV, ask a question that takes a few steps (e.g. "What is the average of column X, and which rows are above it?"), then expand the **Steps inspector** on the answer turn. Expect: under (or beside) each step's pandas code block, a SHORT one-line rationale explaining WHY that step was chosen. Steps with no rationale (e.g. an offline/stub run with `AGENT_GEMINI_API_KEY` unset) simply show the code with no rationale line and an unchanged layout — that absence is expected, not a bug. **Real surfaces:** the per-step rationale lines in the Steps inspector. No new stubs introduced.
