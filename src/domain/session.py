@@ -45,6 +45,8 @@ class SessionTurn(BaseModel):
     dataset_ids: list[str] = Field(default_factory=list)
     suggested_questions: list[str] = Field(default_factory=list)
     prompt_breakdown: dict[str, Any] = Field(default_factory=dict)
+    charts: list[str] = Field(default_factory=list)
+    duration_ms: int | None = None
     created_at: datetime | None = None
 
 

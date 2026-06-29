@@ -25,7 +25,7 @@ Answers a plain-English question about a dataset by running a LangGraph ReAct lo
 
 ## Business Rules
 - Termination on case-insensitive `FINAL ANSWER:` substring (tolerate preamble).
-- `MAX_ITERATIONS` = `AGENT_MAX_ITERATIONS` (default 6); near the cap, force a final answer.
+- `MAX_ITERATIONS` = `AGENT_MAX_ITERATIONS` (default 12); near the cap, force a final answer.
 - Execution errors are recoverable (self-correct); 3 consecutive errors or max-iter → force-finalize.
 - Full graph spec in `spec/agent.md`.
 

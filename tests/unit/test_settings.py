@@ -68,7 +68,7 @@ def test_new_settings_defaults(monkeypatch, tmp_path):
     m._settings = None
     s = m.get_settings()
     assert s.openrouter_api_key == ""
-    assert s.max_iterations == 6
+    assert s.max_iterations == 12
     assert isinstance(s.max_iterations, int)
 
 

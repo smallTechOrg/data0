@@ -96,11 +96,27 @@ Session + `turns[]`. **404** missing.
 ### `PATCH /sessions/{id}/name`
 Rename. **404** missing.
 
-### `DELETE /sessions/{id}` and `DELETE /sessions`
-Delete one / all sessions. **Does NOT cascade to `query_runs`** — run history is owned by the dataset, not the session; runs remain queryable after their session is deleted. Only the `conversation_sessions` row(s) are removed.
+### `DELETE /sessions/{id}`
+
+Delete one session. **Does NOT cascade to `query_runs`** — run history is owned by the dataset, not the session; runs remain queryable after their session is deleted. Only the `conversation_sessions` row is removed. **404** if missing.
+
+### `DELETE /sessions`
+
+Body (optional): `{ "session_ids": ["id1", "id2", ...] }`
+
+- With body: deletes only the listed sessions (skips any not found and any with a currently-running run). Returns `ok({ deleted: N })`.
+- Without body: deletes all sessions. Returns `ok({ deleted_count: N })`.
+
+**Does NOT cascade to `query_runs`** — runs remain queryable after their session is deleted.
 
 ### `GET /runs/current`
 Most recent run `{run_id, status, iteration_count, max_iterations}` (status `idle` when none). Used for live progress polling (~1/s). Always 200.
+
+### `GET /runs/{run_id}`
+
+Returns the run row by id.
+Response: `ok({ run_id, status, iteration_count, tokens_input, tokens_output, answer, error_message, dataset_ids })`.
+404 if not found.
 
 ### `POST /runs/{run_id}/cancel`
 Cooperatively cancel an in-flight run — the UI **Stop** button. Flags the run so the ReAct graph wraps up at its next routing edge with NO further model calls (`force_finalize` short-circuits its synthesis call; suggestions are skipped). Returns `{run_id, cancelling: true}`. Idempotent / best-effort: a finished or unknown `run_id` is a harmless no-op (the flag clears when the run ends). Served on a different threadpool thread than the running request. Always 200.

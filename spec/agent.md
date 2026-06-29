@@ -291,7 +291,8 @@ def _build_graph():
     g.add_conditional_edges("setup", after_setup,
         {"plan_action": "plan_action", "handle_error": "handle_error"})
     g.add_conditional_edges("plan_action", after_plan,
-        {"execute_action": "execute_action", "finalize": "finalize", "handle_error": "handle_error"})
+        {"execute_action": "execute_action", "finalize": "finalize",
+         "force_finalize": "force_finalize", "handle_error": "handle_error"})
     g.add_conditional_edges("execute_action", after_execute,
         {"plan_action": "plan_action", "force_finalize": "force_finalize", "handle_error": "handle_error"})
     g.add_edge("finalize", END)

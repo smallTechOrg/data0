@@ -96,7 +96,7 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 | **tabulate** | ≥0.9 | Table rendering in answers (ADD) |
 | **python-multipart** | ≥0.0.9 | FastAPI multipart upload parsing (ADD) |
 
-**New settings / env vars (prefix `AGENT_`):** ADD `AGENT_OPENROUTER_API_KEY` (default `""`), `AGENT_MAX_ITERATIONS` (int, default `6`). EXTEND `AGENT_LLM_PROVIDER` valid values to `auto | gemini | openrouter | stub` (blank ⇒ auto-detect from whichever key is set; explicit `stub` when none). `AGENT_LLM_MODEL` overrides the model. `AGENT_GEMINI_API_KEY` is the live key. (`.env.example` is updated to document these; `anthropic` provider stays supported as-is — it is not removed.)
+**New settings / env vars (prefix `AGENT_`):** ADD `AGENT_OPENROUTER_API_KEY` (default `""`), `AGENT_MAX_ITERATIONS` (int, default `12`). EXTEND `AGENT_LLM_PROVIDER` valid values to `auto | gemini | openrouter | stub` (blank ⇒ auto-detect from whichever key is set; explicit `stub` when none). `AGENT_LLM_MODEL` overrides the model. `AGENT_GEMINI_API_KEY` is the live key. (`.env.example` is updated to document these; `anthropic` provider stays supported as-is — it is not removed.)
 
 **New `src/` modules (added in place):**
 

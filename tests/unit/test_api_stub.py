@@ -621,3 +621,41 @@ def test_charts_json_persisted_on_run(api_client):
     assert r2.status_code == 200
     # charts in response may be [] for stub but key must exist
     assert "charts" in r2.json()["data"]
+
+
+# --- POST /runs/{run_id}/cancel ------------------------------------------
+
+
+def test_cancel_run_returns_ok(api_client, _isolated_db):
+    """POST /runs/{run_id}/cancel sets cancellation flag and returns ok envelope."""
+    from sqlalchemy.orm import sessionmaker
+    from db.models import QueryRunRow
+    from graph.cancellation import is_cancelled, discard
+    import uuid
+
+    # Create a run row in the isolated DB so the run_id is realistic.
+    run_id = str(uuid.uuid4())
+    Session = sessionmaker(bind=_isolated_db, autoflush=False, autocommit=False)
+    with Session() as db_session:
+        row = QueryRunRow(
+            id=run_id,
+            question="test question",
+            status="running",
+            iteration_count=0,
+            tokens_input=0,
+            tokens_output=0,
+        )
+        db_session.add(row)
+        db_session.commit()
+
+    try:
+        r = api_client.post(f"/runs/{run_id}/cancel")
+        assert r.status_code == 200, r.text
+        data = r.json()["data"]
+        assert data["run_id"] == run_id
+        assert data["cancelling"] is True
+        # Verify the cancellation was registered in the module-level set.
+        assert is_cancelled(run_id), "run_id should be flagged as cancelled"
+    finally:
+        # Clean up the cancellation flag so it doesn't bleed into other tests.
+        discard(run_id)
