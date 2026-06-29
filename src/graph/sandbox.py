@@ -1,0 +1,433 @@
+"""Pandas eval sandbox for `execute_action`.
+
+The agent's single "tool" is eval/exec of a pandas expression the model emits as
+text. This module builds the fixed namespace that expression runs in and the safe
+`eval_expression` helper that captures the result, any Plotly figure, and any error.
+
+Per `spec/agent.md` -> "## Tools & Tool Calling":
+- Namespace: `df` (first DataFrame), `df1`/`df2`/... per dataset (ordered by
+  `dataset_ids`), a `<filename_stem>` alias per dataset, plus the libraries
+  `pd, np, px, go, plt, sns, scipy, stats, sklearn, sm`, plus `save_dataset`.
+- No filesystem/network builtins beyond these are exposed.
+
+Phase 4 scope: `save_dataset` is REAL — it materialises the DataFrame as a
+registered DERIVED dataset (CSV + Parquet + a `datasets` row with lineage) via
+`graph.derived.register_derived_dataset` (C25). The module-level `save_dataset`
+here is a thin best-effort wrapper with no run/parent lineage; `nodes.execute_action`
+binds a *run-aware* closure into the per-run namespace that supplies the producing
+`run_id` + parent `dataset_ids` + the exact action expression as `derivation_code`.
+Chart capture is wired here (C4) and must never crash a run.
+"""
+from __future__ import annotations
+
+import ast
+import re
+import traceback
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+# Heavier optional libs imported lazily-ish at module load so the namespace is
+# complete; all are guaranteed present by pyproject.
+import plotly.express as px
+import plotly.graph_objects as go
+import matplotlib
+
+matplotlib.use("Agg")  # headless: never try to open a window in the sandbox
+import matplotlib.pyplot as plt  # noqa: E402
+import seaborn as sns  # noqa: E402
+import scipy  # noqa: E402
+from scipy import stats  # noqa: E402
+import sklearn  # noqa: E402
+import statsmodels.api as sm  # noqa: E402
+
+from graph.derived import register_derived_dataset  # noqa: E402
+from observability.events import get_logger  # noqa: E402
+
+logger = get_logger("graph.sandbox")
+
+
+_IDENTIFIER_RE = re.compile(r"[^0-9a-zA-Z_]")
+
+
+def _safe_alias(stem: str) -> str | None:
+    """Turn a filename stem into a valid python identifier alias, or None."""
+    alias = _IDENTIFIER_RE.sub("_", stem).strip("_")
+    if not alias or alias[0].isdigit():
+        alias = f"_{alias}" if alias else ""
+    return alias or None
+
+
+def _extract_derivation_expr(code: str) -> str:
+    """Recover the DataFrame-producing expression from the recorded action.
+
+    For a re-runnable `derivation_code` we want the expression that PRODUCES the
+    saved DataFrame, not the wrapping `save_dataset(...)` call. Two shapes:
+
+      - inlined:   `save_dataset(df.dropna(), 'x', '')`            -> `df.dropna()`
+      - assigned:  `merged = df.merge(df2, on='id')`               -> `df.merge(df2, on='id')`
+                   `save_dataset(merged, 'x', '')`
+
+    In the assigned case the first argument is a bare variable, so we resolve it
+    back to its assignment's right-hand side within the action — otherwise the
+    stored derivation code would just be a variable name (e.g. `merged_df`), which
+    is neither informative nor re-derivable. Falls back to the raw code when it
+    can't be parsed or has no `save_dataset(...)` call.
+    """
+    code = (code or "").strip()
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    # Locate the save_dataset(...) call and its first positional argument.
+    first_arg: ast.expr | None = None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "save_dataset"
+            and node.args
+        ):
+            first_arg = node.args[0]
+            break
+    if first_arg is None:
+        return code
+
+    # A bare variable -> resolve to the LAST assignment of that name in the block.
+    if isinstance(first_arg, ast.Name):
+        target = first_arg.id
+        rhs: ast.expr | None = None
+        for stmt in tree.body:
+            if isinstance(stmt, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == target for t in stmt.targets
+            ):
+                rhs = stmt.value
+            elif (
+                isinstance(stmt, ast.AnnAssign)
+                and isinstance(stmt.target, ast.Name)
+                and stmt.target.id == target
+                and stmt.value is not None
+            ):
+                rhs = stmt.value
+        if rhs is not None:
+            try:
+                return ast.unparse(rhs).strip()
+            except Exception:  # noqa: BLE001 — unparse failure -> name fallback
+                pass
+        return target
+
+    # Inlined expression argument.
+    try:
+        return ast.unparse(first_arg).strip()
+    except Exception:  # noqa: BLE001
+        return code
+
+
+def make_save_dataset(
+    *,
+    run_id: str | None,
+    parent_ids: list[str],
+    on_registered=None,
+    on_saved=None,
+):
+    """Build a run-aware `save_dataset(df, name, desc)` for a single run.
+
+    The returned callable has the model-visible signature `save_dataset(df, name,
+    desc="")` but closes over the producing `run_id` and parent `dataset_ids` and
+    captures the current action expression as `derivation_code` (C25). On success
+    it registers a real DERIVED dataset, invokes `on_registered(new_id)` (so the
+    node can collect created ids) and `on_saved(name, df)` (so the node can make
+    the saved frame available as a `<name>` variable in subsequent steps), and
+    returns a confirmation string. A disk/db failure is CAUGHT and returned as an
+    error string — it never crashes the run.
+
+    `derivation_code` is bound per-action via the mutable `_code` cell so the node
+    can set it to the exact expression that produced `df` just before eval.
+    """
+    state = {"code": ""}
+
+    def _set_code(expr: str) -> None:
+        state["code"] = expr or ""
+
+    def save_dataset(df: Any, name: str, desc: str = "") -> str:
+        try:
+            # Record the df-producing expression (not the whole save_dataset call)
+            # so /re-derive can re-run it against current parents (C25).
+            derivation_code = _extract_derivation_expr(state["code"])
+            new_id = register_derived_dataset(
+                df,
+                name,
+                desc,
+                run_id=run_id,
+                parent_ids=list(parent_ids or []),
+                derivation_code=derivation_code,
+            )
+            if on_registered is not None:
+                try:
+                    on_registered(new_id)
+                except Exception:  # noqa: BLE001 — collection is best-effort
+                    pass
+            # Make the saved frame referenceable as `<name>` in later steps (and,
+            # via the node, later turns of this session).
+            if on_saved is not None:
+                try:
+                    on_saved(name, df)
+                except Exception:  # noqa: BLE001 — best-effort namespace inject
+                    pass
+            rows = int(getattr(df, "shape", (0, 0))[0])
+            cols = int(getattr(df, "shape", (0, 0))[1])
+            alias = _safe_alias(name) or name
+            return (
+                f"save_dataset('{name}'): registered derived dataset {new_id} "
+                f"({rows} rows x {cols} cols). Now available as the variable "
+                f"`{alias}` for the rest of this analysis and later turns of this "
+                f"conversation."
+            )
+        except Exception as exc:  # noqa: BLE001 — recorded as a step error
+            logger.warning("save_dataset_failed", run_id=run_id, error=str(exc))
+            return f"save_dataset('{name}') failed: {type(exc).__name__}: {exc}"
+
+    # Expose the per-action code setter on the callable so the node can update it.
+    save_dataset.set_code = _set_code  # type: ignore[attr-defined]
+    return save_dataset
+
+
+def save_dataset(df: Any, name: str, desc: str = "") -> str:
+    """Module-level `save_dataset` — the default bound in `build_namespace`.
+
+    This best-effort variant registers a derived dataset WITHOUT run/parent
+    lineage (no producing run is known at module scope). `nodes.execute_action`
+    overrides it in the per-run namespace with a run-aware closure from
+    `make_save_dataset` that supplies lineage + `derivation_code`. A failure is
+    caught and returned as an error string so a model call never crashes the run.
+    """
+    try:
+        new_id = register_derived_dataset(
+            df, name, desc, run_id=None, parent_ids=[], derivation_code=""
+        )
+        rows = int(getattr(df, "shape", (0, 0))[0])
+        cols = int(getattr(df, "shape", (0, 0))[1])
+        return (
+            f"save_dataset('{name}'): registered derived dataset {new_id} "
+            f"({rows} rows x {cols} cols)."
+        )
+    except Exception as exc:  # noqa: BLE001 — recorded as a step error
+        return f"save_dataset('{name}') failed: {type(exc).__name__}: {exc}"
+
+
+def build_namespace(
+    dataframes: list[pd.DataFrame],
+    filenames: list[str] | None = None,
+) -> dict[str, Any]:
+    """Assemble the eval namespace for a run.
+
+    `dataframes` are ordered by `dataset_ids`. `filenames` (same order, optional)
+    provide the `<filename_stem>` aliases.
+    """
+    ns: dict[str, Any] = {
+        "pd": pd,
+        "np": np,
+        "px": px,
+        "go": go,
+        "plt": plt,
+        "sns": sns,
+        "scipy": scipy,
+        "stats": stats,
+        "sklearn": sklearn,
+        "sm": sm,
+        "save_dataset": save_dataset,
+    }
+
+    filenames = filenames or []
+    for idx, frame in enumerate(dataframes):
+        # df1 / df2 / ... (1-based) per dataset
+        ns[f"df{idx + 1}"] = frame
+        # <filename_stem> alias when we have a usable name
+        if idx < len(filenames) and filenames[idx]:
+            stem = filenames[idx].rsplit(".", 1)[0]
+            stem = stem.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+            alias = _safe_alias(stem)
+            if alias and alias not in ns:
+                ns[alias] = frame
+
+    # `df` is the first DataFrame (most questions are single-dataset)
+    if dataframes:
+        ns["df"] = dataframes[0]
+
+    return ns
+
+
+def _capture_charts(result: Any) -> list[str]:
+    """If the eval result is a Plotly figure (or list of them), serialise to JSON.
+
+    A failed serialisation is swallowed — chart capture must never abort a run.
+    """
+    charts: list[str] = []
+    candidates = result if isinstance(result, (list, tuple)) else [result]
+    for item in candidates:
+        if isinstance(item, go.Figure):
+            try:
+                charts.append(item.to_json())
+            except Exception:
+                pass
+    return charts
+
+
+def _capture_matplotlib_charts() -> list[str]:
+    """Convert any open matplotlib figures to Plotly JSON strings.
+
+    When the LLM uses pandas .plot() or plt.* (matplotlib backend) instead of
+    px/go, the figures are created in memory (Agg backend — headless) but never
+    returned as a go.Figure. This helper converts whatever is open in pyplot's
+    figure manager into Plotly figures so ChartRender can display them.
+    Always closes all matplotlib figures afterwards to reset state between steps.
+    """
+    charts: list[str] = []
+    try:
+        fig_nums = plt.get_fignums()
+        if not fig_nums:
+            return charts
+        try:
+            import plotly.tools as tls  # noqa: PLC0415
+            for fnum in fig_nums:
+                mfig = plt.figure(fnum)
+                try:
+                    pfig = tls.mpl_to_plotly(mfig)
+                    charts.append(pfig.to_json())
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
+        plt.close("all")
+    except Exception:  # noqa: BLE001
+        pass
+    return charts
+
+
+def _collect_namespace_charts(namespace: dict[str, Any]) -> list[str]:
+    """Scan the eval namespace for any go.Figure objects assigned to variables.
+
+    Handles the common LLM pattern `fig = px.bar(...); fig.show()` where the
+    result of eval/exec is None (show() returns None) but the figure is still
+    reachable as a named variable in the namespace.
+    """
+    charts: list[str] = []
+    seen_ids: set[int] = set()
+    for val in namespace.values():
+        if isinstance(val, go.Figure) and id(val) not in seen_ids:
+            seen_ids.add(id(val))
+            try:
+                charts.append(val.to_json())
+            except Exception:
+                pass
+    return charts
+
+
+def _stringify(result: Any) -> str:
+    """Convert an arbitrary eval result to a readable string for the transcript."""
+    if result is None:
+        return "None"
+    if isinstance(result, go.Figure):
+        return "[Plotly figure captured]"
+    try:
+        if isinstance(result, (pd.DataFrame, pd.Series)):
+            n = len(result)
+            suffix = ""
+            # Cap rows before calling to_string() — huge frames would OOM before truncation.
+            if isinstance(result, pd.DataFrame):
+                original_ncols = len(result.columns)
+                # Cap rows.
+                if n > 100:
+                    result = result.head(100)
+                    suffix += f"\n... [{n - 100} more rows not shown]"
+                # Cap columns (C8: up to ~20 cols per spec).
+                if original_ncols > 20:
+                    result = result.iloc[:, :20]
+                    suffix += f"\n[showing 20 of {original_ncols} columns]"
+                text = result.to_string()
+            else:
+                text = result.to_string()
+            text += suffix
+            if len(text) > 6000:
+                text = text[:6000] + "\n... [truncated]"
+            return text
+    except Exception:
+        pass
+    text = str(result)
+    if len(text) > 6000:
+        text = text[:6000] + "\n... [truncated]"
+    return text
+
+
+def eval_expression(
+    expr: str, namespace: dict[str, Any]
+) -> tuple[str, list[str], bool, str | None]:
+    """Evaluate `expr` in `namespace`, capturing result, charts, error.
+
+    Returns `(result_str, charts_json_list, is_error, error_str)`.
+
+    Tries `eval` first (expressions, the common case); on a `SyntaxError` falls
+    back to `exec` (statements, e.g. multi-line assignments) and reports the value
+    of a trailing `_` / last expression where possible. Any exception is caught and
+    reported — execution errors are recoverable (the graph loops back to plan).
+    """
+    expr = (expr or "").strip()
+    if not expr:
+        return "", [], True, "empty expression"
+
+    # When a run-aware `save_dataset` is bound (it carries a `.set_code` hook),
+    # tell it the exact expression that is about to produce the df, so a derived
+    # dataset records the right `derivation_code` (C25).
+    saver = namespace.get("save_dataset")
+    set_code = getattr(saver, "set_code", None)
+    if callable(set_code):
+        try:
+            set_code(expr)
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
+    try:
+        try:
+            result = eval(expr, namespace)  # noqa: S307 — sandboxed, intentional
+        except SyntaxError:
+            # Statement(s) rather than a single expression. Parse the block and, if
+            # it ends in an expression, exec everything BEFORE that and eval the
+            # last expression EXACTLY ONCE. The old approach (exec the whole block,
+            # then eval the last *line*) ran a side-effecting tail twice — e.g.
+            # `df = ...` then `save_dataset(df, ...)` registered the derived dataset
+            # two times. ast.parse re-raises on genuinely invalid code (caught below).
+            tree = ast.parse(expr)
+            if tree.body and isinstance(tree.body[-1], ast.Expr):
+                *head, tail = tree.body
+                if head:
+                    exec(  # noqa: S102 — sandboxed, intentional
+                        compile(ast.Module(body=head, type_ignores=[]), "<string>", "exec"),
+                        namespace,
+                    )
+                result = eval(  # noqa: S307 — sandboxed, intentional
+                    compile(ast.Expression(tail.value), "<string>", "eval"), namespace
+                )
+            else:
+                exec(compile(tree, "<string>", "exec"), namespace)  # noqa: S102
+                result = "[executed statements; no return value]"
+
+        direct_charts = _capture_charts(result)
+        ns_charts = _collect_namespace_charts(namespace)
+        mpl_charts = _capture_matplotlib_charts()
+        # Merge all three sources. Priority: direct return > namespace scan > mpl.
+        seen_json: set[str] = set(direct_charts)
+        charts = list(direct_charts)
+        for c in ns_charts + mpl_charts:
+            if c not in seen_json:
+                seen_json.add(c)
+                charts.append(c)
+        return _stringify(result), charts, False, None
+    except Exception as exc:  # noqa: BLE001 — recoverable, recorded in transcript
+        err = f"{type(exc).__name__}: {exc}"
+        # One compact traceback line helps the model self-correct.
+        tb = traceback.format_exc().strip().splitlines()
+        if tb:
+            err = f"{err}\n{tb[-1]}"
+        return "", [], True, err

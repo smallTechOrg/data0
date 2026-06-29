@@ -1,0 +1,93 @@
+"""Settings + provider auto-detection — no LLM key required."""
+import pytest
+import os
+
+
+def test_auto_detects_anthropic(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_ANTHROPIC_API_KEY", "sk-ant-fake")
+    monkeypatch.setenv("AGENT_GEMINI_API_KEY", "")
+    monkeypatch.setenv("AGENT_LLM_PROVIDER", "")
+    monkeypatch.setenv("AGENT_DATABASE_URL", f"sqlite:///{tmp_path}/t.db")
+
+    import config.settings as m
+    m._settings = None
+    s = m.get_settings()
+    assert s.anthropic_api_key == "sk-ant-fake"
+    assert s.gemini_api_key == ""
+
+
+def test_auto_detects_gemini(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("AGENT_GEMINI_API_KEY", "AIza-fake")
+    monkeypatch.setenv("AGENT_LLM_PROVIDER", "")
+    monkeypatch.setenv("AGENT_DATABASE_URL", f"sqlite:///{tmp_path}/t.db")
+
+    import config.settings as m
+    m._settings = None
+    s = m.get_settings()
+    assert s.gemini_api_key == "AIza-fake"
+
+
+def test_provider_falls_back_to_stub_with_no_key(monkeypatch, tmp_path):
+    """No key set -> offline stub provider (Phase-2 spec: never raises)."""
+    monkeypatch.setenv("AGENT_ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("AGENT_GEMINI_API_KEY", "")
+    monkeypatch.setenv("AGENT_OPENROUTER_API_KEY", "")
+    monkeypatch.setenv("AGENT_LLM_PROVIDER", "")
+    monkeypatch.setenv("AGENT_DATABASE_URL", f"sqlite:///{tmp_path}/t.db")
+
+    import config.settings as m
+    m._settings = None
+
+    from llm.client import _make_provider
+    name, provider = _make_provider()
+    assert name == "stub"
+    assert provider.__class__.__name__ == "StubProvider"
+
+
+def test_explicit_provider_wins(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_ANTHROPIC_API_KEY", "sk-ant-fake")
+    monkeypatch.setenv("AGENT_GEMINI_API_KEY", "AIza-fake")
+    monkeypatch.setenv("AGENT_LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("AGENT_DATABASE_URL", f"sqlite:///{tmp_path}/t.db")
+
+    import config.settings as m
+    m._settings = None
+    s = m.get_settings()
+    assert s.llm_provider == "gemini"
+
+
+def test_new_settings_defaults(monkeypatch, tmp_path):
+    """openrouter_api_key and max_iterations have correct defaults."""
+    monkeypatch.setenv("AGENT_DATABASE_URL", f"sqlite:///{tmp_path}/t.db")
+    # ensure no override leaks in
+    monkeypatch.delenv("AGENT_OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("AGENT_MAX_ITERATIONS", raising=False)
+
+    import config.settings as m
+    m._settings = None
+    s = m.get_settings()
+    assert s.openrouter_api_key == ""
+    assert s.max_iterations == 6
+    assert isinstance(s.max_iterations, int)
+
+
+def test_openrouter_api_key_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_DATABASE_URL", f"sqlite:///{tmp_path}/t.db")
+    monkeypatch.setenv("AGENT_OPENROUTER_API_KEY", "or-fake-key")
+
+    import config.settings as m
+    m._settings = None
+    s = m.get_settings()
+    assert s.openrouter_api_key == "or-fake-key"
+
+
+def test_max_iterations_override_coerces_to_int(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_DATABASE_URL", f"sqlite:///{tmp_path}/t.db")
+    monkeypatch.setenv("AGENT_MAX_ITERATIONS", "9")
+
+    import config.settings as m
+    m._settings = None
+    s = m.get_settings()
+    assert s.max_iterations == 9
+    assert isinstance(s.max_iterations, int)

@@ -1,0 +1,163 @@
+# API
+
+---
+
+## API Style
+
+REST over HTTP, served single-origin by FastAPI on port 8001. The built Next.js app is mounted at `/app`; API routes are at the root. **Success envelope:** `{"data": ..., "error": null}` via `ok(data)`. **Error envelope:** HTTP 4xx/5xx with `{"detail": {"code": ..., "message": ...}}` via `api_error(code, message, status_code)`. No authentication (single local user).
+
+> Routers live in `src/api/` — one module per resource, registered in `create_app()`. The boilerplate `/runs` POST/GET stays unless it conflicts; the canonical analysis route is `/ask`. `GET /runs/current` is ADDED to `runs.py`.
+
+## Endpoints / Commands
+
+### `GET /health`
+Returns `ok({status:"ok", provider:"<gemini|openrouter|stub|anthropic>", model:"<active-model-id>"})`. The `provider` field drives the UI stub banner; `model` is the model id the active provider will actually call (resolved via `LLMClient`) and drives the header "Live · &lt;model&gt;" badge. A provider-init failure falls back to `provider:"stub"` with `model:""`. Always 200.
+
+### `GET /` and `/app`
+The single-origin Next.js UI (static mount). Server starts API-only if `frontend/out/` is absent.
+
+### `POST /upload`
+Multipart `file`; form `context?`, `notes_file?`; query `force=false`. Parses (pandas), computes sha256, duplicate-checks (C10), saves CSV + Parquet, creates a `datasets` row, triggers async C30 notes. Accepts `.csv/.tsv/.txt/.json/.xlsx/.xls`. Returns `{dataset_id, filename, format, row_count, col_count, columns, context, auto_notes_status}`.
+
+> **Notes truncation:** when `notes_file` is supplied its decoded text is **silently truncated to 4000 characters** before being stored as `context` — no error is returned for oversized notes files. This differs from `PATCH /datasets/{id}/context`, which rejects values exceeding 4000 chars with `400 context_too_long`. The plain `context` form field is stored as-is (no server-side truncation at upload).
+
+| Status | Condition |
+|--------|-----------|
+| 409 | `duplicate_dataset` (with `match_type` + `existing_*`); resolvable with `force=true` |
+| 400 | bad extension / unparseable / empty file |
+| 500 | disk write failure |
+
+### `GET /datasets`
+List datasets incl. `origin`, `stale`, `derived_*`, `derivation_description`. Always 200.
+
+### `GET /datasets/{id}`
+Full metadata incl. `columns_schema[{name, dtype-alias}]` (alias table in `spec/data.md`), `context`, `derivation_code`, `auto_notes_status`. **404** if missing.
+
+### `GET /datasets/{id}/preview?rows=10`
+`{columns, rows}` first N rows (clamp 1..50); per-cell formatting (floats round 4, whole floats → int, NaN → null). **404** missing / **500** read error.
+
+### `GET /datasets/{id}/sessions`
+Sessions scoped to that dataset. **404** missing.
+
+### `DELETE /datasets/{id}`
+Cascade delete (+ recursive derived, C15). **404** missing / **409** `dataset_in_use`.
+
+### `DELETE /datasets`
+Delete all + cascade.
+
+### `PATCH /datasets/{id}/context`
+Body `{context}` (≤4000). **400** `context_too_long` / **404** missing.
+
+> Sending `{"context": ""}` or `{"context": null}` clears the field to `null` in the DB; callers reading back the dataset will receive `context: null`, not `""`.
+
+### `POST /datasets/{id}/describe`
+C30 trigger: set `auto_notes_status=pending`, generate notes async. **404** missing.
+
+### `POST /datasets/{id}/re-derive`
+C25 re-run `derivation_code` vs current parents; clears `stale`. **400** `not_derived` / **404** `parent_not_found` / **400** `re_derive_error`.
+
+> On success, both `created_at` and `updated_at` on the derived dataset are reset to the current time. This is the mechanism that clears the staleness condition: a dataset is considered stale when `parent.updated_at > derived.created_at`, so resetting `created_at` after a successful re-derive makes the derived dataset current again.
+
+### `POST /datasets/{id}/clean`
+C24 NL cleaning PREVIEW: LLM generates pandas code, run on a copy, return `{code, before/after row+col counts, previews}`. **422** on clean exec error. **404** missing.
+
+### `POST /datasets/{id}/clean/apply`
+C24 apply code in place; rewrite CSV + Parquet, update counts. **422** exec error / **404** missing.
+
+### `POST /ask`
+Body `{dataset_id? | dataset_ids?, question, session_id?, skip_clarification:false}`.
+Pre-flight C26 (unless `skip_clarification`) → may return `{type:"clarification", clarification_question, run_id, session_id}` (thin run, status `clarification`). Else resolve datasets (explicit or C19 selector), create the run (`status=running`), run the agent, return:
+```json
+{"type":"answer","run_id":"...","session_id":"...","dataset_ids":[...],
+ "derived_dataset_ids":[...],"datasets_used":[...],"selector_reasoning":"...",
+ "answer_markdown":"...","answer_html":"...","charts":[...],
+ "iteration_count":3,"tokens_input":1234,"tokens_output":567,"status":"completed",
+ "is_best_effort":false,"steps":[...],"suggested_questions":[...],
+ "prompt_breakdown":{...},"duration_ms":4210}
+```
+
+> **`duration_ms`:** an integer — the wall-clock time of the whole agent run in milliseconds, measured in the `/ask` handler around `run_agent` (selector + iterations + finalize). The UI shows it as the answer's response time ("took Xs"). Present on the answer payload only (a `clarification` short-circuit carries no `duration_ms`).
+
+> **`charts` field:** a list of Plotly figure JSON strings (`list[str]`). Each element is the serialised output of `plotly.graph_objects.Figure.to_json()` — a self-contained Plotly spec that can be passed directly to `Plotly.react()` / `JSON.parse()`. The list is empty (`[]`) when the agent produced no charts during the run. Charts are also persisted to `query_runs.charts_json` and surfaced via `GET /sessions/{id}` on each turn.
+
+| Status | Condition |
+|--------|-----------|
+| 404 | dataset or session not found |
+| 400 | empty question / session mismatch / >20 turns / no datasets uploaded |
+
+### `GET /sessions`
+All sessions, most-recently-updated first; each with `turn_count`, `first_question`. Always 200.
+
+### `GET /sessions/{id}`
+Session + `turns[]`. **404** missing.
+
+> **Turn payload:** each turn (`_turn_payload`) carries `run_id`, `question`, `answer_markdown`, `answer_html`, `iteration_count`, `tokens_input`, `tokens_output`, `status`, `type` (`answer`|`clarification`), `clarification_question`, `steps`, `dataset_ids`, `suggested_questions`, `prompt_breakdown`, `charts`, plus **`created_at`** (ISO string — when the turn was asked) and **`duration_ms`** (integer ms, derived from `updated_at − created_at` ≈ the run's lifespan, so resumed history shows a response time too; `null` when either timestamp is missing).
+
+### `PATCH /sessions/{id}/name`
+Rename. **404** missing.
+
+### `DELETE /sessions/{id}` and `DELETE /sessions`
+Delete one / all sessions. **Does NOT cascade to `query_runs`** — run history is owned by the dataset, not the session; runs remain queryable after their session is deleted. Only the `conversation_sessions` row(s) are removed.
+
+### `GET /runs/current`
+Most recent run `{run_id, status, iteration_count, max_iterations}` (status `idle` when none). Used for live progress polling (~1/s). Always 200.
+
+### `POST /runs/{run_id}/cancel`
+Cooperatively cancel an in-flight run — the UI **Stop** button. Flags the run so the ReAct graph wraps up at its next routing edge with NO further model calls (`force_finalize` short-circuits its synthesis call; suggestions are skipped). Returns `{run_id, cancelling: true}`. Idempotent / best-effort: a finished or unknown `run_id` is a harmless no-op (the flag clears when the run ends). Served on a different threadpool thread than the running request. Always 200.
+
+> **Active runs routes:** `GET /runs/current`, `GET /runs/{run_id}`, and `POST /runs/{run_id}/cancel` are active. The boilerplate `POST /runs` route from the skeleton was removed — analysis runs are created exclusively via `POST /ask`.
+
+### `GET /stats/daily`
+`{date, model, tokens_input, tokens_output, query_count, context_limit, last_prompt_tokens}` aggregated over today's completed runs (server-local day); `context_limit` from a hard-coded model table (unknown → 128000). Always 200.
+
+> **`last_prompt_tokens`:** an integer — the MOST RECENT completed run's input (`tokens_input`) tokens, i.e. the last query's prompt size (not the cumulative daily total). This is the per-request value the C29 context-window bar plots against `context_limit`; `0` when there are no completed runs today.
+
+### `GET /memory` and `PATCH /memory`
+Read / replace the global persistent memory text; PATCH triggers C31 compression. Memory is injected into every `plan_action` prompt as authoritative. Always 200 on read; PATCH **400** if body invalid.
+
+### `GET /settings`
+Returns the current runtime settings as key/value pairs. Always 200.
+
+```json
+{
+  "data": {
+    "llm_model": "gemini-3.1-flash-lite",
+    "max_iterations": "10",
+    "price_input_per_million": "0.25",
+    "price_output_per_million": "1.50"
+  },
+  "error": null
+}
+```
+
+> **Bare model IDs:** `llm_model` is stored and consumed as a BARE model id (e.g. `gemini-3.1-flash-lite`, `gemini-2.5-flash`) — no provider prefix. The same bare id is what the Settings dropdown writes, what the stats `_CONTEXT_LIMITS` table keys on, and what the provider passes to its SDK.
+
+All four values are stored as strings in the `settings` table (or `null` if that key has never been set, in which case the server falls back to the env/default for that setting).
+
+| Field | Type (stored) | Meaning |
+|-------|---------------|---------|
+| `llm_model` | string or null | LLM model override; `null` → use env/default |
+| `max_iterations` | string or null | Max ReAct iterations override; `null` → use env/default |
+| `price_input_per_million` | string or null | USD per 1 M input tokens for cost display; `null` → shown as N/A |
+| `price_output_per_million` | string or null | USD per 1 M output tokens for cost display; `null` → shown as N/A |
+
+### `PATCH /settings`
+
+Updates one or more settings fields. Only fields present in the request body are written; omitted fields are left unchanged. Returns the full settings object (same shape as `GET /settings`) after applying the updates. Always 200.
+
+**Request body** (all fields optional):
+
+```json
+{
+  "llm_model": "gemini-2.5-flash-lite",
+  "max_iterations": "5",
+  "price_input_per_million": "0.10",
+  "price_output_per_million": "0.40"
+}
+```
+
+**Response:** same envelope as `GET /settings`, reflecting the post-update state.
+
+## Authentication
+
+None — single local user. No API keys, sessions, or tokens for callers. Provider keys live in `.env` and never leave the server.
