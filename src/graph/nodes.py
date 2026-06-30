@@ -260,20 +260,42 @@ def setup(state: AgentState) -> AgentState:
     return {**state, "dataset_context": dataset_context, "status": "running"}
 
 
-def _assemble_plan_prompt(state: AgentState, wrap_up: bool) -> str:
-    """Build the plan_action user prompt from question + transcript + context."""
-    parts: list[str] = [_PLAN_TAG]
+# The fixed instruction footer appended to every assembled plan prompt.
+_PLAN_FOOTER = (
+    "Now reply with EITHER an action — an optional `REASONING:` line then a "
+    "single bare pandas expression to run next, just the raw code, with NO "
+    "backticks, NO ```python fence, and NO surrounding prose — OR "
+    "`FINAL ANSWER:` followed by your answer."
+)
+
+
+def _plan_prompt_sections(state: AgentState, wrap_up: bool) -> dict[str, str]:
+    """Build the per-section TEXT of the assembled plan_action user prompt.
+
+    Returns a dict mapping a stable section key to its rendered text (empty string
+    when the section is absent). The keys partition the WHOLE assembled user prompt
+    with no overlap — `_assemble_plan_prompt` joins the non-empty ones, and
+    `_plan_prompt_components` measures them into the six C29 buckets. The `tag`,
+    `question`, `wrap_up`, and `footer` keys are the fixed scaffolding; `datasets`,
+    `memory`, `history`, and `actions` are the variable context blocks.
+
+    NOTE: `dataset_context` already folds dataset notes INTO the schema block (via
+    `_schema_block(..., notes=...)` in `setup`), so the `## Datasets` section is
+    measured wholly into `dataset_schemas` and `dataset_notes` is 0 — measuring
+    them separately would double-count. See spec/capabilities/context-window-display.md.
+    """
+    sections: dict[str, str] = {}
+
+    sections["tag"] = _PLAN_TAG
 
     dataset_context = state.get("dataset_context")
-    if dataset_context:
-        parts.append("## Datasets\n" + dataset_context)
+    sections["datasets"] = ("## Datasets\n" + dataset_context) if dataset_context else ""
 
     # Global persistent memory (slice-3c) is authoritative in every plan prompt,
     # injected only when non-empty. Read defensively so a 3c failure can't crash
     # planning.
     memory_block = _safe_memory_block()
-    if memory_block:
-        parts.append("## Persistent memory\n" + memory_block)
+    sections["memory"] = ("## Persistent memory\n" + memory_block) if memory_block else ""
 
     conversation_history = state.get("conversation_history") or []
     if conversation_history:
@@ -281,9 +303,11 @@ def _assemble_plan_prompt(state: AgentState, wrap_up: bool) -> str:
             f"Q: {turn.get('question', '')}\nA: {turn.get('answer', '')}"
             for turn in conversation_history
         )
-        parts.append("## Earlier in this conversation\n" + convo)
+        sections["history"] = "## Earlier in this conversation\n" + convo
+    else:
+        sections["history"] = ""
 
-    parts.append("## Question\n" + (state.get("question") or ""))
+    sections["question"] = "## Question\n" + (state.get("question") or "")
 
     action_history = state.get("action_history") or []
     if action_history:
@@ -294,22 +318,80 @@ def _assemble_plan_prompt(state: AgentState, wrap_up: bool) -> str:
                 transcript_lines.append(f"Error: {step.get('result', '')}")
             else:
                 transcript_lines.append(f"Result: {step.get('result', '')}")
-        parts.append("## Actions so far\n" + "\n".join(transcript_lines))
+        sections["actions"] = "## Actions so far\n" + "\n".join(transcript_lines)
+    else:
+        sections["actions"] = ""
 
     if wrap_up:
-        parts.append(
+        sections["wrap_up"] = (
             "## Wrap up now\n"
             "You are running low on steps. Do NOT run another action. Reply with "
             "`FINAL ANSWER:` and your best Markdown answer from the results above."
         )
+    else:
+        sections["wrap_up"] = ""
 
-    parts.append(
-        "Now reply with EITHER an action — an optional `REASONING:` line then a "
-        "single bare pandas expression to run next, just the raw code, with NO "
-        "backticks, NO ```python fence, and NO surrounding prose — OR "
-        "`FINAL ANSWER:` followed by your answer."
-    )
+    sections["footer"] = _PLAN_FOOTER
+    return sections
+
+
+# The order the assembled prompt joins its sections in (matches the original
+# `_assemble_plan_prompt` ordering exactly).
+_PLAN_SECTION_ORDER = (
+    "tag",
+    "datasets",
+    "memory",
+    "history",
+    "question",
+    "actions",
+    "wrap_up",
+    "footer",
+)
+
+
+def _assemble_plan_prompt(state: AgentState, wrap_up: bool) -> str:
+    """Build the plan_action user prompt from question + transcript + context."""
+    sections = _plan_prompt_sections(state, wrap_up)
+    parts = [sections[key] for key in _PLAN_SECTION_ORDER if sections.get(key)]
     return "\n\n".join(parts)
+
+
+def _plan_prompt_components(
+    state: AgentState, wrap_up: bool, system_text: str
+) -> dict[str, int]:
+    """C29: partition the assembled plan prompt + system template into six buckets.
+
+    The six keys partition the WHOLE prompt (system template `plan_action.md` plus
+    every section of the assembled user prompt) with NO overlap and NO omission,
+    each measured with the `chars/4` estimator. `total_prompt` is therefore exactly
+    the sum of the six.
+
+      - system_overhead = system template + fixed scaffolding (tag + question +
+        wrap-up + instruction footer). All the fixed pieces and the question.
+      - dataset_schemas = the `## Datasets` section (notes are folded in here).
+      - dataset_notes   = 0 (folded into dataset_schemas to avoid double-counting).
+      - memory          = the `## Persistent memory` section.
+      - history         = the `## Earlier in this conversation` section.
+      - action_history  = the `## Actions so far` section.
+    """
+    s = _plan_prompt_sections(state, wrap_up)
+    system_overhead = (
+        _estimate_tokens(system_text or "")
+        + _estimate_tokens(s["tag"])
+        + _estimate_tokens(s["question"])
+        + _estimate_tokens(s["wrap_up"])
+        + _estimate_tokens(s["footer"])
+    )
+    components = {
+        "system_overhead": system_overhead,
+        "dataset_schemas": _estimate_tokens(s["datasets"]),
+        "dataset_notes": 0,
+        "memory": _estimate_tokens(s["memory"]),
+        "history": _estimate_tokens(s["history"]),
+        "action_history": _estimate_tokens(s["actions"]),
+    }
+    components["total_prompt"] = sum(components.values())
+    return components
 
 
 def plan_action(state: AgentState) -> AgentState:
@@ -327,6 +409,9 @@ def plan_action(state: AgentState) -> AgentState:
     try:
         system = _load_prompt(_PLAN_PROMPT_PATH)
         prompt = _assemble_plan_prompt(state, wrap_up)
+        # C29: capture the partition of THIS (most recent) assembled prompt so the
+        # runner's prompt_breakdown describes the real last plan_action composition.
+        prompt_components = _plan_prompt_components(state, wrap_up, system)
         resp = LLMClient().complete(prompt, system=system)
     except Exception as exc:  # noqa: BLE001 — fatal LLM error
         logger.warning("plan_action_failed", run_id=state.get("run_id"), error=str(exc))
@@ -352,6 +437,7 @@ def plan_action(state: AgentState) -> AgentState:
         "iteration_count": iteration + 1,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
+        "prompt_components": prompt_components,
     }
 
 

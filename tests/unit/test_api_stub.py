@@ -197,6 +197,24 @@ def test_ask_single_dataset_returns_answer(api_client):
     assert "total_prompt" in data["prompt_breakdown"]
     # All named spec components must be present (spec/capabilities/context-window-display.md).
     assert "dataset_notes" in data["prompt_breakdown"]
+    # C29: the six components PARTITION the most-recent plan_action prompt — they
+    # sum EXACTLY to total_prompt (no overlap, no omission). The breakdown describes
+    # prompt composition, not the cumulative per-query token cost.
+    breakdown = data["prompt_breakdown"]
+    component_keys = [
+        "system_overhead",
+        "dataset_schemas",
+        "dataset_notes",
+        "memory",
+        "history",
+        "action_history",
+    ]
+    for key in component_keys:
+        assert key in breakdown, key
+    assert sum(breakdown[key] for key in component_keys) == breakdown["total_prompt"]
+    # system_overhead now includes the plan_action.md system template, so it is a
+    # clearly non-trivial bucket (the largest fixed contributor).
+    assert breakdown["system_overhead"] > 100
 
 
 def test_ask_404_when_dataset_missing(api_client):

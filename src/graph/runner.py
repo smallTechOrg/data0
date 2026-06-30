@@ -95,38 +95,78 @@ def _peek_columns(dataset_id: str) -> list[str]:
     return []
 
 
+_PLAN_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "plan_action.md"
+
+# The six C29 component keys (the frontend renders these). `total_prompt` is their
+# exact sum — see spec/capabilities/context-window-display.md.
+_BREAKDOWN_COMPONENT_KEYS = (
+    "system_overhead",
+    "dataset_schemas",
+    "dataset_notes",
+    "memory",
+    "history",
+    "action_history",
+)
+
+
+def _load_plan_system_text() -> str:
+    """Load the plan_action.md system template (best-effort; empty on failure)."""
+    try:
+        return _PLAN_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    except Exception as exc:  # noqa: BLE001 — breakdown is best-effort context
+        logger.warning("plan_prompt_load_failed", error=str(exc))
+        return ""
+
+
 def _build_prompt_breakdown(
     *,
+    prompt_components: dict | None,
     question: str,
     conversation_history: list[dict],
     dataset_context: str,
     memory_block: str,
     action_history: list[dict],
-    tokens_input: int,
     dataset_notes: str = "",
 ) -> dict[str, int]:
-    """C29: measure each prompt component with the char/4 heuristic (approximate).
+    """C29: the composition of the LAST assembled plan_action prompt (char/4).
 
-    Returns a dict of estimated token contributions per component plus the run's
-    accumulated `total_prompt` (the real summed input tokens from the loop).
-    Components: system_overhead, dataset_schemas, history, memory, dataset_notes,
-    action_history, total_prompt (per spec/capabilities/context-window-display.md).
+    The six components PARTITION that one representative prompt with no overlap and
+    no omission, so `total_prompt` == sum of the six EXACTLY. This describes prompt
+    *composition*, NOT the cumulative per-query token cost — that is reported
+    separately via `tokens_input`/`tokens_output` (the Token usage panel).
+    See spec/capabilities/context-window-display.md.
+
+    Preferred path: the real measured partition `plan_action` stored on the state
+    (`prompt_components`). Fallback (a run that never planned — clarification
+    short-circuit, cancelled-before-plan): recompute a best-effort partition from
+    the available text, still including the `plan_action.md` system template in
+    `system_overhead` and still making `total_prompt` the exact sum.
     """
+    # Preferred: the real measured partition from the last plan_action call.
+    if prompt_components:
+        components = {key: int(prompt_components.get(key, 0)) for key in _BREAKDOWN_COMPONENT_KEYS}
+        components["total_prompt"] = sum(components.values())
+        return components
+
+    # Fallback: best-effort partition from whatever text is available. Mirrors the
+    # plan-prompt bucketing — notes are folded into dataset_schemas (no double-count).
     history_text = "\n".join(
         f"Q: {t.get('question', '')}\nA: {t.get('answer', '')}" for t in conversation_history
     )
     action_text = "\n".join(
         f"{s.get('action', '')} -> {s.get('result', '')}" for s in action_history
     )
-    return {
-        "total_prompt": int(tokens_input),
-        "history": _estimate_tokens(history_text),
-        "dataset_schemas": _estimate_tokens(dataset_context or ""),
+    system_overhead = _estimate_tokens(_load_plan_system_text()) + _estimate_tokens(question or "")
+    components = {
+        "system_overhead": system_overhead,
+        "dataset_schemas": _estimate_tokens(dataset_context or "") + _estimate_tokens(dataset_notes or ""),
+        "dataset_notes": 0,
         "memory": _estimate_tokens(memory_block or ""),
-        "dataset_notes": _estimate_tokens(dataset_notes or ""),
+        "history": _estimate_tokens(history_text),
         "action_history": _estimate_tokens(action_text),
-        "system_overhead": _estimate_tokens(question or "") + 64,
     }
+    components["total_prompt"] = sum(components.values())
+    return components
 
 
 def run_agent(
@@ -293,14 +333,17 @@ def run_agent(
         tokens_input += s_in
         tokens_output += s_out
 
-    # C29 prompt breakdown (approximate).
+    # C29 prompt breakdown: composition of the LAST assembled plan_action prompt.
+    # PREFER the real measured partition from plan_action; fall back to a best-effort
+    # recompute when the run never planned. NEVER set total_prompt to the cumulative
+    # tokens_input — that cumulative cost is reported via tokens_input/tokens_output.
     prompt_breakdown = _build_prompt_breakdown(
+        prompt_components=final.get("prompt_components"),
         question=question,
         conversation_history=conversation_history,
         dataset_context=dataset_context,
         memory_block=_safe_memory_block(),
         action_history=action_history,
-        tokens_input=tokens_input,
         dataset_notes=dataset_notes_text,
     )
 

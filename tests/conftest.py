@@ -10,6 +10,33 @@ def _reset_settings_singleton():
 
 
 @pytest.fixture(autouse=True)
+def _reset_node_registries():
+    """Clear the process-global node registries between every test.
+
+    `src/graph/nodes.py` keeps module-level dicts (`_dataframes`, `_derived_created`,
+    `_session_cache`) that persist across tests in the same process. Left uncleared
+    they leak state between tests (e.g. a stale session cache making notes-upload
+    stub tests fail intermittently). Clearing in both setup and teardown makes
+    `uv run pytest tests/unit/` deterministic regardless of test order.
+    """
+    import graph.nodes as nodes_module
+
+    for registry in (
+        nodes_module._dataframes,
+        nodes_module._derived_created,
+        nodes_module._session_cache,
+    ):
+        registry.clear()
+    yield
+    for registry in (
+        nodes_module._dataframes,
+        nodes_module._derived_created,
+        nodes_module._session_cache,
+    ):
+        registry.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker

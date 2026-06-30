@@ -23,6 +23,7 @@ class AgentState(TypedDict, total=False):
     tokens_input: int                    # accumulated prompt tokens
     tokens_output: int                   # accumulated completion tokens
     charts: list[str]                    # Plotly figure JSON strings captured in execute_action
+    prompt_components: dict              # C29: last plan_action prompt partition (char/4 buckets)
 
     # Output
     answer: str | None                   # final markdown answer (FINAL ANSWER stripped)
