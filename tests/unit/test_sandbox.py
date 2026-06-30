@@ -1,9 +1,16 @@
 """Unit tests for graph.sandbox helpers — no LLM key required."""
 
+import json
+
 import pandas as pd
 import pytest
 
-from graph.sandbox import _stringify
+from graph.sandbox import (
+    _stringify,
+    build_namespace,
+    eval_expression,
+    make_echart,
+)
 
 
 # --- D4: column cap in _stringify -------------------------------------------
@@ -90,3 +97,153 @@ def test_stringify_series_unaffected_by_col_cap():
     # All values are present in the output.
     for v in range(5):
         assert str(v) in result
+
+
+# --- C4: ECharts `echart(...)` helper ---------------------------------------
+
+
+def _sample_df():
+    return pd.DataFrame(
+        {
+            "region": ["North", "South", "East"],
+            "sales": [120, 90, 150],
+            "cost": [40, 30, 55],
+        }
+    )
+
+
+def test_echart_bar_returns_option_with_series():
+    """echart('bar', df, x=, y=) returns an ECharts option dict with a series key."""
+    echart = make_echart()
+    option = echart("bar", _sample_df(), x="region", y="sales", title="Revenue by region")
+
+    assert isinstance(option, dict)
+    assert "series" in option
+    # Sensible defaults from the spec.
+    assert option["xAxis"]["type"] == "category"
+    assert option["xAxis"]["data"] == ["North", "South", "East"]
+    assert option["yAxis"]["type"] == "value"
+    assert option["tooltip"]["trigger"] == "axis"
+    assert option["legend"]["top"] == 0
+    assert option["grid"] == {"left": 60, "right": 24, "top": 48, "bottom": 40}
+    assert option["title"]["text"] == "Revenue by region"
+    # One series of bars with the y-column values.
+    assert option["series"][0]["type"] == "bar"
+    assert option["series"][0]["data"] == [120, 90, 150]
+
+
+def test_echart_multi_series_from_y_list():
+    """A list `y=` produces one series per column."""
+    echart = make_echart()
+    option = echart("line", _sample_df(), x="region", y=["sales", "cost"])
+    names = {s["name"] for s in option["series"]}
+    assert names == {"sales", "cost"}
+    assert all(s["type"] == "line" for s in option["series"])
+
+
+def test_echart_pie_uses_item_tooltip_and_name_value_data():
+    echart = make_echart()
+    option = echart("pie", _sample_df(), x="region", y="sales", title="Share")
+    assert option["tooltip"]["trigger"] == "item"
+    assert option["series"][0]["type"] == "pie"
+    assert option["series"][0]["data"][0] == {"name": "North", "value": 120}
+
+
+def test_echart_scatter_builds_xy_points():
+    echart = make_echart()
+    option = echart("scatter", _sample_df(), x="sales", y="cost")
+    assert option["tooltip"]["trigger"] == "item"
+    assert option["series"][0]["type"] == "scatter"
+    assert option["series"][0]["data"][0] == [120, 40]
+
+
+def test_echart_raw_option_escape_hatch():
+    """option=<dict> with a series key is accepted and returned as-is."""
+    echart = make_echart()
+    raw = {
+        "xAxis": {"type": "category", "data": ["A", "B"]},
+        "yAxis": {"type": "value"},
+        "series": [{"type": "bar", "data": [1, 2]}],
+    }
+    option = echart("bar", option=raw)
+    assert "series" in option
+    assert option["series"] == raw["series"]
+
+
+def test_echart_raw_option_without_series_raises():
+    echart = make_echart()
+    with pytest.raises(ValueError):
+        echart("bar", option={"xAxis": {}})
+
+
+def test_echart_bad_kind_raises_valueerror():
+    echart = make_echart()
+    with pytest.raises(ValueError):
+        echart("treemap", _sample_df(), x="region", y="sales")
+
+
+def test_echart_missing_column_raises_valueerror():
+    echart = make_echart()
+    with pytest.raises(ValueError):
+        echart("bar", _sample_df(), x="nope", y="sales")
+
+
+def test_echart_registers_into_accumulator():
+    """The run-aware echart calls on_chart with the built option exactly once."""
+    captured = []
+    echart = make_echart(on_chart=captured.append)
+    echart("bar", _sample_df(), x="region", y="sales")
+    assert len(captured) == 1
+    assert "series" in captured[0]
+
+
+def test_echart_option_is_json_serialisable():
+    """Built options must survive json.dumps (numpy scalars coerced)."""
+    echart = make_echart()
+    option = echart("bar", _sample_df(), x="region", y="sales")
+    text = json.dumps(option)
+    parsed = json.loads(text)
+    assert "series" in parsed
+
+
+def test_build_namespace_exposes_echart_and_drops_plotly():
+    """The eval namespace has echart and the analysis libs, but NO plotly px/go."""
+    ns = build_namespace([_sample_df()], ["sales.csv"])
+    assert callable(ns["echart"])
+    # Analysis libs stay.
+    for lib in ("pd", "np", "plt", "sns", "scipy", "stats", "sklearn", "sm", "save_dataset"):
+        assert lib in ns
+    # Plotly removed from the namespace.
+    assert "px" not in ns
+    assert "go" not in ns
+
+
+def test_sandbox_has_no_plotly_import():
+    """graph.sandbox must not pull in plotly at all (Plotly fully removed)."""
+    import graph.sandbox as sandbox_module
+
+    assert not hasattr(sandbox_module, "px")
+    assert not hasattr(sandbox_module, "go")
+    # The module did not import plotly into sys.modules via this import.
+    src = sandbox_module.__file__
+    text = open(src, encoding="utf-8").read()
+    assert "plotly" not in text.lower()
+
+
+def test_eval_expression_echart_registers_one_chart_via_accumulator():
+    """Running an echart(...) expression through eval_expression registers exactly
+    one captured option whose JSON parses to an object with a series key."""
+    ns = build_namespace([_sample_df()], ["sales.csv"])
+    captured = []
+    ns["echart"] = make_echart(on_chart=captured.append)
+
+    result_str, charts, is_error, error_str = eval_expression(
+        "echart('bar', df, x='region', y='sales', title='Revenue')", ns
+    )
+    assert not is_error, error_str
+    # eval_expression itself returns no charts (the node owns serialisation).
+    assert charts == []
+    # The accumulator captured exactly one option.
+    assert len(captured) == 1
+    parsed = json.loads(json.dumps(captured[0]))
+    assert "series" in parsed

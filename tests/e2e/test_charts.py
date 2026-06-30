@@ -1,14 +1,15 @@
-"""Real-Gemini E2E for inline Plotly chart capture (C4, slice-4a).
+"""Real-Gemini E2E for inline ECharts chart capture (C4, slice-4a).
 
 Requires `AGENT_GEMINI_API_KEY` in `.env` (auto-detect selects the real Gemini
-provider). The agent is asked to PLOT a clearly-chartable column; `execute_action`
-must capture the resulting Plotly figure as JSON into `result["charts"]`.
+provider). The agent is asked to PLOT a clearly-chartable column via the
+`echart(...)` helper; `execute_action` must capture the resulting ECharts `option`
+dict as JSON into `result["charts"]`.
 
 Driven via `run_agent(..., run_selector=True, skip_clarification=True)` (mirrors
 `test_preflight_real.py`'s dataset fixture + uploads_dir monkeypatch) against the
 production SQLite driver (the isolated copy via `_isolated_db`). Asserts CONTENT:
-at least one chart captured, and the first chart is valid Plotly figure JSON
-carrying the `data` + `layout` keys.
+at least one chart captured, and the first chart is a valid ECharts `option`
+JSON object carrying a `series` key.
 """
 from __future__ import annotations
 
@@ -66,20 +67,25 @@ def _make_dataset(uploads_dir, filename: str, df: pd.DataFrame) -> str:
 
 
 @pytest.mark.usefixtures("_require_llm_key")
-def test_real_gemini_captures_a_plotly_chart(uploads_dir):
-    """Ask the real model to plot a histogram of a chartable column -> a Plotly
-    figure JSON is captured in result["charts"]."""
+def test_real_gemini_captures_an_echart_chart(uploads_dir):
+    """Ask the real model to chart a chartable column via echart(...) -> an ECharts
+    option JSON (with a `series` key) is captured in result["charts"]."""
     rng = np.random.default_rng(42)
-    df = pd.DataFrame({"value": rng.normal(loc=50, scale=12, size=300).round(2)})
-    dataset_id = _make_dataset(uploads_dir, "measurements.csv", df)
+    df = pd.DataFrame(
+        {
+            "region": ["North", "South", "East", "West", "Central"],
+            "sales": rng.integers(50, 500, size=5),
+        }
+    )
+    dataset_id = _make_dataset(uploads_dir, "sales_by_region.csv", df)
 
-    # An explicit, unambiguous plotting instruction so gemini-3.1-flash-lite
-    # reliably emits a Plotly express figure expression.
+    # An explicit, unambiguous plotting instruction so the model reliably calls
+    # the echart() helper rather than describing a chart.
     question = (
-        "Plot a histogram of the `value` column as a Plotly figure using "
-        "plotly express, e.g. px.histogram(df, x='value'). Return the figure "
-        "object so it is captured, then give your FINAL ANSWER describing the "
-        "distribution."
+        "Make a bar chart of `sales` by `region` using the echart helper, e.g. "
+        "echart('bar', df, x='region', y='sales', title='Sales by region'). "
+        "Return the option so it is captured, then give your FINAL ANSWER "
+        "describing which region has the highest sales."
     )
     result = run_agent(
         question,
@@ -92,15 +98,21 @@ def test_real_gemini_captures_a_plotly_chart(uploads_dir):
     charts = result["charts"]
     assert isinstance(charts, list)
     assert len(charts) >= 1, (
-        f"expected at least one captured Plotly chart; got {len(charts)}. "
+        f"expected at least one captured ECharts chart; got {len(charts)}. "
         f"steps={[s.get('action') for s in result.get('action_history', [])]}"
     )
 
-    # The first chart is valid Plotly figure JSON with the canonical top-level keys.
-    fig = json.loads(charts[0])
-    assert isinstance(fig, dict)
-    assert "data" in fig and "layout" in fig, (
-        f"chart JSON missing data/layout keys; got keys {list(fig.keys())}"
+    # The first chart is a valid ECharts `option` JSON object with a series key
+    # (NOT a Plotly figure — there is no data/layout envelope).
+    option = json.loads(charts[0])
+    assert isinstance(option, dict)
+    assert "series" in option, (
+        f"chart JSON is not an ECharts option (missing 'series'); "
+        f"got keys {list(option.keys())}"
     )
-    print(f"\n[charts] captured {len(charts)} chart(s); chart[0] top-level keys: {sorted(fig.keys())}")
-    print(f"[charts] data trace count: {len(fig['data'])}")
+    assert "data" not in option and "layout" not in option, (
+        "chart JSON looks like a Plotly figure (has data/layout); expected an "
+        "ECharts option"
+    )
+    print(f"\n[charts] captured {len(charts)} chart(s); chart[0] top-level keys: {sorted(option.keys())}")
+    print(f"[charts] series count: {len(option['series'])}")

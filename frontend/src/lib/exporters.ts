@@ -1,7 +1,7 @@
 /**
  * Small client-side export/clipboard helpers shared by the answer toolbars
  * (copy/download a table as CSV; the chart PNG/JPEG/PDF paths live with the
- * Plotly graph in ChartRender). Browser-only — call from event handlers.
+ * ECharts chart in ChartRender). Browser-only — call from event handlers.
  */
 
 /** Trigger a browser download of `content` as `filename`. */

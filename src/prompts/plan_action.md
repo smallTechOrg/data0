@@ -15,7 +15,7 @@ You are working inside a ReAct loop. On each turn you see the user's question, t
 
 ## Available libraries (already imported)
 
-`pd` (pandas), `np` (numpy), `px` (plotly.express), `go` (plotly.graph_objects), `plt` (matplotlib.pyplot), `sns` (seaborn), `scipy`, `stats` (scipy.stats), `sklearn`, `sm` (statsmodels.api).
+`pd` (pandas), `np` (numpy), `plt` (matplotlib.pyplot), `sns` (seaborn), `scipy`, `stats` (scipy.stats), `sklearn`, `sm` (statsmodels.api). Charts are produced with the `echart(...)` helper (see Visualizations) — there is no plotly.
 
 ## Rules
 
@@ -29,22 +29,39 @@ You are working inside a ReAct loop. On each turn you see the user's question, t
 
 ## Visualizations
 
-**ALWAYS use `px` (plotly.express) or `go` (plotly.graph_objects) for charts — NEVER use `.plot()`, `plt.`, or `sns.`** The result of each step is captured; only Plotly figures are rendered in the UI.
+**To draw a chart, call the `echart(...)` helper.** It builds an ECharts `option` object and registers it so the UI renders it inline. This is THE way to produce a chart — do NOT use `.plot()`, `plt.`, or `sns.` (they render nothing).
 
-Return the figure as the final bare expression so it is captured:
+`echart(kind, df, *, x=None, y=None, series=None, title=None, option=None, **opts)`
+
+- `kind` is one of `"bar"`, `"line"`, `"scatter"`, `"pie"`, `"heatmap"`.
+- `df` is the DataFrame to chart (usually an aggregated/reshaped frame).
+- `x` is the category/x column name. `y` is a value column name, or a LIST of column names for multiple series.
+- For a **pie** chart, `x` is the labels column and `y` is the single values column.
+- `title` sets the chart title.
+
+Build the frame first, then call `echart` as the final bare expression so it is captured:
 
 ```
-px.bar(df.groupby('col')['val'].sum().reset_index(), x='col', y='val', title='My Chart')
+echart("bar", df.groupby("region")["sales"].sum().reset_index(), x="region", y="sales", title="Revenue by region")
 ```
 
-Multi-step chart (two statements — OK because `fig` ends up in scope):
+Multiple series — pass a list to `y`:
 ```
-fig = px.scatter(df, x='a', y='b', color='cat', title='...')
-fig.update_layout(height=400)
-fig
+echart("line", monthly, x="month", y=["revenue", "cost"], title="Revenue vs cost by month")
 ```
 
-Do **NOT** call `.show()`, `plt.show()`, or `display()` — these do nothing in the sandbox.
+**Raw-option escape hatch** — for anything the shorthand can't express, pass a full ECharts `option` dict (must contain a `series` key):
+```
+echart("bar", option={"xAxis": {"type": "category", "data": ["A", "B"]}, "yAxis": {"type": "value"}, "series": [{"type": "bar", "data": [10, 20]}], "title": {"text": "Custom"}})
+```
+
+You may also assign and return it in two statements (OK because the call already registered the chart):
+```
+opt = echart("scatter", df, x="height", y="weight", title="Height vs weight")
+opt
+```
+
+Do **NOT** call `.show()` or `display()` — they do nothing in the sandbox. Just call `echart(...)`.
 
 ## Saving a new table (creating a derived dataset)
 

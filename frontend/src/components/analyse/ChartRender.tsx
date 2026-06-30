@@ -1,62 +1,90 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { Data, Layout } from 'plotly.js'
+
+import * as echarts from 'echarts/core'
+import {
+  BarChart,
+  LineChart,
+  ScatterChart,
+  PieChart,
+  HeatmapChart,
+  BoxplotChart,
+} from 'echarts/charts'
+import {
+  GridComponent,
+  TooltipComponent,
+  TitleComponent,
+  LegendComponent,
+  DataZoomComponent,
+  VisualMapComponent,
+} from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([
+  BarChart,
+  LineChart,
+  ScatterChart,
+  PieChart,
+  HeatmapChart,
+  BoxplotChart,
+  GridComponent,
+  TooltipComponent,
+  TitleComponent,
+  LegendComponent,
+  DataZoomComponent,
+  VisualMapComponent,
+  CanvasRenderer,
+])
 
 /**
- * Inline Plotly chart renderer (C4).
+ * Inline ECharts chart renderer (C4).
  *
- * The agent captures any Plotly figure it builds during analysis and returns it
- * as a JSON STRING (one per figure) on the answer's `charts` array. Each string
- * parses to a Plotly figure `{ data, layout, ... }`.
+ * The agent captures any chart it builds during analysis and returns it as a
+ * JSON STRING (one per chart) on the answer's `charts` array. Each string
+ * parses to an ECharts option object `{ title, tooltip, xAxis, yAxis, series, ... }`.
  *
- * We render IMPERATIVELY via `Plotly.newPlot(div, data, layout, { responsive })`
- * inside a `useEffect`, rather than `react-plotly.js`, to avoid React-19 peer
- * friction with the static export. Plotly is imported dynamically (browser-only)
- * so the static-export build never tries to evaluate the bundle during SSG.
+ * We render IMPERATIVELY via `echarts.init(div).setOption(option)` inside a
+ * `useEffect`. The ECharts core build is tree-shaken (only the chart/component
+ * modules we register above are pulled in), so the static-export bundle stays
+ * lean.
  *
  * Robustness:
- *  - Each entry is parsed independently; a malformed JSON entry is skipped
- *    (renders nothing for that slot) and never crashes the surrounding turn.
- *  - `purge` is called on unmount / before re-render to release the Plotly graph.
+ *  - Each entry is parsed independently; a malformed JSON entry — or one that is
+ *    not an object with a `series` key — is skipped (renders nothing for that
+ *    slot) and never crashes the surrounding turn.
+ *  - The chart instance is disposed on unmount / before re-render to release it,
+ *    and resizes responsively via a ResizeObserver on its container.
  */
 export function ChartRender({ charts }: { charts?: string[] }) {
-  const figures = parseFigures(charts)
+  const options = parseOptions(charts)
 
-  if (figures.length === 0) return null
+  if (options.length === 0) return null
 
   return (
     <div className="mt-3 space-y-3" aria-label="Charts">
-      {figures.map((fig, i) => (
-        <PlotlyFigure key={i} figure={fig} index={i} />
+      {options.map((opt, i) => (
+        <EChart key={i} option={opt} index={i} />
       ))}
     </div>
   )
 }
 
-interface Figure {
-  data: Data[]
-  layout: Partial<Layout>
-}
+/** An ECharts option object — opaque to us beyond the required `series` key. */
+type EChartsOption = Record<string, unknown>
 
-/** Parse the chart JSON strings, dropping any that are malformed / not figures. */
-function parseFigures(charts?: string[]): Figure[] {
+/** Parse the chart JSON strings, dropping any that are malformed / not options. */
+function parseOptions(charts?: string[]): EChartsOption[] {
   if (!Array.isArray(charts)) return []
-  const out: Figure[] = []
+  const out: EChartsOption[] = []
   for (const raw of charts) {
     if (typeof raw !== 'string' || raw.trim() === '') continue
     try {
       const parsed = JSON.parse(raw) as unknown
       if (!parsed || typeof parsed !== 'object') continue
-      const obj = parsed as { data?: unknown; layout?: unknown }
-      // A valid Plotly figure has a `data` array; layout is optional.
-      if (!Array.isArray(obj.data)) continue
-      out.push({
-        data: obj.data as Data[],
-        layout: (obj.layout && typeof obj.layout === 'object'
-          ? (obj.layout as Partial<Layout>)
-          : {}) as Partial<Layout>,
-      })
+      // A renderable ECharts option must carry a `series` key.
+      if (!('series' in (parsed as Record<string, unknown>))) continue
+      out.push(parsed as EChartsOption)
     } catch {
       // Malformed JSON for this entry — skip it, never break the turn.
     }
@@ -64,72 +92,37 @@ function parseFigures(charts?: string[]): Figure[] {
   return out
 }
 
-type PlotlyApi = typeof import('plotly.js-dist-min')
-
-function resolvePlotly(mod: unknown): PlotlyApi {
-  return (mod as { default?: PlotlyApi }).default ?? (mod as PlotlyApi)
-}
-
-/** A single figure drawn into a responsive div via Plotly's imperative API. */
-function PlotlyFigure({ figure, index }: { figure: Figure; index: number }) {
+/** A single chart drawn into a responsive div via ECharts' imperative API. */
+function EChart({ option, index }: { option: EChartsOption; index: number }) {
   const ref = useRef<HTMLDivElement>(null)
-  // Captured once the figure is plotted, so the toolbar can export it.
-  const plotlyRef = useRef<PlotlyApi | null>(null)
+  // Captured once the chart is initialised, so the toolbar can export it.
+  const chartRef = useRef<echarts.ECharts | null>(null)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    let cancelled = false
 
-    // Browser-only dynamic import keeps the heavy bundle out of SSG.
-    import('plotly.js-dist-min')
-      .then(mod => {
-        if (cancelled || !ref.current) return
-        const Plotly = resolvePlotly(mod)
-        plotlyRef.current = Plotly
-        const layout: Partial<Layout> = {
-          autosize: true,
-          margin: { l: 48, r: 16, t: 32, b: 40 },
-          ...figure.layout,
-        }
-        void Plotly.newPlot(ref.current, figure.data, layout, {
-          responsive: true,
-          displaylogo: false,
-        })
-      })
-      .catch(() => {
-        // Plotly failed to load — leave an empty box rather than crash the turn.
-      })
+    const chart = echarts.init(el)
+    chartRef.current = chart
+    chart.setOption(option)
+
+    // Keep the chart sized to its (responsive) container.
+    const observer = new ResizeObserver(() => chart.resize())
+    observer.observe(el)
 
     return () => {
-      cancelled = true
-      // Best-effort purge; ignore if Plotly never attached.
-      import('plotly.js-dist-min')
-        .then(mod => {
-          const Plotly = resolvePlotly(mod)
-          if (el) Plotly.purge(el)
-        })
-        .catch(() => {})
+      observer.disconnect()
+      chart.dispose()
+      chartRef.current = null
     }
-  }, [figure])
+  }, [option])
 
-  // Export size — the rendered chart's pixel box (with sane minimums).
-  const dims = () => {
-    const el = ref.current
-    return {
-      width: Math.max(el?.clientWidth ?? 0, 640),
-      height: Math.max(el?.clientHeight ?? 0, 360),
-    }
-  }
-
-  const downloadImage = async (format: 'png' | 'jpeg') => {
-    const Plotly = plotlyRef.current
-    const gd = ref.current
-    if (!Plotly || !gd) return
+  const downloadImage = (format: 'png' | 'jpeg') => {
+    const chart = chartRef.current
+    if (!chart) return
     try {
-      // toImage (not downloadImage) so we can render at 2× for a crisp export.
-      const url = await Plotly.toImage(gd, { format, scale: 2, ...dims() })
+      const url = chart.getDataURL({ type: format, pixelRatio: 2, backgroundColor: '#fff' })
       const a = document.createElement('a')
       a.href = url
       a.download = `chart-${index + 1}.${format === 'jpeg' ? 'jpg' : 'png'}`
@@ -140,38 +133,17 @@ function PlotlyFigure({ figure, index }: { figure: Figure; index: number }) {
   }
 
   const copyPng = async () => {
-    const Plotly = plotlyRef.current
-    const gd = ref.current
-    if (!Plotly || !gd) return
+    const chart = chartRef.current
+    if (!chart) return
     try {
-      const url = await Plotly.toImage(gd, { format: 'png', scale: 2, ...dims() })
+      const url = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#fff' })
       const blob = await (await fetch(url)).blob()
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch {
       // Clipboard-image unsupported (or blocked) — fall back to a PNG download.
-      void downloadImage('png')
-    }
-  }
-
-  const downloadPdf = async () => {
-    const Plotly = plotlyRef.current
-    const gd = ref.current
-    if (!Plotly || !gd) return
-    try {
-      const { width, height } = dims()
-      const url = await Plotly.toImage(gd, { format: 'png', scale: 2, width, height })
-      const { jsPDF } = await import('jspdf')
-      const pdf = new jsPDF({
-        orientation: width >= height ? 'landscape' : 'portrait',
-        unit: 'pt',
-        format: [width, height],
-      })
-      pdf.addImage(url, 'PNG', 0, 0, width, height)
-      pdf.save(`chart-${index + 1}.pdf`)
-    } catch {
-      /* export failed — no-op */
+      downloadImage('png')
     }
   }
 
@@ -184,14 +156,11 @@ function PlotlyFigure({ figure, index }: { figure: Figure; index: number }) {
         <button type="button" onClick={() => void copyPng()} className={btn}>
           {copied ? 'Copied' : 'Copy'}
         </button>
-        <button type="button" onClick={() => void downloadImage('png')} className={btn}>
+        <button type="button" onClick={() => downloadImage('png')} className={btn}>
           PNG
         </button>
-        <button type="button" onClick={() => void downloadImage('jpeg')} className={btn}>
+        <button type="button" onClick={() => downloadImage('jpeg')} className={btn}>
           JPEG
-        </button>
-        <button type="button" onClick={() => void downloadPdf()} className={btn}>
-          PDF
         </button>
       </div>
       <div
@@ -203,4 +172,3 @@ function PlotlyFigure({ figure, index }: { figure: Figure; index: number }) {
     </div>
   )
 }
-

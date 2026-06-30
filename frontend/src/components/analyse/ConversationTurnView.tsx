@@ -172,7 +172,7 @@ function AnswerView({
 
       <Markdown>{markdown}</Markdown>
 
-      {/* Inline Plotly charts captured during analysis (C4). */}
+      {/* Inline ECharts charts captured during analysis (C4). */}
       {answer.charts && answer.charts.length > 0 && (
         <ChartRender charts={answer.charts} />
       )}

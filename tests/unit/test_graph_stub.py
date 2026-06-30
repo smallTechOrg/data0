@@ -298,21 +298,35 @@ def test_sandbox_namespace_aliases():
     assert ns["df2"] is df2
     assert ns["sales"] is df1
     assert ns["orders"] is df2
-    # Libraries present.
-    for lib in ("pd", "np", "px", "go", "plt", "sns", "scipy", "stats", "sklearn", "sm"):
+    # Libraries present (Plotly px/go removed — charts go through echart()).
+    for lib in ("pd", "np", "plt", "sns", "scipy", "stats", "sklearn", "sm"):
         assert lib in ns
     assert callable(ns["save_dataset"])
+    assert callable(ns["echart"])
+    assert "px" not in ns and "go" not in ns
 
 
-def test_sandbox_captures_plotly_chart():
-    from graph.sandbox import build_namespace, eval_expression
+def test_sandbox_captures_echart_chart_via_accumulator():
+    """An echart(...) call registers exactly one ECharts option whose JSON has a
+    series key. eval_expression itself returns no charts — the node owns the
+    json.dumps serialisation by reading the accumulator."""
+    import json
+
+    from graph.sandbox import build_namespace, eval_expression, make_echart
 
     df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
     ns = build_namespace([df])
-    result_str, charts, is_error, error_str = eval_expression("px.scatter(df, x='x', y='y')", ns)
+    captured = []
+    ns["echart"] = make_echart(on_chart=captured.append)
+
+    result_str, charts, is_error, error_str = eval_expression(
+        "echart('scatter', df, x='x', y='y', title='xy')", ns
+    )
     assert is_error is False
-    assert len(charts) == 1
-    assert charts[0].strip().startswith("{")  # JSON string
+    assert charts == []  # not captured here — the node reads the accumulator
+    assert len(captured) == 1
+    parsed = json.loads(json.dumps(captured[0]))
+    assert "series" in parsed
 
 
 def test_save_dataset_stub_returns_string_without_writing():

@@ -2,12 +2,12 @@
 
 The agent's single "tool" is eval/exec of a pandas expression the model emits as
 text. This module builds the fixed namespace that expression runs in and the safe
-`eval_expression` helper that captures the result, any Plotly figure, and any error.
+`eval_expression` helper that captures the result, any chart, and any error.
 
 Per `spec/agent.md` -> "## Tools & Tool Calling":
 - Namespace: `df` (first DataFrame), `df1`/`df2`/... per dataset (ordered by
   `dataset_ids`), a `<filename_stem>` alias per dataset, plus the libraries
-  `pd, np, px, go, plt, sns, scipy, stats, sklearn, sm`, plus `save_dataset`.
+  `pd, np, plt, sns, scipy, stats, sklearn, sm`, plus `save_dataset` and `echart`.
 - No filesystem/network builtins beyond these are exposed.
 
 Phase 4 scope: `save_dataset` is REAL — it materialises the DataFrame as a
@@ -16,7 +16,13 @@ registered DERIVED dataset (CSV + Parquet + a `datasets` row with lineage) via
 here is a thin best-effort wrapper with no run/parent lineage; `nodes.execute_action`
 binds a *run-aware* closure into the per-run namespace that supplies the producing
 `run_id` + parent `dataset_ids` + the exact action expression as `derivation_code`.
-Chart capture is wired here (C4) and must never crash a run.
+
+Charts (C4): the model calls `echart(...)` to build an **ECharts `option` dict**
+(`{title, tooltip, xAxis, yAxis, series, ...}`) which is REGISTERED into a per-run
+accumulator (same mechanism as `save_dataset`). `nodes.execute_action` reads that
+accumulator, `json.dumps`-es each option, and appends to `state["charts"]`. Chart
+building is defensive — bad input raises a clear `ValueError` the loop recovers
+from, and never crashes a run.
 """
 from __future__ import annotations
 
@@ -30,8 +36,6 @@ import pandas as pd
 
 # Heavier optional libs imported lazily-ish at module load so the namespace is
 # complete; all are guaranteed present by pyproject.
-import plotly.express as px
-import plotly.graph_objects as go
 import matplotlib
 
 matplotlib.use("Agg")  # headless: never try to open a window in the sandbox
@@ -217,6 +221,205 @@ def save_dataset(df: Any, name: str, desc: str = "") -> str:
         return f"save_dataset('{name}') failed: {type(exc).__name__}: {exc}"
 
 
+# --------------------------------------------------------------------------- #
+# Charts (C4) — ECharts `option` dicts built by `echart(...)`
+# --------------------------------------------------------------------------- #
+
+# The chart kinds `echart(...)` knows how to build from a DataFrame.
+_ECHART_KINDS = {"bar", "line", "scatter", "pie", "heatmap"}
+
+# Tooltip `trigger` per kind: axis-based charts use 'axis'; item-based use 'item'.
+_ITEM_TOOLTIP_KINDS = {"pie", "scatter"}
+
+
+def _as_jsonable(value: Any) -> Any:
+    """Coerce numpy / pandas scalars to plain JSON-serialisable Python values.
+
+    ECharts options are `json.dumps`-ed downstream, so every value placed into an
+    option must survive `json.dumps`. numpy ints/floats and NaN are the common
+    offenders coming out of a DataFrame.
+    """
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        f = float(value)
+        return None if (f != f) else f  # NaN -> None (JSON null)
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    if isinstance(value, float) and value != value:  # python NaN
+        return None
+    if isinstance(value, (np.ndarray,)):
+        return [_as_jsonable(v) for v in value.tolist()]
+    return value
+
+
+def _column_values(df: pd.DataFrame, col: str) -> list[Any]:
+    """Return a JSON-safe list of values for a column (or the index when col is None)."""
+    series = df[col]
+    return [_as_jsonable(v) for v in series.tolist()]
+
+
+def _build_echart_option(
+    kind: str,
+    df: pd.DataFrame | None,
+    *,
+    x: str | None,
+    y: Any,
+    series: Any,
+    title: str | None,
+    opts: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a sensible ECharts `option` dict from a DataFrame for `kind`.
+
+    Layout defaults keep the legend (top) from overlapping the axis labels:
+    `legend:{top:0}` + `grid:{left:60,right:24,top:48,bottom:40}`. Tooltip trigger
+    is 'item' for pie/scatter, 'axis' otherwise. Raises ValueError on bad input.
+    """
+    if kind not in _ECHART_KINDS:
+        raise ValueError(
+            f"echart: unknown kind {kind!r}; expected one of {sorted(_ECHART_KINDS)}"
+        )
+    if df is None:
+        raise ValueError(f"echart({kind!r}): a DataFrame `df` is required")
+    if not isinstance(df, pd.DataFrame):
+        raise ValueError(f"echart({kind!r}): `df` must be a pandas DataFrame")
+
+    option: dict[str, Any] = {}
+    if title:
+        option["title"] = {"text": str(title)}
+    option["tooltip"] = {
+        "trigger": "item" if kind in _ITEM_TOOLTIP_KINDS else "axis"
+    }
+    option["legend"] = {"top": 0}
+    option["grid"] = {"left": 60, "right": 24, "top": 48, "bottom": 40}
+
+    # `series` (raw ECharts series list) takes precedence over the y= shorthand.
+    if series is not None:
+        if kind == "pie":
+            raise ValueError("echart('pie'): use x= (labels) and y= (values), not series=")
+        x_col = x
+        if x_col is not None:
+            if x_col not in df.columns:
+                raise ValueError(f"echart: x column {x_col!r} not in DataFrame")
+            option["xAxis"] = {"type": "category", "data": _column_values(df, x_col)}
+            option["yAxis"] = {"type": "value"}
+        if not isinstance(series, list):
+            raise ValueError("echart: series= must be a list of series dicts")
+        option["series"] = series
+        option.update(opts)
+        return option
+
+    if kind == "pie":
+        # Pie: x = labels column, y = a single values column.
+        if x is None or y is None:
+            raise ValueError("echart('pie'): both x= (labels) and y= (values) are required")
+        if x not in df.columns:
+            raise ValueError(f"echart: x column {x!r} not in DataFrame")
+        if not isinstance(y, str) or y not in df.columns:
+            raise ValueError(f"echart('pie'): y must be a single column name in the DataFrame")
+        labels = _column_values(df, x)
+        values = _column_values(df, y)
+        option["series"] = [
+            {
+                "type": "pie",
+                "radius": "60%",
+                "data": [
+                    {"name": _as_jsonable(n), "value": v}
+                    for n, v in zip(labels, values)
+                ],
+            }
+        ]
+        option.update(opts)
+        return option
+
+    if kind == "scatter":
+        # Scatter: x and y are both value columns; each point is [x, y].
+        if x is None or y is None:
+            raise ValueError("echart('scatter'): both x= and y= columns are required")
+        if x not in df.columns:
+            raise ValueError(f"echart: x column {x!r} not in DataFrame")
+        y_cols = y if isinstance(y, (list, tuple)) else [y]
+        option["xAxis"] = {"type": "value", "name": str(x)}
+        option["yAxis"] = {"type": "value"}
+        series_list: list[dict[str, Any]] = []
+        xs = _column_values(df, x)
+        for yc in y_cols:
+            if yc not in df.columns:
+                raise ValueError(f"echart: y column {yc!r} not in DataFrame")
+            ys = _column_values(df, yc)
+            series_list.append(
+                {
+                    "name": str(yc),
+                    "type": "scatter",
+                    "data": [[xa, ya] for xa, ya in zip(xs, ys)],
+                }
+            )
+        option["series"] = series_list
+        option.update(opts)
+        return option
+
+    # bar / line: x = category column, y = one or more value columns.
+    if x is None or y is None:
+        raise ValueError(f"echart({kind!r}): both x= and y= are required")
+    if x not in df.columns:
+        raise ValueError(f"echart: x column {x!r} not in DataFrame")
+    y_cols = y if isinstance(y, (list, tuple)) else [y]
+    for yc in y_cols:
+        if yc not in df.columns:
+            raise ValueError(f"echart: y column {yc!r} not in DataFrame")
+    option["xAxis"] = {"type": "category", "data": _column_values(df, x)}
+    option["yAxis"] = {"type": "value"}
+    option["series"] = [
+        {"name": str(yc), "type": kind, "data": _column_values(df, yc)}
+        for yc in y_cols
+    ]
+    option.update(opts)
+    return option
+
+
+def make_echart(on_chart=None):
+    """Build the run-aware `echart(...)` helper bound into a run's namespace.
+
+    The returned callable builds an ECharts `option` dict from the args, REGISTERS
+    it into the per-run accumulator via `on_chart(option)` (mirrors `save_dataset`'s
+    `on_registered` pattern), and RETURNS the option dict so a model can return it
+    as the step's bare expression too. Bad input raises a clear `ValueError` the
+    eval loop catches and reports — it never silently swallows a chart request.
+    """
+
+    def echart(
+        kind: str,
+        df: pd.DataFrame | None = None,
+        *,
+        x: str | None = None,
+        y: Any = None,
+        series: Any = None,
+        title: str | None = None,
+        option: dict[str, Any] | None = None,
+        **opts: Any,
+    ) -> dict[str, Any]:
+        # Raw-option escape hatch: accept a full ECharts option dict as-is.
+        if option is not None:
+            if not isinstance(option, dict) or "series" not in option:
+                raise ValueError(
+                    "echart(option=...): option must be a dict containing a 'series' key"
+                )
+            built = dict(option)
+        else:
+            built = _build_echart_option(
+                kind, df, x=x, y=y, series=series, title=title, opts=opts
+            )
+
+        if on_chart is not None:
+            try:
+                on_chart(built)
+            except Exception:  # noqa: BLE001 — registration is best-effort
+                pass
+        return built
+
+    return echart
+
+
 def build_namespace(
     dataframes: list[pd.DataFrame],
     filenames: list[str] | None = None,
@@ -229,8 +432,6 @@ def build_namespace(
     ns: dict[str, Any] = {
         "pd": pd,
         "np": np,
-        "px": px,
-        "go": go,
         "plt": plt,
         "sns": sns,
         "scipy": scipy,
@@ -238,6 +439,9 @@ def build_namespace(
         "sklearn": sklearn,
         "sm": sm,
         "save_dataset": save_dataset,
+        # Default `echart` with NO run accumulator — `nodes.execute_action`
+        # overrides this with a run-aware closure that collects the built options.
+        "echart": make_echart(),
     }
 
     filenames = filenames or []
@@ -259,78 +463,14 @@ def build_namespace(
     return ns
 
 
-def _capture_charts(result: Any) -> list[str]:
-    """If the eval result is a Plotly figure (or list of them), serialise to JSON.
-
-    A failed serialisation is swallowed — chart capture must never abort a run.
-    """
-    charts: list[str] = []
-    candidates = result if isinstance(result, (list, tuple)) else [result]
-    for item in candidates:
-        if isinstance(item, go.Figure):
-            try:
-                charts.append(item.to_json())
-            except Exception:
-                pass
-    return charts
-
-
-def _capture_matplotlib_charts() -> list[str]:
-    """Convert any open matplotlib figures to Plotly JSON strings.
-
-    When the LLM uses pandas .plot() or plt.* (matplotlib backend) instead of
-    px/go, the figures are created in memory (Agg backend — headless) but never
-    returned as a go.Figure. This helper converts whatever is open in pyplot's
-    figure manager into Plotly figures so ChartRender can display them.
-    Always closes all matplotlib figures afterwards to reset state between steps.
-    """
-    charts: list[str] = []
-    try:
-        fig_nums = plt.get_fignums()
-        if not fig_nums:
-            return charts
-        try:
-            import plotly.tools as tls  # noqa: PLC0415
-            for fnum in fig_nums:
-                mfig = plt.figure(fnum)
-                try:
-                    pfig = tls.mpl_to_plotly(mfig)
-                    charts.append(pfig.to_json())
-                except Exception:  # noqa: BLE001
-                    pass
-        except Exception:  # noqa: BLE001
-            pass
-        plt.close("all")
-    except Exception:  # noqa: BLE001
-        pass
-    return charts
-
-
-def _collect_namespace_charts(namespace: dict[str, Any]) -> list[str]:
-    """Scan the eval namespace for any go.Figure objects assigned to variables.
-
-    Handles the common LLM pattern `fig = px.bar(...); fig.show()` where the
-    result of eval/exec is None (show() returns None) but the figure is still
-    reachable as a named variable in the namespace.
-    """
-    charts: list[str] = []
-    seen_ids: set[int] = set()
-    for val in namespace.values():
-        if isinstance(val, go.Figure) and id(val) not in seen_ids:
-            seen_ids.add(id(val))
-            try:
-                charts.append(val.to_json())
-            except Exception:
-                pass
-    return charts
-
-
 def _stringify(result: Any) -> str:
     """Convert an arbitrary eval result to a readable string for the transcript."""
     if result is None:
         return "None"
-    if isinstance(result, go.Figure):
-        return "[Plotly figure captured]"
+    # An ECharts option dict (returned by `echart(...)`) is captured separately;
+    # keep the transcript line compact rather than dumping the whole option.
+    if isinstance(result, dict) and "series" in result:
+        return "[chart captured]"
     try:
         if isinstance(result, (pd.DataFrame, pd.Series)):
             n = len(result)
@@ -364,9 +504,13 @@ def _stringify(result: Any) -> str:
 def eval_expression(
     expr: str, namespace: dict[str, Any]
 ) -> tuple[str, list[str], bool, str | None]:
-    """Evaluate `expr` in `namespace`, capturing result, charts, error.
+    """Evaluate `expr` in `namespace`, capturing result and error.
 
-    Returns `(result_str, charts_json_list, is_error, error_str)`.
+    Returns `(result_str, charts_json_list, is_error, error_str)`. Charts are NOT
+    collected here — the model builds an ECharts `option` via `echart(...)`, which
+    registers it into the run-aware accumulator `nodes.execute_action` owns; that
+    node reads + `json.dumps`-es the options. So the `charts_json_list` returned
+    here is always empty and kept only for signature stability.
 
     Tries `eval` first (expressions, the common case); on a `SyntaxError` falls
     back to `exec` (statements, e.g. multi-line assignments) and reports the value
@@ -413,17 +557,9 @@ def eval_expression(
                 exec(compile(tree, "<string>", "exec"), namespace)  # noqa: S102
                 result = "[executed statements; no return value]"
 
-        direct_charts = _capture_charts(result)
-        ns_charts = _collect_namespace_charts(namespace)
-        mpl_charts = _capture_matplotlib_charts()
-        # Merge all three sources. Priority: direct return > namespace scan > mpl.
-        seen_json: set[str] = set(direct_charts)
-        charts = list(direct_charts)
-        for c in ns_charts + mpl_charts:
-            if c not in seen_json:
-                seen_json.add(c)
-                charts.append(c)
-        return _stringify(result), charts, False, None
+        # Charts are captured out-of-band via the `echart(...)` accumulator the
+        # node owns; nothing to collect from the eval result here.
+        return _stringify(result), [], False, None
     except Exception as exc:  # noqa: BLE001 — recoverable, recorded in transcript
         err = f"{type(exc).__name__}: {exc}"
         # One compact traceback line helps the model self-correct.

@@ -24,7 +24,13 @@ from db.session import create_db_session
 from graph.cancellation import is_cancelled  # cooperative Stop
 from graph.compress import extract_facts  # C31: distil notes -> compact facts
 from graph.memory import get_memory_block  # owned by slice-3c; 3b only imports it
-from graph.sandbox import _safe_alias, build_namespace, eval_expression, make_save_dataset
+from graph.sandbox import (
+    _safe_alias,
+    build_namespace,
+    eval_expression,
+    make_echart,
+    make_save_dataset,
+)
 from graph.state import AgentState
 from llm.client import LLMClient
 from observability.events import get_logger
@@ -606,9 +612,23 @@ def execute_action(state: AgentState) -> AgentState:
         on_saved=_on_saved,
     )
 
-    result_str, new_charts, is_error, error_str = eval_expression(expr, namespace)
-    if new_charts:
-        charts.extend(new_charts)
+    # Run-aware `echart(...)`: each call appends the built ECharts `option` dict to
+    # this per-action accumulator (C4). We `json.dumps` each captured option and
+    # append to `state["charts"]` (the unchanged `query_runs.charts_json` shape —
+    # an array of JSON strings; only the CONTENT is now an ECharts option).
+    captured_options: list[dict[str, Any]] = []
+
+    def _on_chart(option: dict[str, Any]) -> None:
+        captured_options.append(option)
+
+    namespace["echart"] = make_echart(on_chart=_on_chart)
+
+    result_str, _ignored_charts, is_error, error_str = eval_expression(expr, namespace)
+    for option in captured_options:
+        try:
+            charts.append(json.dumps(option))
+        except Exception as exc:  # noqa: BLE001 — a bad option must not crash the run
+            logger.warning("chart_serialize_failed", run_id=run_id, error=str(exc))
 
     step = {
         "action": expr,

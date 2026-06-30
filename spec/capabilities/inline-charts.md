@@ -1,12 +1,12 @@
-# Capability: Inline Plotly Charts (C4)
+# Capability: Inline ECharts Charts (C4)
 
 ## What It Does
-Captures any Plotly figure the agent creates during analysis and returns it as JSON for inline rendering.
+Captures any chart the agent creates during analysis — via the `echart(...)` sandbox helper — and returns it as an ECharts `option` JSON object for inline rendering.
 
 ## Inputs
 | Input | Type | Source | Required |
 |-------|------|--------|----------|
-| Plotly figure(s) | px/go object | execute_action sandbox | no |
+| chart(s) | ECharts `option` dict built by `echart(...)` | execute_action sandbox | no |
 
 ## Outputs
 | Output | Type | Destination |
@@ -14,14 +14,15 @@ Captures any Plotly figure the agent creates during analysis and returns it as J
 | charts | list[JSON] | `AgentState.charts` → answer |
 
 ## External Calls
-None (figures rendered client-side).
+None (charts rendered client-side with ECharts).
 
 ## Business Rules
-- `execute_action` detects Plotly figures (directly returned or reachable in the eval namespace) and serializes them to JSON.
-- As a FALLBACK, the sandbox also converts any OPEN matplotlib figures via `plotly.tools.mpl_to_plotly`, so a model that used `.plot()`/`plt.*` instead of Plotly still yields a chart (the `plan_action` prompt still steers models to Plotly).
-- `finalize` carries the captured chart JSON on the answer's `charts`; the UI renders them inline (Plotly.js).
-- A chart-capture failure is non-fatal (step error, run continues).
+- The model calls `echart(kind, df, *, x, y, series, title, option, **opts)` in the sandbox. It builds a sensible ECharts `option` dict (`{title, tooltip, xAxis, yAxis, series, legend, grid, ...}`) for `kind ∈ {bar, line, scatter, pie, heatmap}`, or accepts a full raw `option=<dict>` (must contain a `series` key) as an escape hatch. It REGISTERS the option into a per-run accumulator and returns the dict.
+- `execute_action` reads that accumulator, `json.dumps`-es each option, and appends the strings to `state["charts"]` (the `query_runs.charts_json` shape — an array of JSON strings — is unchanged; only the content is now an ECharts option rather than a Plotly figure).
+- Chart building is defensive: bad input raises a clear `ValueError` the eval loop recovers from (recorded as a step error), and never crashes the run.
+- `finalize` carries the captured chart JSON on the answer's `charts`; the UI renders them inline (ECharts).
+- A chart-capture/serialisation failure is non-fatal (step error, run continues).
 
 ## Success Criteria
-- [ ] A question that asks for a distribution/plot yields at least one Plotly figure JSON in the response.
+- [ ] A question that asks for a distribution/plot yields at least one ECharts `option` JSON (with a `series` key) in the response.
 - [ ] The UI renders the chart inline within the answer turn.
