@@ -30,8 +30,7 @@ Repo-specific gotchas for future syncs.
   the View exports present — the split lives in the same source files.
 - Already prop-driven, synced as-is: ERDiagramPanel, UploadCard.
 - **Excluded:** AppShell / AnalyseTab / DatabaseTab (page-shell orchestration, not
-  primitives), and **ChartRender** (a thin plotly wrapper; plotly can't ship — see
-  below).
+  primitives). ChartRender now ships real ECharts — see Charts section.
 
 ## Charts — ECharts (migrated from Plotly)
 
@@ -42,8 +41,7 @@ Repo-specific gotchas for future syncs.
   `ConversationTurnView` ship **real, working charts** in the design tool — no stub.
 - The earlier plotly/jspdf stub (`.ds-bundle-tsconfig.json` + `.ds-stubs/`) was
   **removed**; `cfg.tsconfig` points back at the app `tsconfig.json`.
-- `cssEntry` hash changed with the ChartRender rewrite — it is
-  `out/_next/static/css/59b2a6a828554be1.css` as of this sync (refresh on rebuild).
+- `cssEntry` hash is `out/_next/static/css/e218add133eca8e4.css` (confirmed 2026-07-01 re-sync; refresh on rebuild).
 
 ## Known render warns
 
@@ -66,6 +64,5 @@ Repo-specific gotchas for future syncs.
   frontend and refresh `cfg.cssEntry` first.
 - **Inter font** is CDN-loaded and never bundled — previews will keep showing
   `[FONT_MISSING]` until someone wires `cfg.extraFonts`.
-- The 7-component scope is deliberate; re-adding any of the 14 backend-coupled
-  components requires authoring previews with mocked data/providers (they won't
-  render from props alone).
+- The 18-component scope is deliberate (7 original + 9 View-split + ERDiagramPanel + UploadCard). Re-adding the 3 excluded page-shell components requires rethinking the sync surface.
+- **globals.css**: `@theme` custom-var block was removed (2026-07-01); CSS output hash is stable (`e218add1...`). Standard Tailwind v4 palette applies via `@import "tailwindcss"`.
