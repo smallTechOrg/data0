@@ -54,30 +54,30 @@ export function AppShell() {
   const isLive = provider === 'gemini' || provider === 'openrouter' || provider === 'anthropic'
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-gray-50">
       {/* Stub-mode banner — shown only when the backend runs without an LLM key. */}
       <StubBanner provider={provider} />
 
-      {/* Header — gradient bar: title (left), pill tabs (inline), and the
+      {/* Header — solid indigo bar: title (left), pill tabs (inline), and the
           Live badge + Project notes button (right). */}
-      <header className="bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-md">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-x-6 gap-y-3 px-6 py-4">
+      <header className="bg-indigo-900 text-white shadow-lg">
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-x-8 gap-y-4 px-6 py-5">
           {/* Left: title + thin tagline + inline pill tabs */}
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
             <div>
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">📊</span>
-                <h1 className="text-xl font-bold leading-tight tracking-tight">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">📊</span>
+                <h1 className="text-2xl font-bold leading-tight tracking-tighter">
                   Data Analysis Agent
                 </h1>
               </div>
-              <p className="text-sm text-indigo-100">
-                Ask questions in plain English, get explainable answers.
+              <p className="mt-1 text-sm font-normal text-indigo-200">
+                Ask questions, get explainable answers.
               </p>
             </div>
 
             {/* Tab switcher (local UI state — allowed in Phase 1) */}
-            <div role="tablist" aria-label="Views" className="flex gap-2">
+            <div role="tablist" aria-label="Views" className="flex gap-3">
               <TabButton
                 id="tab-analyse"
                 label="Analyse"
@@ -94,13 +94,13 @@ export function AppShell() {
           </div>
 
           {/* Right: live badge + Project notes */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4">
             {isLive && (
               <span
-                className="inline-flex items-center gap-2 rounded-full bg-white/20 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm"
+                className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3.5 py-2 text-sm font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/20"
                 title={`Live — provider: ${provider}${model ? `, model: ${model}` : ''}`}
               >
-                <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-emerald-300 animate-pulse" />
+                <span aria-hidden="true" className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
                 Live · {model ?? provider}
               </span>
             )}
@@ -180,3 +180,4 @@ function TabButton({
     </button>
   )
 }
+

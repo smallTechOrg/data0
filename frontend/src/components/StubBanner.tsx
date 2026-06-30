@@ -27,3 +27,4 @@ export function StubBanner({ provider }: { provider?: string | null }) {
     </div>
   )
 }
+

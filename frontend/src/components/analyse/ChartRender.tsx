@@ -203,3 +203,4 @@ function PlotlyFigure({ figure, index }: { figure: Figure; index: number }) {
     </div>
   )
 }
+

@@ -69,7 +69,7 @@ export function PromptBreakdown({ breakdown }: { breakdown: Record<string, numbe
         type="button"
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-900"
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900"
       >
         <span aria-hidden="true">{open ? '▾' : '▸'}</span>
         Token breakdown
@@ -163,3 +163,5 @@ export function PromptBreakdown({ breakdown }: { breakdown: Record<string, numbe
     </div>
   )
 }
+
+

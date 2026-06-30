@@ -192,14 +192,14 @@ export function TablesCard({
       aria-labelledby="tables-heading"
       className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
     >
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 id="tables-heading" className="text-sm font-semibold text-gray-800">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h2 id="tables-heading" className="text-lg font-bold text-gray-900">
           Tables
         </h2>
         <button
           type="button"
           onClick={() => void load()}
-          className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+          className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm font-medium text-gray-700 hover:bg-gray-50"
           aria-label="Refresh datasets"
         >
           Refresh
@@ -211,7 +211,7 @@ export function TablesCard({
           disabled when everything is selected — so the cluster never shifts);
           the "N selected" count floats to the far right via ml-auto. */}
       {datasets.length > 0 && (
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs">
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs">
           <button
             type="button"
             onClick={() => onSelectAll(datasets.map(d => d.id))}
@@ -273,7 +273,7 @@ export function TablesCard({
       )}
 
       {/* Filter tabs — REAL client-side filters by origin / selection. */}
-      <div role="group" aria-label="Dataset filters" className="mb-3 flex flex-wrap gap-2">
+      <div role="group" aria-label="Dataset filters" className="mb-4 flex flex-wrap gap-2">
         {FILTERS.map(f => {
           const active = filter === f
           const count =
@@ -378,7 +378,7 @@ export function TablesCard({
                     onClick={() => void toggleCols(ds.id)}
                     aria-expanded={Boolean(cols)}
                     aria-label={`Toggle columns for ${ds.filename}`}
-                    className="shrink-0 rounded border border-gray-200 bg-white px-2 py-0.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                    className="shrink-0 rounded border border-gray-200 bg-white px-2 py-0.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
                   >
                     cols
                   </button>
@@ -389,7 +389,7 @@ export function TablesCard({
                       type="button"
                       onClick={() => setCleanTarget(ds)}
                       aria-label={`Clean ${ds.filename}`}
-                      className="shrink-0 rounded border border-gray-200 bg-white px-2 py-0.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                      className="shrink-0 rounded border border-gray-200 bg-white px-2 py-0.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
                     >
                       Clean
                     </button>
@@ -455,3 +455,5 @@ export function TablesCard({
     </section>
   )
 }
+
+

@@ -604,3 +604,4 @@ function formatCell(value: unknown): string {
   if (typeof value === 'number') return value.toLocaleString()
   return String(value)
 }
+

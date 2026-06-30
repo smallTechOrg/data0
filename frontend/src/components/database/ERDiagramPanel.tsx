@@ -837,7 +837,7 @@ export function ERDiagramPanel({
             </span>
             <span aria-hidden className="text-gray-300">|</span>
             <span className="inline-flex items-center gap-1">
-              <span className="inline-block h-0.5 w-4 bg-slate-400" /> FK edge
+              <span className="inline-block h-0.5 w-4 bg-gray-400" /> FK edge
             </span>
           </div>
         </div>
@@ -1200,3 +1200,4 @@ function TableCard({
 function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s
 }
+

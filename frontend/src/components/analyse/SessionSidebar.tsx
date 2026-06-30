@@ -193,16 +193,16 @@ export function SessionSidebar({
   return (
     <section
       aria-labelledby="sessions-heading"
-      className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+      className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
     >
       <div className="mb-4 flex items-center justify-between gap-2">
-        <h2 id="sessions-heading" className="text-base font-semibold text-slate-900">
+        <h2 id="sessions-heading" className="text-base font-semibold text-gray-900">
           📋 Sessions
         </h2>
         <button
           type="button"
           onClick={onOpenMemory}
-          className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+          className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors"
         >
           Project notes
         </button>
@@ -213,7 +213,7 @@ export function SessionSidebar({
         <button
           type="button"
           onClick={onNew}
-          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"
+          className="rounded-lg border border-emerald-200 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 transition-colors"
         >
           + New
         </button>
@@ -223,7 +223,7 @@ export function SessionSidebar({
           <button
             type="button"
             onClick={toggleSelectAll}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
           >
             {allSelected ? 'Deselect all' : 'Select all'}
           </button>
@@ -235,7 +235,7 @@ export function SessionSidebar({
             type="button"
             onClick={() => void doDeleteSelected()}
             disabled={bulkDeleting}
-            className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60 transition-colors"
+            className="rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-rose-100 disabled:opacity-60 transition-colors"
           >
             {bulkDeleting ? 'Deleting…' : `Delete selected (${selected.size})`}
           </button>
@@ -244,19 +244,19 @@ export function SessionSidebar({
         {sessions.length > 0 &&
           (confirmClearAll ? (
             <span className="inline-flex items-center gap-1">
-              <span className="text-xs text-slate-600">Clear all?</span>
+              <span className="text-xs text-gray-600">Clear all?</span>
               <button
                 type="button"
                 onClick={() => void doClearAll()}
                 disabled={clearingAll}
-                className="rounded-lg border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60 transition-colors"
+                className="rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-rose-100 disabled:opacity-60 transition-colors"
               >
                 {clearingAll ? 'Clearing…' : 'Yes'}
               </button>
               <button
                 type="button"
                 onClick={() => setConfirmClearAll(false)}
-                className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
               >
                 No
               </button>
@@ -265,7 +265,7 @@ export function SessionSidebar({
             <button
               type="button"
               onClick={() => setConfirmClearAll(true)}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 transition-colors"
+              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors"
             >
               Clear all
             </button>
@@ -273,25 +273,25 @@ export function SessionSidebar({
       </div>
 
       {loading && sessions.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-400">
+        <div className="rounded-lg border border-dashed border-gray-200 px-3 py-6 text-center text-xs text-gray-400">
           Loading sessions…
         </div>
       ) : error ? (
         <div
           role="alert"
-          className="flex flex-col items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-5 text-center text-xs text-rose-700"
+          className="flex flex-col items-center gap-2 rounded-lg border border-rose-200 bg-red-50 px-3 py-5 text-center text-xs text-red-700"
         >
           <span>{error}</span>
           <button
             type="button"
             onClick={() => void load()}
-            className="rounded-lg border border-rose-300 bg-white px-2 py-0.5 font-medium text-rose-700 hover:bg-rose-100 transition-colors"
+            className="rounded-lg border border-red-300 bg-white px-2 py-0.5 font-medium text-red-700 hover:bg-rose-100 transition-colors"
           >
             Retry
           </button>
         </div>
       ) : sessions.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-400">
+        <div className="rounded-lg border border-dashed border-gray-200 px-3 py-6 text-center text-xs text-gray-400">
           No sessions yet. Ask a question to start one.
         </div>
       ) : (
@@ -304,11 +304,11 @@ export function SessionSidebar({
               <li
                 key={s.id}
                 className={`rounded-lg border px-2.5 py-1.5 transition-colors ${
-                  active ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'
+                  active ? 'border-green-400 bg-green-50' : 'border-gray-200 hover:bg-gray-50'
                 }`}
               >
                 {renamingId === s.id ? (
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-2">
                     <input
                       autoFocus
                       value={renameValue}
@@ -318,20 +318,20 @@ export function SessionSidebar({
                         if (e.key === 'Escape') setRenamingId(null)
                       }}
                       aria-label={`Rename session ${label}`}
-                      className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-xs focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      className="min-w-0 flex-1 rounded-lg border border-gray-300 px-2 py-1 text-xs focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
                     />
                     <button
                       type="button"
                       onClick={() => void commitRename(s.id)}
                       disabled={busyId === s.id}
-                      className="rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60 transition-colors"
+                      className="rounded-lg border border-green-400 bg-green-50 px-2 py-1 text-[11px] font-medium text-green-700 hover:bg-green-50 disabled:opacity-60 transition-colors"
                     >
                       Save
                     </button>
                     <button
                       type="button"
                       onClick={() => setRenamingId(null)}
-                      className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                      className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 transition-colors"
                     >
                       Cancel
                     </button>
@@ -347,12 +347,12 @@ export function SessionSidebar({
                         aria-label={`Select session ${label}`}
                         onChange={() => toggleSelect(s.id)}
                         onClick={e => e.stopPropagation()}
-                        className="h-3.5 w-3.5 flex-shrink-0 cursor-pointer rounded border-slate-300 accent-emerald-600"
+                        className="h-3.5 w-3.5 flex-shrink-0 cursor-pointer rounded border-gray-300 accent-green-600"
                       />
                       <button
                         type="button"
                         onClick={() => onResume(s.id)}
-                        className="block min-w-0 flex-1 truncate text-left text-sm font-medium text-slate-900 hover:text-indigo-600"
+                        className="block min-w-0 flex-1 truncate text-left text-sm font-medium text-gray-900 hover:text-indigo-600"
                       >
                         {label}
                       </button>
@@ -360,35 +360,35 @@ export function SessionSidebar({
 
                     {/* Row 2: meta + actions, all on one compact line */}
                     <div className="mt-0.5 flex items-center gap-2 pl-[1.375rem] text-[11px]">
-                      <span className="whitespace-nowrap text-slate-500">
+                      <span className="whitespace-nowrap text-gray-500">
                         {s.turn_count} turn{s.turn_count === 1 ? '' : 's'}
                         {active ? ' · active' : ''}
                       </span>
-                      <span aria-hidden="true" className="text-slate-300">
+                      <span aria-hidden="true" className="text-gray-300">
                         ·
                       </span>
                       <button
                         type="button"
                         onClick={() => startRename(s)}
-                        className="font-medium text-slate-500 hover:text-slate-800 transition-colors"
+                        className="font-medium text-gray-500 hover:text-gray-800 transition-colors"
                       >
                         Rename
                       </button>
                       {confirmingId === s.id ? (
                         <span className="inline-flex items-center gap-1">
-                          <span className="text-slate-600">Delete?</span>
+                          <span className="text-gray-600">Delete?</span>
                           <button
                             type="button"
                             onClick={() => void doDelete(s.id)}
                             disabled={busyId === s.id}
-                            className="font-medium text-rose-600 hover:text-rose-800 disabled:opacity-60"
+                            className="font-medium text-red-600 hover:text-rose-800 disabled:opacity-60"
                           >
                             {busyId === s.id ? 'Deleting…' : 'Yes'}
                           </button>
                           <button
                             type="button"
                             onClick={() => setConfirmingId(null)}
-                            className="font-medium text-slate-500 hover:text-slate-800 transition-colors"
+                            className="font-medium text-gray-500 hover:text-gray-800 transition-colors"
                           >
                             No
                           </button>
@@ -397,7 +397,7 @@ export function SessionSidebar({
                         <button
                           type="button"
                           onClick={() => setConfirmingId(s.id)}
-                          className="font-medium text-rose-600 hover:text-rose-800 transition-colors"
+                          className="font-medium text-red-600 hover:text-rose-800 transition-colors"
                         >
                           Delete
                         </button>
@@ -413,3 +413,5 @@ export function SessionSidebar({
     </section>
   )
 }
+
+

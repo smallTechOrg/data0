@@ -452,8 +452,8 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
       aria-labelledby={headingId}
       className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
     >
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 id={headingId} className="text-sm font-semibold text-gray-800">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h2 id={headingId} className="text-lg font-bold text-gray-900">
           Upload data
         </h2>
       </div>
@@ -463,7 +463,7 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
       {readmeBanner && (
         <div
           role="status"
-          className="mb-3 flex items-start justify-between gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800"
+          className="mb-4 flex items-start justify-between gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800"
         >
           <span className="flex items-start gap-1.5">
             <span aria-hidden="true">📁</span>
@@ -524,7 +524,7 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
       {queue.length > 0 && (
         <div className="mt-4">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-xs font-medium text-gray-600">
+            <span className="text-sm font-medium text-gray-700">
               Staged files ({queue.length})
             </span>
             {pendingCount > 0 && (
@@ -739,3 +739,5 @@ function Spinner() {
     />
   )
 }
+
+
