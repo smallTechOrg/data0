@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -110,41 +109,44 @@ def _facts_as_notes(facts: list[str]) -> str:
     return "; ".join(f.strip() for f in facts if f and str(f).strip())
 
 
-def _trigger_facts_self_heal(dataset_id: str) -> None:
-    """Fire-and-forget C31 extraction for a dataset that has notes but no compressed
-    facts yet, so future plan prompts use the smaller facts (raw notes are used this
-    turn). Never blocks planning and never raises; `extract_facts` is in-flight-locked
-    so repeated triggers don't double-run.
-    """
-
-    def _run() -> None:
-        try:
-            extract_facts(dataset_id)
-        except Exception as exc:  # noqa: BLE001 — self-heal is best-effort
-            logger.warning("facts_self_heal_failed", dataset_id=dataset_id, error=str(exc))
-
-    try:
-        threading.Thread(
-            target=_run, name=f"c31-heal-{dataset_id[:8]}", daemon=True
-        ).start()
-    except Exception as exc:  # noqa: BLE001 — never let self-heal crash planning
-        logger.warning("facts_self_heal_spawn_failed", dataset_id=dataset_id, error=str(exc))
-
-
 def _dataset_notes_for_prompt(
     dataset_id: str, context: str | None, facts: list[str] | None
 ) -> str:
-    """C31: prefer the compressed facts (smaller prompt) over the raw notes, falling
-    back to the raw notes — and lazily self-healing — when a dataset has notes but no
-    facts yet. This is what makes C31 actually shrink the plan prompt.
+    """C31: inject the COMPRESSED facts into the plan prompt — never the raw notes.
+
+    Raw, uncompressed notes must NEVER be sent to the LLM (they are exactly what
+    C31 exists to shrink). So:
+
+    - If compressed facts already exist -> render and use them.
+    - Else if raw notes exist but no facts yet -> compress SYNCHRONOUSLY on demand
+      via `extract_facts(dataset_id)` (populates `context_facts`, returns the facts)
+      and use those compressed facts.
+    - If synchronous compression still yields nothing (provider failure / stub
+      mode) -> return "" (pass NO notes). We never fall back to the raw notes.
     """
     clean_facts = [f for f in (facts or []) if f and str(f).strip()]
     if clean_facts:
         return _facts_as_notes(clean_facts)
+
     raw = (context or "").strip()
-    if raw:
-        _trigger_facts_self_heal(dataset_id)
-    return raw
+    if not raw:
+        return ""
+
+    # Notes exist but no facts yet — compress on demand so the LLM only ever sees
+    # the compact facts, never the raw notes.
+    try:
+        fresh = extract_facts(dataset_id)
+    except Exception as exc:  # noqa: BLE001 — on-demand compression is best-effort
+        logger.warning("facts_on_demand_failed", dataset_id=dataset_id, error=str(exc))
+        fresh = []
+
+    clean_fresh = [f for f in (fresh or []) if f and str(f).strip()]
+    if clean_fresh:
+        return _facts_as_notes(clean_fresh)
+
+    # Compression produced nothing (e.g. stub/offline or provider failure). Pass
+    # NO notes rather than leaking the raw, uncompressed notes to the LLM.
+    return ""
 
 
 def _safe_memory_block() -> str:

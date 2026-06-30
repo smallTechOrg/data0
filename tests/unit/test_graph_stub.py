@@ -343,9 +343,9 @@ def test_setup_injects_compressed_facts_not_raw_notes(uploads_dir, monkeypatch):
     """C31: when a dataset has compressed facts, setup must inject the FACTS into
     the dataset context — not the longer raw notes. This is the wiring that was
     previously dead (facts extracted + stored but never used)."""
-    # Self-heal must NOT fire when facts already exist; record any call to prove it.
+    # On-demand compression must NOT fire when facts already exist; record any call.
     calls: list[str] = []
-    monkeypatch.setattr(nodes_module, "_trigger_facts_self_heal", lambda did: calls.append(did))
+    monkeypatch.setattr(nodes_module, "extract_facts", lambda did: calls.append(did) or [])
 
     dataset_id = _make_dataset(uploads_dir)
     raw = "This is a long-winded paragraph of raw notes that should be compressed away."
@@ -356,38 +356,60 @@ def test_setup_injects_compressed_facts_not_raw_notes(uploads_dir, monkeypatch):
 
     assert "fiscal year starts in April; revenue in USD" in ctx  # facts injected
     assert raw not in ctx  # raw notes NOT injected
-    assert calls == []  # no self-heal needed when facts exist
+    assert calls == []  # no on-demand compression needed when facts exist
 
 
-def test_setup_falls_back_to_raw_notes_and_self_heals(uploads_dir, monkeypatch):
-    """C31: with notes but no compressed facts yet, setup uses the raw notes this
-    turn AND fires a lazy self-heal so future turns get the smaller facts."""
+def test_setup_compresses_on_demand_never_leaks_raw_notes(uploads_dir, monkeypatch):
+    """C31: with notes but no compressed facts yet, setup compresses SYNCHRONOUSLY
+    on demand and injects the resulting facts — it must never leak the raw notes."""
     calls: list[str] = []
-    monkeypatch.setattr(nodes_module, "_trigger_facts_self_heal", lambda did: calls.append(did))
+
+    def _fake_extract(did: str) -> list[str]:
+        calls.append(did)
+        return ["revenue in USD", "fiscal year starts in April"]
+
+    monkeypatch.setattr(nodes_module, "extract_facts", _fake_extract)
 
     dataset_id = _make_dataset(uploads_dir)
-    raw = "Revenue is always in USD; fiscal year starts in April."
+    raw = "Revenue is always in USD; fiscal year starts in April; plus lots of prose."
     _set_context(dataset_id, context=raw, facts=[])
 
-    result = nodes_module.setup({"run_id": "r-fallback", "dataset_ids": [dataset_id]})
+    result = nodes_module.setup({"run_id": "r-ondemand", "dataset_ids": [dataset_id]})
     ctx = result["dataset_context"]
 
-    assert raw in ctx  # raw notes used as fallback
-    assert calls == [dataset_id]  # self-heal triggered exactly once for this dataset
+    assert "revenue in USD; fiscal year starts in April" in ctx  # compressed facts used
+    assert raw not in ctx  # raw notes NEVER injected
+    assert calls == [dataset_id]  # on-demand compression ran exactly once
 
 
-def test_dataset_notes_for_prompt_prefers_facts(monkeypatch):
-    """Pure-function check of the prefer-facts/fallback decision."""
-    monkeypatch.setattr(nodes_module, "_trigger_facts_self_heal", lambda did: None)
-
-    # Facts win over raw context.
+def test_dataset_notes_for_prompt_never_returns_raw_notes(monkeypatch):
+    """Pure-function check: facts win; otherwise compress on demand; raw notes are
+    NEVER returned. If on-demand compression yields nothing, return "" (no notes)."""
+    # Facts win over raw context (no compression call).
+    monkeypatch.setattr(nodes_module, "extract_facts", lambda did: pytest.fail("unexpected"))
     assert nodes_module._dataset_notes_for_prompt("d1", "raw notes", ["a", "b"]) == "a; b"
-    # No facts -> raw context.
-    assert nodes_module._dataset_notes_for_prompt("d1", "raw notes", []) == "raw notes"
-    # Nothing -> empty string.
+    # Nothing at all -> "".
     assert nodes_module._dataset_notes_for_prompt("d1", None, None) == ""
-    # Blank/whitespace facts are ignored (treated as no facts).
-    assert nodes_module._dataset_notes_for_prompt("d1", "raw", ["", "  "]) == "raw"
+    # Blank/whitespace facts are ignored; with no real facts and empty raw -> "".
+    assert nodes_module._dataset_notes_for_prompt("d1", "", ["", "  "]) == ""
+
+    # Raw notes present but no facts -> compress on demand, use the compressed facts.
+    monkeypatch.setattr(nodes_module, "extract_facts", lambda did: ["x", "y"])
+    assert nodes_module._dataset_notes_for_prompt("d1", "raw notes", []) == "x; y"
+
+    # Raw notes present but on-demand compression yields nothing -> "" (NOT the raw).
+    raw = "some raw uncompressed notes that must never reach the LLM"
+    monkeypatch.setattr(nodes_module, "extract_facts", lambda did: [])
+    out = nodes_module._dataset_notes_for_prompt("d1", raw, [])
+    assert out == ""
+    assert raw not in out
+
+    # Even if on-demand compression RAISES, we must return "" — never the raw notes.
+    def _boom(did: str):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(nodes_module, "extract_facts", _boom)
+    assert nodes_module._dataset_notes_for_prompt("d1", raw, []) == ""
 
 
 # --------------------------------------------------------------------------- #

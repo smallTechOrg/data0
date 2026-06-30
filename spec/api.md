@@ -76,6 +76,8 @@ Pre-flight C26 (unless `skip_clarification`) → may return `{type:"clarificatio
  "prompt_breakdown":{...},"duration_ms":4210}
 ```
 
+> **`dataset_ids` vs `datasets_used`:** `dataset_ids` carries the raw resolved/selected dataset **ids** (used for session continuity and follow-up turns). `datasets_used` carries the human-readable list of dataset **filenames** for display — each id in the resolved set is mapped to its `DatasetRow.filename` (falling back to the id itself only if the row is missing). The UI renders `datasets_used` directly, so it must be names, never raw UUIDs. The two lists are positionally aligned.
+
 > **`duration_ms`:** an integer — the wall-clock time of the whole agent run in milliseconds, measured in the `/ask` handler around `run_agent` (selector + iterations + finalize). The UI shows it as the answer's response time ("took Xs"). Present on the answer payload only (a `clarification` short-circuit carries no `duration_ms`).
 
 > **`charts` field:** a list of Plotly figure JSON strings (`list[str]`). Each element is the serialised output of `plotly.graph_objects.Figure.to_json()` — a self-contained Plotly spec that can be passed directly to `Plotly.react()` / `JSON.parse()`. The list is empty (`[]`) when the agent produced no charts during the run. Charts are also persisted to `query_runs.charts_json` and surfaced via `GET /sessions/{id}` on each turn.

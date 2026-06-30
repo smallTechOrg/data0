@@ -172,3 +172,12 @@ Today these users either learn pandas/SQL, wait on an analyst, or fight with spr
   The first line is the offline stub suite (zero env, in-memory SQLite, no network) — it must stay **fully green** (no new failures vs the measured baseline of 213 passed / 0 failed on `main`), including the new `tests/unit/test_reasoning.py`. The second line is the **authoritative real-key gate**: it requires `AGENT_GEMINI_API_KEY` in `.env` and includes `tests/integration/test_reasoning_real.py`, which drives a real upload → ask round-trip and asserts that at least one `action_history` step has non-empty `reasoning` (and that the run still completes with a non-empty answer and unchanged execution semantics).
 
 - **How the user tests it (handoff seed):** From the repo root run `python agent.py --run` and open `http://localhost:8001/app/`. Upload a small CSV, ask a question that takes a few steps (e.g. "What is the average of column X, and which rows are above it?"), then expand the **Steps inspector** on the answer turn. Expect: under (or beside) each step's pandas code block, a SHORT one-line rationale explaining WHY that step was chosen. Steps with no rationale (e.g. an offline/stub run with `AGENT_GEMINI_API_KEY` unset) simply show the code with no rationale line and an unchanged layout — that absence is expected, not a bug. **Real surfaces:** the per-step rationale lines in the Steps inspector. No new stubs introduced.
+
+---
+
+## Future / Backlog (not yet scheduled)
+
+Candidate features captured for a later phase — not built yet, no gate defined.
+
+- **Two run modes — "Slow & cheap" vs "Fast & expensive".** A user-facing toggle that picks a preset trading latency/cost against quality: a cheaper/slower model + tighter `max_iterations` for routine questions, vs a stronger/faster (more expensive) model + higher iteration budget for hard ones. Likely a Settings preset that drives `AGENT_LLM_MODEL` + `max_iterations` (and possibly provider) per request. Open questions: per-query override vs global default; how it surfaces in the Analyse composer; cost estimate shown per mode.
+- **Dark / light mode toggle.** A theme switch in the app shell. Requires the UI to read theme tokens (CSS variables / a `dark:` class strategy) rather than the current hard-coded gray/indigo palette; persist the choice (localStorage + a `settings` value). Touches the whole frontend surface — best done as a dedicated theming phase, and would also benefit the synced design-system components.

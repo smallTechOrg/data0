@@ -180,7 +180,7 @@ function AnswerView({
       {/* Datasets used disclosure */}
       {answer.datasets_used && answer.datasets_used.length > 0 && (
         <p className="mt-2 text-[11px] text-gray-400">
-          Datasets used: {answer.datasets_used.join(', ')}
+          Datasets used ({answer.datasets_used.length}): {answer.datasets_used.join(', ')}
         </p>
       )}
 

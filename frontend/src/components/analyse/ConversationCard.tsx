@@ -580,7 +580,7 @@ function buildSessionMarkdown(turns: Turn[], model?: string): string {
       meta.push(`Tokens ${a.tokens_input ?? 0} in / ${a.tokens_output ?? 0} out`)
       lines.push(`- ${meta.join('  ·  ')}`)
       if (a.datasets_used && a.datasets_used.length > 0) {
-        lines.push(`- Datasets used: ${a.datasets_used.join(', ')}`)
+        lines.push(`- Datasets used (${a.datasets_used.length}): ${a.datasets_used.join(', ')}`)
       }
       lines.push('', '**Answer**', '', a.answer_markdown ?? '', '')
 

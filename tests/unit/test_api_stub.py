@@ -184,6 +184,11 @@ def test_ask_single_dataset_returns_answer(api_client):
     assert data["type"] == "answer"
     assert data["run_id"]
     assert data["dataset_ids"] == [dataset_id]
+    # `dataset_ids` carries the raw id (continuity); `datasets_used` is the
+    # human-readable FILENAME list the UI renders — never a raw UUID.
+    assert data["datasets_used"] == ["sample.csv"]
+    assert dataset_id not in data["datasets_used"]
+    assert data["datasets_used"][0].endswith(".csv")
     assert data["answer_markdown"]  # stub answer is non-empty
     assert data["answer_html"]  # rendered from markdown
     assert isinstance(data["steps"], list)

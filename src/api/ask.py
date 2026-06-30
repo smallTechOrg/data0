@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from api._common import ok, api_error
 from db.models import ConversationSessionRow, DatasetRow, QueryRunRow
-from db.session import get_session
+from db.session import create_db_session, get_session
 from domain.ask import AskRequest
 from graph.runner import run_agent
 
@@ -50,6 +50,22 @@ _TURN_STATUSES = ("completed", "failed", "clarification")
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _resolve_dataset_filenames(dataset_ids: list[str]) -> list[str]:
+    """Map dataset ids -> their `DatasetRow.filename` for display (`datasets_used`).
+
+    One session, one loop. If a row is missing (deleted/unknown id), fall back to
+    the id itself so the list stays aligned with `dataset_ids`.
+    """
+    if not dataset_ids:
+        return []
+    names: list[str] = []
+    with create_db_session() as session:
+        for did in dataset_ids:
+            row = session.get(DatasetRow, did)
+            names.append(row.filename if row is not None and row.filename else did)
+    return names
 
 
 def _resolve_explicit_dataset_ids(req: AskRequest) -> list[str]:
@@ -234,16 +250,20 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
     answer_markdown = result.get("answer") or ""
     answer_html = _md.render(answer_markdown) if answer_markdown else ""
     # The runner returns the FINAL resolved/selected ids — prefer them.
-    datasets_used = result.get("dataset_ids") or resolved_ids
+    used_ids = result.get("dataset_ids") or resolved_ids
+    # `dataset_ids` carries the raw ids (session/continuity); `datasets_used` is
+    # the human-readable list of filenames the UI renders. Resolve ids -> names
+    # in one session/loop, falling back to the id itself if a row is missing.
+    datasets_used_names = _resolve_dataset_filenames(used_ids)
 
     return ok(
         {
             "type": "answer",
             "run_id": result["run_id"],
             "session_id": session_id,
-            "dataset_ids": datasets_used,
+            "dataset_ids": used_ids,
             "derived_dataset_ids": result.get("derived_dataset_ids") or [],
-            "datasets_used": datasets_used,
+            "datasets_used": datasets_used_names,
             "selector_reasoning": result.get("selector_reasoning"),
             "answer_markdown": answer_markdown,
             "answer_html": answer_html,
