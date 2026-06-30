@@ -35,6 +35,7 @@ def _build_graph():
             "finalize": "finalize",
             "force_finalize": "force_finalize",  # user pressed Stop
             "handle_error": "handle_error",
+            "plan_action": "plan_action",  # chart guardrail: force one more replan
         },
     )
     g.add_conditional_edges(

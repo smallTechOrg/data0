@@ -34,3 +34,9 @@ class AgentState(TypedDict, total=False):
     error_message: str | None            # informational (e.g. "max_iterations") from force_finalize
     status: str                          # running | completed | failed
     max_iterations: int                  # per-run cap (from settings or override)
+
+    # Chart guardrail (deterministic): when the question explicitly asks for a
+    # chart, force ONE extra iteration demanding an echart(...) if a final reply
+    # arrives with no chart produced. Capped so it can never loop forever.
+    wants_chart: bool                    # set in setup from _wants_chart(question)
+    chart_force_count: int               # times a final-without-chart was rejected

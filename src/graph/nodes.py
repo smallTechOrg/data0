@@ -67,6 +67,29 @@ _FINALIZE_TAG = "<node:finalize>"
 _MAX_CONSECUTIVE_ERRORS = 3
 
 
+# Explicit visualization request: a conservative, case-insensitive match for words
+# that unambiguously ask for a chart. Kept narrow on purpose — only explicit asks
+# trip the deterministic chart guardrail (see `_wants_chart`).
+_WANTS_CHART_RE = re.compile(
+    r"\b(charts?|plots?|graphs?|visuali\w*|diagram|barchart|histogram)\b",
+    re.IGNORECASE,
+)
+# Phrase-level asks that the word list above does not already cover.
+_WANTS_CHART_PHRASE_RE = re.compile(r"with charts?|show me", re.IGNORECASE)
+
+
+def _wants_chart(question: str) -> bool:
+    """True when the question EXPLICITLY asks for a chart/visualization.
+
+    Conservative by design: matches only explicit visualization vocabulary
+    ("chart", "plot", "graph", "visuali…", "diagram", "histogram", "barchart") or
+    the phrases "with charts" / "show me". A plain analytical question ("what is
+    the average price?") returns False so the guardrail never fires spuriously.
+    """
+    q = question or ""
+    return bool(_WANTS_CHART_RE.search(q) or _WANTS_CHART_PHRASE_RE.search(q))
+
+
 def _load_prompt(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
 
@@ -264,8 +287,20 @@ def setup(state: AgentState) -> AgentState:
     # per-run handle). The frames list stays ordered by `dataset_ids`.
     _dataframes[run_id] = {"frames": frames, "filenames": filenames}
     dataset_context = "\n\n".join(schema_parts)
-    logger.info("setup_ok", run_id=run_id, datasets=len(frames), session=bool(session_id))
-    return {**state, "dataset_context": dataset_context, "status": "running"}
+    wants_chart = _wants_chart(state.get("question", ""))
+    logger.info(
+        "setup_ok",
+        run_id=run_id,
+        datasets=len(frames),
+        session=bool(session_id),
+        wants_chart=wants_chart,
+    )
+    return {
+        **state,
+        "dataset_context": dataset_context,
+        "status": "running",
+        "wants_chart": wants_chart,
+    }
 
 
 # The fixed instruction footer appended to every assembled plan prompt.
@@ -357,10 +392,22 @@ _PLAN_SECTION_ORDER = (
 )
 
 
+# Deterministic chart-guardrail reminder: appended to the plan prompt when the
+# user explicitly asked for a chart but none has been produced yet.
+_CHART_REQUIRED_REMINDER = (
+    "## A chart is REQUIRED\n"
+    "The user asked for a chart but none has been produced yet. Your NEXT action "
+    "MUST be an `echart(...)` call (a bare expression). Do NOT reply "
+    "`FINAL ANSWER:` until at least one chart has been produced."
+)
+
+
 def _assemble_plan_prompt(state: AgentState, wrap_up: bool) -> str:
     """Build the plan_action user prompt from question + transcript + context."""
     sections = _plan_prompt_sections(state, wrap_up)
     parts = [sections[key] for key in _PLAN_SECTION_ORDER if sections.get(key)]
+    if state.get("wants_chart") and not state.get("charts"):
+        parts.append(_CHART_REQUIRED_REMINDER)
     return "\n\n".join(parts)
 
 
@@ -462,11 +509,21 @@ def plan_action(state: AgentState) -> AgentState:
     tokens_input = state.get("tokens_input", 0) + in_toks
     tokens_output = state.get("tokens_output", 0) + out_toks
 
+    is_final = "final answer:" in reply.lower()
+
+    # Chart guardrail: a FINAL answer that arrives with no chart, when the user
+    # explicitly asked for one, counts as a rejected finalize. Incrementing here
+    # lets `after_plan` cap the number of forced retries (termination guarantee).
+    chart_force_count = state.get("chart_force_count", 0)
+    if is_final and state.get("wants_chart") and not state.get("charts"):
+        chart_force_count += 1
+
     logger.info(
         "plan_action",
         run_id=state.get("run_id"),
         iteration=iteration + 1,
-        is_final=("final answer:" in reply.lower()),
+        is_final=is_final,
+        chart_force_count=chart_force_count,
     )
     return {
         **state,
@@ -475,6 +532,7 @@ def plan_action(state: AgentState) -> AgentState:
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
         "prompt_component_chars": prompt_component_chars,
+        "chart_force_count": chart_force_count,
     }
 
 

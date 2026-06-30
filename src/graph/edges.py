@@ -29,7 +29,21 @@ def after_plan(state: AgentState) -> str:
     if is_cancelled(state.get("run_id", "")):
         return "force_finalize"
     llm_response = (state.get("llm_response") or "").lower()
-    if _FINAL_MARKER in llm_response:
+    is_final = _FINAL_MARKER in llm_response
+    # Chart guardrail: the user explicitly asked for a chart but the model tried to
+    # finalize without producing one. Loop back to plan_action ONCE more to force an
+    # echart(...). `chart_force_count` (incremented in plan_action on each such
+    # rejected finalize) caps the retries: once it reaches 2 we fall through to the
+    # normal finalize, guaranteeing termination even if the model never charts (or
+    # in stub mode, which never charts).
+    if (
+        is_final
+        and state.get("wants_chart")
+        and not state.get("charts")
+        and state.get("chart_force_count", 0) < 2
+    ):
+        return "plan_action"
+    if is_final:
         return "finalize"
     return "execute_action"
 
