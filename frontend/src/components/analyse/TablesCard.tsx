@@ -115,6 +115,15 @@ export function TablesCardView({
     }
   }, [datasets, filter, selectedDatasetIds])
 
+  // Ids of the rows currently shown under the active filter. "Select all" must
+  // pin exactly these (not every dataset), and the count of how many of them are
+  // already selected drives the disabled/visible state of the affordance.
+  const visibleIds = useMemo(() => visibleDatasets.map(d => d.id), [visibleDatasets])
+  const visibleSelectedCount = useMemo(
+    () => visibleIds.filter(id => selectedDatasetIds.includes(id)).length,
+    [visibleIds, selectedDatasetIds],
+  )
+
   const uploadedCount = datasets.filter(d => d.origin !== 'derived').length
   const derivedCount = datasets.filter(d => d.origin === 'derived').length
 
@@ -145,8 +154,8 @@ export function TablesCardView({
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs">
           <button
             type="button"
-            onClick={() => onSelectAll(datasets.map(d => d.id))}
-            disabled={selectedDatasetIds.length >= datasets.length}
+            onClick={() => onSelectAll(visibleIds)}
+            disabled={visibleIds.length === 0 || visibleSelectedCount >= visibleIds.length}
             className="rounded border border-gray-300 bg-white px-2 py-0.5 font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-50 disabled:text-gray-300"
           >
             Select all

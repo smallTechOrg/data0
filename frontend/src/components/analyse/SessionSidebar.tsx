@@ -68,6 +68,14 @@ export interface SessionSidebarViewProps {
   onBulkDelete: (ids: string[]) => void
 }
 
+/** Format an ISO timestamp as a compact local date-time, or null if absent/invalid. */
+function fmtTime(iso?: string | null): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return null
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
 /**
  * PURE presentational sidebar. Renders entirely from props; the only state it
  * keeps is local UI affordance state (rename text, checkbox selection, inline
@@ -329,9 +337,24 @@ export function SessionSidebarView({
                       <button
                         type="button"
                         onClick={() => startRename(s)}
-                        className="font-medium text-gray-500 hover:text-gray-800 transition-colors"
+                        aria-label="Rename session"
+                        title="Rename"
+                        className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
                       >
-                        Rename
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M12 20h9" />
+                          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                        </svg>
                       </button>
                       {confirmingId === s.id ? (
                         <span className="inline-flex items-center gap-1">
@@ -359,12 +382,41 @@ export function SessionSidebarView({
                         <button
                           type="button"
                           onClick={() => setConfirmingId(s.id)}
-                          className="font-medium text-red-600 hover:text-rose-800 transition-colors"
+                          aria-label="Delete session"
+                          title="Delete"
+                          className="rounded p-1 text-red-600 hover:bg-gray-100 hover:text-rose-800 transition-colors"
                         >
-                          Delete
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M3 6h18" />
+                            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                            <path d="M10 11v6" />
+                            <path d="M14 11v6" />
+                          </svg>
                         </button>
                       )}
                     </div>
+
+                    {/* Row 3: session start + last-updated timestamps */}
+                    {(fmtTime(s.created_at) || fmtTime(s.updated_at)) && (
+                      <div className="mt-0.5 pl-[1.375rem] text-[10px] text-gray-400">
+                        {fmtTime(s.created_at) && <span>Started {fmtTime(s.created_at)}</span>}
+                        {fmtTime(s.created_at) && fmtTime(s.updated_at) && (
+                          <span aria-hidden="true"> · </span>
+                        )}
+                        {fmtTime(s.updated_at) && <span>Updated {fmtTime(s.updated_at)}</span>}
+                      </div>
+                    )}
                   </div>
                 )}
               </li>
