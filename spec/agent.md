@@ -90,6 +90,12 @@ class AgentState(TypedDict, total=False):
     status: str                          # running | completed | failed
     error_message: str | None            # informational: "max_iterations" | "consecutive_errors" (set by force_finalize) or the fatal error string (set by handle_error); persisted to query_runs
     max_iterations: int                  # iteration cap for this run (from settings.max_iterations or the /ask override)
+
+    # Chart guardrail (deterministic): when the question explicitly asks for a
+    # chart, force ONE extra iteration demanding an echart(...) if a final reply
+    # arrives with no chart produced. Capped so it can never loop forever.
+    wants_chart: bool                    # set in setup from _wants_chart(question)
+    chart_force_count: int               # times a final-without-chart was rejected (cap 2)
 ```
 
 This replaces the skeleton's 4-field `AgentState`. `TypedDict, total=False` per skeleton convention (not dataclass/Pydantic).
@@ -175,7 +181,8 @@ plan_action   (loop)
 | `setup` | `state.get("error")` | `handle_error` |
 | `setup` | else | `plan_action` |
 | `plan_action` | `state.get("error")` | `handle_error` |
-| `plan_action` | `"final answer:"` in `llm_response.lower()` | `finalize` |
+| `plan_action` | `"final answer:"` in `llm_response.lower()` and chart guardrail satisfied | `finalize` |
+| `plan_action` | chart guardrail: `"final answer:"` in reply AND `wants_chart` AND no charts AND `chart_force_count < 2` | `plan_action` (self-loop) |
 | `plan_action` | else (an action to run) | `execute_action` |
 | `execute_action` | `state.get("error")` (fatal) | `handle_error` |
 | `execute_action` | 3 consecutive `is_error` OR `iteration_count >= max_iterations` | `force_finalize` |
@@ -293,7 +300,8 @@ def _build_graph():
         {"plan_action": "plan_action", "handle_error": "handle_error"})
     g.add_conditional_edges("plan_action", after_plan,
         {"execute_action": "execute_action", "finalize": "finalize",
-         "force_finalize": "force_finalize", "handle_error": "handle_error"})
+         "force_finalize": "force_finalize", "handle_error": "handle_error",
+         "plan_action": "plan_action"})
     g.add_conditional_edges("execute_action", after_execute,
         {"plan_action": "plan_action", "force_finalize": "force_finalize", "handle_error": "handle_error"})
     g.add_edge("finalize", END)

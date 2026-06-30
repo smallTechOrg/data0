@@ -17,12 +17,12 @@ class AgentState(TypedDict, total=False):
     conversation_history: list[dict]     # prior turns {question, answer} for the session
 
     # Pipeline data (populated progressively by nodes)
-    action_history: list[dict]           # [{action, result, is_error}] appended by execute_action
+    action_history: list[dict]           # [{action, result, is_error, reasoning}] appended by execute_action
     iteration_count: int                 # incremented by plan_action
     llm_response: str                    # latest raw model reply (action or FINAL ANSWER)
     tokens_input: int                    # accumulated prompt tokens
     tokens_output: int                   # accumulated completion tokens
-    charts: list[str]                    # Plotly figure JSON strings captured in execute_action
+    charts: list[str]                    # ECharts `option` JSON strings captured in execute_action (via echart())
     prompt_component_chars: dict         # C29: CUMULATIVE per-bucket char counts summed across all plan_action calls
 
     # Output

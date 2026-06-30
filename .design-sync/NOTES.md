@@ -18,7 +18,7 @@ Repo-specific gotchas for future syncs.
 - Build command: `node .ds-sync/package-build.mjs --config .design-sync/config.json
   --node-modules ./frontend/node_modules --entry ./frontend/.ds-entry.tsx --out ./ds-bundle`
 
-## Scope decision (now 17 components)
+## Scope decision (now 18 components)
 
 - Original 7 presentational: StubBanner, ProgressBar, SuggestionChips, Markdown,
   ClarificationTurn, PromptBreakdown, StepsInspector.

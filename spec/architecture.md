@@ -26,7 +26,7 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 [LLMClient → provider (gemini | openrouter | stub)] ←→ [Google Gemini API]
         │
         ▼
-[pandas sandbox: df, pd, np, px, plt, sklearn, save_dataset(...)]  ←→ [uploads/*.csv + *.parquet]
+[pandas sandbox: df, pd, np, plt, sklearn, save_dataset(...), echart(...)]  ←→ [uploads/*.csv + *.parquet]
 ```
 
 ## Layers
@@ -68,7 +68,7 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 - **LLM provider + model:** Google Gemini via `google-genai`; default model `gemini-3.1-flash-lite` (**verified at Phase 2/3 gate**; recorded in README). Alternate provider: OpenRouter. Offline fallback: stub.
 - **Backend:** FastAPI + uvicorn, single-origin serving the built Next.js app on port 8001.
 - **Database + ORM:** SQLite + SQLAlchemy 2.0 (declarative `Mapped`), Alembic migrations. SQLite is the **production** DB for this single-user local app.
-- **Frontend:** Next.js 15 + React 19 (existing `frontend/`), static-exported to `frontend/out/` and mounted at `/app`. Key client libs: `react-markdown` + `remark-gfm` (client-side answer rendering), `plotly.js-dist-min` (inline charts, dynamically imported), `jspdf` (chart → PDF export, dynamically imported).
+- **Frontend:** Next.js 15 + React 19 (existing `frontend/`), static-exported to `frontend/out/` and mounted at `/app`. Key client libs: `react-markdown` + `remark-gfm` (client-side answer rendering), `echarts` (tree-shaken inline charts, ~0.64 MB).
 - **Dependency management:** uv + `pyproject.toml` (Python) · pnpm (frontend).
 
 | Key library | Version | Purpose |
@@ -86,7 +86,7 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 | **pyarrow** | ≥16 | Parquet read/write (ADD) |
 | **openpyxl** | ≥3.1 | `.xlsx` ingest (ADD) |
 | **xlrd** | ≥2.0 | `.xls` ingest (ADD) |
-| **plotly** | ≥5.22 | Inline charts captured as JSON (ADD) |
+| **echarts** (frontend) | ≥6.1 | Inline charts rendered in the browser via tree-shaken `echarts/core`; the agent sandbox emits ECharts `option` JSON via `echart(...)` |
 | **matplotlib** | ≥3.9 | Sandbox plotting (ADD) |
 | **seaborn** | ≥0.13 | Sandbox plotting (ADD) |
 | **scipy** | ≥1.13 | Stats in sandbox (ADD) |

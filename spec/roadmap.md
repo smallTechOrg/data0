@@ -130,10 +130,10 @@ Today these users either learn pandas/SQL, wait on an analyst, or fight with spr
 
 ### Phase 4 — Charts, derived datasets, Database-tab ER diagram
 
-- **Goal:** Inline charts render from the agent's Plotly figures, the agent can autonomously persist derived datasets via `save_dataset` (with lineage + staleness + re-derive), NL data cleaning (preview + apply) works, on-demand dataset notes + compression run, and the Database tab shows the full ER diagram with inferred FK edges and the table-description panel.
+- **Goal:** Inline charts render from the agent's ECharts option JSON (via the `echart(...)` sandbox helper), the agent can autonomously persist derived datasets via `save_dataset` (with lineage + staleness + re-derive), NL data cleaning (preview + apply) works, on-demand dataset notes + compression run, and the Database tab shows the full ER diagram with inferred FK edges and the table-description panel.
 
 - **Independent slices (parallel build units):**
-  - `slice-4a` (backend — charts + derived datasets) — capture Plotly figures as JSON in `execute_action`, `save_dataset` in the sandbox, derived-dataset registration + lineage + staleness, `/datasets/{id}/re-derive`. **Deps: slice-2b graph** (OWNS the sandbox + `execute_action` chart capture + `src/graph/derived.py`).
+  - `slice-4a` (backend — charts + derived datasets) — capture ECharts `option` JSON via `echart(...)` in `execute_action`, `save_dataset` in the sandbox, derived-dataset registration + lineage + staleness, `/datasets/{id}/re-derive`. **Deps: slice-2b graph** (OWNS the sandbox + `execute_action` chart capture + `src/graph/derived.py`).
   - `slice-4b` (backend — cleaning + notes/compression) — `/datasets/{id}/clean` + `/clean/apply` (C24), `/datasets/{id}/describe` → `describe.py` (C30), `compress.py` (C31). **Deps: data layer + LLMClient.** OWNS `src/graph/describe.py` + `src/graph/compress.py` + the clean routes in a NEW `src/api/datasets_ops.py` (so it does not collide with 2c's `src/api/datasets.py`).
   - `slice-4c` (frontend — Database tab + charts render) — the Database tab ER diagram (`renderERDiagram`, `_erFkLinks`), the table-description panel, inline chart rendering in conversation turns, derived/stale badges + re-derive button, clean modal. **Deps: slice-4a + slice-4b** REST contracts. OWNS `frontend/src/components/database/*` + chart-render components in `frontend/src/components/analyse/*`.
 
@@ -146,7 +146,7 @@ Today these users either learn pandas/SQL, wait on an analyst, or fight with spr
   uv run pytest tests/integration/ tests/e2e/ -q
   ```
 
-  The e2e suite includes a **real-key chart test** (ask a question that yields a chart → assert a Plotly figure JSON is captured and returned) and a **derived-dataset test** (a question that triggers `save_dataset` → a new derived dataset is registered with lineage). Plus a **visual smoke**: `python agent.py --run`, drive `/ask` to produce a chart and `curl` the page / API to confirm chart JSON and the ER-diagram dataset payload are present.
+  The e2e suite includes a **real-key chart test** (ask a question that yields a chart → assert an ECharts `option` JSON with a `series` key is captured and returned) and a **derived-dataset test** (a question that triggers `save_dataset` → a new derived dataset is registered with lineage). Plus a **visual smoke**: `python agent.py --run`, drive `/ask` to produce a chart and `curl` the page / API to confirm chart JSON and the ER-diagram dataset payload are present.
 
 - **How the user tests it (handoff seed):** Rebuild and run; ask a question that warrants a chart (e.g. "show the distribution of column X") — an inline chart renders. Ask something that creates a new table (e.g. "create a cleaned version with nulls dropped and save it") — a Derived dataset appears under Tables with a green badge. Open the Database tab: the ER diagram shows each dataset as a card with inferred FK edges; click a card to see its description, keys, columns, and preview; edit context notes; click "Generate notes". **All surfaces are now real.** No remaining stubs.
 

@@ -11,7 +11,7 @@
 | C1 | CSV / multi-format upload | 2 | [upload-ingest.md](upload-ingest.md) |
 | C2 | NL Q&A ReAct loop | 2 | [nl-qa-react-loop.md](nl-qa-react-loop.md) |
 | C3 | Multi-turn conversation history | 3 | [multi-turn-conversation.md](multi-turn-conversation.md) |
-| C4 | Inline Plotly charts | 4 | [inline-charts.md](inline-charts.md) |
+| C4 | Inline ECharts charts | 4 | [inline-charts.md](inline-charts.md) |
 | C6 | Markdown → HTML answer rendering | 2 | [markdown-answer-rendering.md](markdown-answer-rendering.md) |
 | C7 | Per-run token tracking | 2 | [token-tracking.md](token-tracking.md) |
 | C8 | Expanded result display | 2 | [expanded-result-display.md](expanded-result-display.md) |
