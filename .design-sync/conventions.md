@@ -40,8 +40,10 @@ use** — NOT a full Tailwind build.
 **Answer / conversation:**
 - `Markdown` — renders an answer's markdown (GFM tables/lists).
 - `ConversationTurnView` — a full Q&A turn: question, markdown answer, steps,
-  suggestion chips, token breakdown. (Charts are stubbed in this bundle — pass a
-  turn without `charts`; chart rendering needs the live app's plotly.)
+  suggestion chips, token breakdown, and inline charts (via `ChartRender`).
+- `ChartRender` — renders inline charts from `charts: string[]`, where each entry
+  is a JSON-stringified **ECharts `option`** object (the format the agent emits).
+  Lightweight (tree-shaken ECharts), renders real charts in the design tool.
 - `SuggestionChips` — follow-up chips. `ClarificationTurn` — amber "agent asks".
 - `StepsInspector` / `PromptBreakdown` — collapsible widgets (render collapsed).
 - `ProgressBar` — live agent progress. `StubBanner` — offline-mode banner.

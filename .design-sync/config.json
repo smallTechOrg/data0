@@ -5,8 +5,8 @@
   "globalName": "DAA",
   "entry": "./frontend/.ds-entry.tsx",
   "srcDir": "src/components",
-  "tsconfig": ".ds-bundle-tsconfig.json",
-  "cssEntry": "out/_next/static/css/6fbfb0b73c640c7b.css",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": "out/_next/static/css/59b2a6a828554be1.css",
   "readmeHeader": ".design-sync/conventions.md",
   "componentSrcMap": {
     "StubBanner": "src/components/StubBanner.tsx",
@@ -25,6 +25,7 @@
     "TableDescriptionPanelView": "src/components/database/TableDescriptionPanel.tsx",
     "ConversationTurnView": "src/components/analyse/ConversationTurnView.tsx",
     "ERDiagramPanel": "src/components/database/ERDiagramPanel.tsx",
-    "UploadCard": "src/components/analyse/UploadCard.tsx"
+    "UploadCard": "src/components/analyse/UploadCard.tsx",
+    "ChartRender": "src/components/analyse/ChartRender.tsx"
   }
 }

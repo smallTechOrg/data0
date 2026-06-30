@@ -1,7 +1,7 @@
 // Synthetic design-sync entry — re-exports the components to bundle into
 // window.DAA.*. Not used by the Next app build. Scoped to standalone-renderable
 // components: the original 7 presentational + the extracted *View primitives +
-// the two prop-driven panels (ERDiagramPanel, UploadCard).
+// the prop-driven panels (ERDiagramPanel, UploadCard, ChartRender).
 export { StubBanner } from './src/components/StubBanner'
 export { ProgressBar } from './src/components/analyse/ProgressBar'
 export { SuggestionChips } from './src/components/analyse/SuggestionChips'
@@ -21,3 +21,5 @@ export { ConversationTurnView } from './src/components/analyse/ConversationTurnV
 // Already prop-driven (no refactor needed):
 export { ERDiagramPanel } from './src/components/database/ERDiagramPanel'
 export { UploadCard } from './src/components/analyse/UploadCard'
+// Charts — now ECharts-based (lightweight), a real synced primitive:
+export { ChartRender } from './src/components/analyse/ChartRender'

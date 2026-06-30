@@ -33,19 +33,17 @@ Repo-specific gotchas for future syncs.
   primitives), and **ChartRender** (a thin plotly wrapper; plotly can't ship — see
   below).
 
-## Plotly / jspdf stub (bundle size)
+## Charts — ECharts (migrated from Plotly)
 
-- ChartRender (and therefore ConversationTurnView, which composes it) dynamically
-  imports `plotly.js-dist-min` (~9 MB) and `jspdf`. Those can't ship in the bundle
-  (5 MB cap) and the converter only externalizes React.
-- Fix: `frontend/.ds-bundle-tsconfig.json` (set as `cfg.tsconfig`) maps
-  `plotly.js-dist-min` / `plotly.js` / `jspdf` to no-op stubs in
-  `frontend/.ds-stubs/`. Keeps the bundle ~0.6 MB.
-- **Consequence:** charts do NOT render in the design tool. ConversationTurnView
-  previews/usage must pass turns WITHOUT a `charts` array. In the real app, charts
-  work (real plotly); in design-built UIs they won't. Documented in conventions.md.
-- Re-sync: `.ds-bundle-tsconfig.json` + `.ds-stubs/` are committed sync inputs —
-  keep `cfg.tsconfig` pointed at the bundle tsconfig, not the app `tsconfig.json`.
+- Charts were migrated from Plotly to **ECharts** (commit `36300f1`). The agent
+  emits an ECharts `option` JSON via the sandbox `echart(...)` helper; `ChartRender`
+  renders it with tree-shaken `echarts/core`.
+- Tree-shaken ECharts is ~0.64 MB (vs Plotly's 9 MB bundled), so `ChartRender` and
+  `ConversationTurnView` ship **real, working charts** in the design tool — no stub.
+- The earlier plotly/jspdf stub (`.ds-bundle-tsconfig.json` + `.ds-stubs/`) was
+  **removed**; `cfg.tsconfig` points back at the app `tsconfig.json`.
+- `cssEntry` hash changed with the ChartRender rewrite — it is
+  `out/_next/static/css/59b2a6a828554be1.css` as of this sync (refresh on rebuild).
 
 ## Known render warns
 
