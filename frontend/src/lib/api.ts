@@ -290,6 +290,10 @@ export interface DailyStats {
   context_limit: number
   /** Input tokens of the most recent run today — the last query's prompt size. */
   last_prompt_tokens?: number
+  /** Clearer alias for the most recent run's input tokens. */
+  last_tokens_input?: number
+  /** Output tokens of the most recent run today — for the persisted "Last query (In/Out)" fallback. */
+  last_tokens_output?: number
 }
 
 // ---------------------------------------------------------------------------

@@ -162,7 +162,13 @@ export function TokenWidget({
     ? datasets.reduce((sum, d) => sum + (d.row_count ?? 0), 0)
     : 0
 
-  const lastQuery = lastTokens ? `${lastTokens.input} / ${lastTokens.output}` : '— / —'
+  // "Last query (In / Out)": prefer the live in-session counts; fall back to the
+  // latest persisted run on reload/resume (mirrors the context-window bar's
+  // `lastPromptTokens` fallback below) so a real persisted answer isn't "— / —".
+  const lastInput = lastTokens?.input ?? stats?.last_prompt_tokens ?? null
+  const lastOutput = lastTokens?.output ?? stats?.last_tokens_output ?? null
+  const lastQuery =
+    lastInput != null && lastOutput != null ? `${lastInput} / ${lastOutput}` : '— / —'
 
   const today = stats
     ? `${stats.tokens_input} / ${stats.tokens_output} / ${stats.query_count}`
@@ -180,9 +186,12 @@ export function TokenWidget({
 
   // Cost (C18): user-configured price takes precedence; fall back to hardcoded table.
   const price = userPrice ?? priceFor(stats?.model)
-  const lastQueryCost = lastTokens
-    ? formatCost(costUsd(price, lastTokens.input, lastTokens.output))
-    : '—'
+  // Compute from the same live-or-persisted In/Out fallback so the cost shows
+  // whenever the last-query token values are available (including on reload).
+  const lastQueryCost =
+    lastInput != null && lastOutput != null
+      ? formatCost(costUsd(price, lastInput, lastOutput))
+      : '—'
   const todayCost = stats
     ? formatCost(costUsd(price, stats.tokens_input, stats.tokens_output))
     : '—'
@@ -210,7 +219,11 @@ export function TokenWidget({
 
       <dl className="space-y-1.5 text-xs">
         <Row label="Provider / mode" value={mode} live />
-        <Row label="Last query (In / Out)" value={lastQuery} live={!!lastTokens} />
+        <Row
+          label="Last query (In / Out)"
+          value={lastQuery}
+          live={lastInput != null && lastOutput != null}
+        />
         <Row label="Today (In / Out / Queries)" value={today} live={!!stats} />
       </dl>
 
@@ -264,7 +277,11 @@ export function TokenWidget({
           <span className="text-[11px] font-medium text-slate-500">Cost estimate</span>
         </div>
         <dl className="space-y-1.5 text-xs">
-          <Row label="Last query cost" value={lastQueryCost} live={!!lastTokens} />
+          <Row
+            label="Last query cost"
+            value={lastQueryCost}
+            live={lastInput != null && lastOutput != null}
+          />
           <Row label="Today cost" value={todayCost} live={!!stats} />
         </dl>
         {price === null && stats && !userPrice && (

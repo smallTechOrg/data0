@@ -263,10 +263,19 @@ def test_stats_daily_always_200(api_client):
 def test_stats_daily_counts_completed_runs(api_client):
     up = _upload_csv(api_client)
     dataset_id = up.json()["data"]["dataset_id"]
-    api_client.post("/ask", json={"dataset_id": dataset_id, "question": "describe it"})
+    ask = api_client.post("/ask", json={"dataset_id": dataset_id, "question": "describe it"})
+    run_id = ask.json()["data"]["run_id"]
     r = api_client.get("/stats/daily")
     data = r.json()["data"]
     assert data["query_count"] == 1
+
+    # The last query's IN/OUT tokens must be reconstructable on reload from the
+    # persisted latest completed run — used by the "Last query (In / Out)" row and
+    # its cost. They mirror that run's stored tokens_input / tokens_output.
+    run = api_client.get(f"/runs/{run_id}").json()["data"]
+    assert data["last_prompt_tokens"] == run["tokens_input"]
+    assert data["last_tokens_input"] == run["tokens_input"]
+    assert data["last_tokens_output"] == run["tokens_output"]
 
 
 # --- C16: notes_file tests -----------------------------------------------

@@ -90,6 +90,10 @@ def stats_daily(session: Session = Depends(get_session)) -> dict:
 
     latest = max(rows, key=_ts) if rows else None
     last_prompt_tokens = (latest.tokens_input or 0) if latest else 0
+    # The latest run's OUTPUT tokens — needed so "Last query (In/Out)" (and its
+    # cost) can be reconstructed on reload from a persisted/restored run, not just
+    # from the ephemeral in-memory live counts.
+    last_tokens_output = (latest.tokens_output or 0) if latest else 0
 
     return ok(
         {
@@ -100,5 +104,9 @@ def stats_daily(session: Session = Depends(get_session)) -> dict:
             "query_count": query_count,
             "context_limit": _context_limit(model),
             "last_prompt_tokens": last_prompt_tokens,
+            # Clearer alias for the latest run's input; kept alongside
+            # `last_prompt_tokens` (which the context bar reads) — do not remove.
+            "last_tokens_input": last_prompt_tokens,
+            "last_tokens_output": last_tokens_output,
         }
     )
