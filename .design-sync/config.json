@@ -1,0 +1,20 @@
+{
+  "projectId": "89d727ac-14a6-476d-8716-58e505b09fc6",
+  "shape": "package",
+  "pkg": "agent-frontend",
+  "globalName": "DAA",
+  "entry": "./frontend/.ds-entry.tsx",
+  "srcDir": "src/components",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": "out/_next/static/css/6fbfb0b73c640c7b.css",
+  "readmeHeader": ".design-sync/conventions.md",
+  "componentSrcMap": {
+    "StubBanner": "src/components/StubBanner.tsx",
+    "ProgressBar": "src/components/analyse/ProgressBar.tsx",
+    "SuggestionChips": "src/components/analyse/SuggestionChips.tsx",
+    "Markdown": "src/components/analyse/Markdown.tsx",
+    "ClarificationTurn": "src/components/analyse/ClarificationTurn.tsx",
+    "PromptBreakdown": "src/components/analyse/PromptBreakdown.tsx",
+    "StepsInspector": "src/components/analyse/StepsInspector.tsx"
+  }
+}
