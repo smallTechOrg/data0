@@ -86,8 +86,8 @@ export function StepsInspector({ steps }: { steps: AskStep[] }) {
             <li key={i} className="rounded-md border border-gray-200">
               {/* Reasoning (C33) — short rationale for this step; renders nothing when absent/empty */}
               {step.reasoning && step.reasoning.trim() && (
-                <p className="rounded-t-md border-b border-gray-200 bg-gray-50 px-3 py-1.5 text-[11px] italic leading-relaxed text-gray-500">
-                  <span className="font-medium not-italic text-gray-400">Reasoning: </span>
+                <p className="rounded-t-md border-b border-gray-200 bg-gray-50 px-3 py-1.5 text-[13px] italic leading-relaxed text-gray-700">
+                  <span className="font-medium not-italic text-gray-600">Reasoning: </span>
                   {step.reasoning.trim()}
                 </p>
               )}

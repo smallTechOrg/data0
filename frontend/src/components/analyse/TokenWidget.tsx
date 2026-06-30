@@ -190,19 +190,19 @@ export function TokenWidget({
   return (
     <section
       aria-labelledby="tokens-heading"
-      className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+      className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
     >
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 id="tokens-heading" className="text-sm font-semibold text-gray-800">
-          Token usage
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h2 id="tokens-heading" className="text-base font-semibold text-slate-900">
+          📊 Token usage
         </h2>
       </div>
 
       {/* Prominent active-model badge (uppercase). */}
-      <div className="mb-3">
+      <div className="mb-4">
         <span
           aria-label="Active model"
-          className="inline-block rounded bg-gray-100 px-2 py-1 text-xs font-bold uppercase tracking-wide text-gray-700"
+          className="inline-block rounded-lg bg-indigo-100 px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-indigo-700"
         >
           {modelBadge}
         </span>
@@ -216,8 +216,8 @@ export function TokenWidget({
 
       {/* C29 context-window bar — last query's prompt size vs the model window. */}
       {stats && stats.context_limit > 0 && (
-        <div className="mt-3">
-          <div className="mb-1 flex items-center justify-between text-[11px] text-gray-500">
+        <div className="mt-4">
+          <div className="mb-2 flex items-center justify-between text-[11px] text-slate-500">
             <span>Context window (last query)</span>
             <span className="tabular-nums">
               {lastPromptTokens.toLocaleString()} / {stats.context_limit.toLocaleString()}
@@ -229,11 +229,11 @@ export function TokenWidget({
             aria-valuemin={0}
             aria-valuemax={stats.context_limit}
             aria-valuenow={lastPromptTokens}
-            className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100"
+            className="h-2 w-full overflow-hidden rounded-full bg-slate-200"
           >
             <div
               className={`h-full transition-all ${
-                budgetPct > 90 ? 'bg-red-500' : budgetPct > 70 ? 'bg-amber-500' : 'bg-green-500'
+                budgetPct > 90 ? 'bg-rose-500' : budgetPct > 70 ? 'bg-amber-500' : 'bg-emerald-500'
               }`}
               style={{ width: `${budgetPct}%` }}
             />
@@ -242,33 +242,33 @@ export function TokenWidget({
       )}
 
       {statsError && (
-        <p role="alert" className="mt-2 text-[11px] text-red-600">
+        <p role="alert" className="mt-2 text-[11px] text-rose-600">
           {statsError}
         </p>
       )}
 
       {/* Dataset aggregate: total datasets + summed rows across the universe. */}
-      <div className="mt-3 rounded-md border border-gray-200 bg-gray-50/60 px-2.5 py-1.5 text-[11px] text-gray-600">
-        <span className="font-medium text-gray-700">Datasets:</span>{' '}
+      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] text-slate-600">
+        <span className="font-medium text-slate-700">📁 Datasets:</span>{' '}
         <span className="tabular-nums">{datasetCount}</span>
-        <span aria-hidden="true" className="mx-1.5 text-gray-300">
+        <span aria-hidden="true" className="mx-1.5 text-slate-300">
           ·
         </span>
-        <span className="font-medium text-gray-700">Rows:</span>{' '}
+        <span className="font-medium text-slate-700">📊 Rows:</span>{' '}
         <span className="tabular-nums">{totalRows.toLocaleString()}</span>
       </div>
 
       {/* Cost (C18) — user price > hardcoded table; "N/A" when price is unknown. */}
-      <div className="mt-3 border-t border-gray-100 pt-3">
-        <div className="mb-1.5 flex items-center justify-between gap-2">
-          <span className="text-[11px] font-medium text-gray-500">Cost estimate</span>
+      <div className="mt-4 border-t border-slate-200 pt-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-[11px] font-medium text-slate-500">Cost estimate</span>
         </div>
         <dl className="space-y-1.5 text-xs">
           <Row label="Last query cost" value={lastQueryCost} live={!!lastTokens} />
           <Row label="Today cost" value={todayCost} live={!!stats} />
         </dl>
         {price === null && stats && !userPrice && (
-          <p className="mt-1 text-[11px] text-gray-400">
+          <p className="mt-1 text-[11px] text-slate-400">
             Configure pricing in Settings to see cost estimates.
           </p>
         )}
@@ -288,8 +288,8 @@ function Row({
 }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <dt className="text-gray-500">{label}</dt>
-      <dd className={`font-medium tabular-nums ${live ? 'text-gray-800' : 'text-gray-400'}`}>
+      <dt className="text-slate-500">{label}</dt>
+      <dd className={`font-medium tabular-nums ${live ? 'text-slate-900' : 'text-slate-400'}`}>
         {value}
       </dd>
     </div>

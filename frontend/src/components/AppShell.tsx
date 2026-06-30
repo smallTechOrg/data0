@@ -54,27 +54,30 @@ export function AppShell() {
   const isLive = provider === 'gemini' || provider === 'openrouter' || provider === 'anthropic'
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-slate-50">
       {/* Stub-mode banner — shown only when the backend runs without an LLM key. */}
       <StubBanner provider={provider} />
 
-      {/* Header — a single blue bar: title (left), pill tabs (inline), and the
+      {/* Header — gradient bar: title (left), pill tabs (inline), and the
           Live badge + Project notes button (right). */}
-      <header className="bg-blue-700 text-white shadow-sm">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-x-6 gap-y-3 px-4 py-3">
+      <header className="bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-md">
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-x-6 gap-y-3 px-6 py-4">
           {/* Left: title + thin tagline + inline pill tabs */}
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
             <div>
-              <h1 className="text-lg font-bold leading-tight tracking-tight">
-                Data Analysis Agent
-              </h1>
-              <p className="text-xs text-blue-100">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">📊</span>
+                <h1 className="text-xl font-bold leading-tight tracking-tight">
+                  Data Analysis Agent
+                </h1>
+              </div>
+              <p className="text-sm text-indigo-100">
                 Ask questions in plain English, get explainable answers.
               </p>
             </div>
 
             {/* Tab switcher (local UI state — allowed in Phase 1) */}
-            <div role="tablist" aria-label="Views" className="flex gap-1.5">
+            <div role="tablist" aria-label="Views" className="flex gap-2">
               <TabButton
                 id="tab-analyse"
                 label="Analyse"
@@ -94,10 +97,10 @@ export function AppShell() {
           <div className="flex items-center gap-3">
             {isLive && (
               <span
-                className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1 text-xs font-medium text-white"
+                className="inline-flex items-center gap-2 rounded-full bg-white/20 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm"
                 title={`Live — provider: ${provider}${model ? `, model: ${model}` : ''}`}
               >
-                <span aria-hidden="true" className="h-2 w-2 rounded-full bg-green-300" />
+                <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-emerald-300 animate-pulse" />
                 Live · {model ?? provider}
               </span>
             )}
@@ -105,16 +108,16 @@ export function AppShell() {
               type="button"
               onClick={() => setMemoryOpen(true)}
               title="Edit the agent's global project notes (memory)"
-              className="rounded-md bg-white/10 px-3 py-1.5 text-sm font-medium text-white hover:bg-white/20"
+              className="rounded-lg bg-white/15 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/25 backdrop-blur-sm"
             >
-              Project notes
+              📝 Project notes
             </button>
           </div>
         </div>
       </header>
 
       {/* Active tab */}
-      <main className="mx-auto max-w-[1600px] px-4 py-6">
+      <main className="mx-auto max-w-[1600px] px-6 py-8">
         {/* Analyse stays MOUNTED across tab switches (only hidden) so the active
             session + conversation survive a trip to the Database tab — clicking
             Database must not reset it. Database re-mounts on show for its fetch. */}
@@ -167,10 +170,10 @@ function TabButton({
       aria-selected={active}
       aria-controls={`panel-${label.toLowerCase()}`}
       onClick={onClick}
-      className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
+      className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${
         active
-          ? 'bg-white text-blue-700 shadow-sm'
-          : 'bg-white/10 text-white hover:bg-white/20'
+          ? 'bg-white text-indigo-600 shadow-md'
+          : 'text-white hover:bg-white/20'
       }`}
     >
       {label}

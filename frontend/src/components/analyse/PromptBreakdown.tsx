@@ -74,6 +74,12 @@ export function PromptBreakdown({ breakdown }: { breakdown: Record<string, numbe
 
       {open && (
         <div className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-3">
+          {/* Caption: clarifies this widget shows the composition of the most recent
+              prompt, distinct from cumulative query tokens in the Token usage panel. */}
+          <p className="mb-2 text-[11px] text-gray-400">
+            Composition of the most recent prompt — cumulative query tokens are shown
+            under Token usage.
+          </p>
           {/* Summary row: total_prompt */}
           <div className="mb-2 flex items-center justify-between gap-2 text-[11px]">
             <span className="font-semibold text-gray-700">
