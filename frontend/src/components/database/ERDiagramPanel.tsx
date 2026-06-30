@@ -520,27 +520,45 @@ export function ERDiagramPanel({
   // Live layout-tuning knobs (sliders in the header).
   const [stretchMax, setStretchMax] = useState(STRETCH_MAX)
   const [ringGap, setRingGap] = useState(RING_GAP)
+  // Internal, uncontrolled origin filter — declutters the diagram by showing only
+  // uploaded or only derived tables. Counts come from the FULL prop (below); the
+  // render path (layout / nodes / edges) is driven by `visibleDatasets`.
+  const [typeFilter, setTypeFilter] = useState<'all' | 'uploaded' | 'derived'>('all')
+
+  // The subset of datasets the DIAGRAM draws. Because `_erFkLinks` only links
+  // datasets within the array it's given, filtering the node set here also drops
+  // edges to hidden nodes for free.
+  const visibleDatasets = useMemo(() => {
+    if (typeFilter === 'uploaded') return datasets.filter(d => d.origin !== 'derived')
+    if (typeFilter === 'derived') return datasets.filter(d => d.origin === 'derived')
+    return datasets
+  }, [datasets, typeFilter])
+
+  // Filter counts always reflect the FULL prop, not the filtered set.
+  const allCount = datasets.length
+  const uploadedCount = datasets.filter(d => d.origin !== 'derived').length
+  const derivedCount = datasets.filter(d => d.origin === 'derived').length
 
   // Layout depends on the viewport (x-stretch matches the pane) and the tuning
-  // knobs; recomputes on resize, dataset change, or a slider move.
+  // knobs; recomputes on resize, dataset/filter change, or a slider move.
   const { cards } = useMemo(
-    () => layoutCards(datasets, viewSize, { stretchMax, ringGap }),
-    [datasets, viewSize.w, viewSize.h, stretchMax, ringGap],
+    () => layoutCards(visibleDatasets, viewSize, { stretchMax, ringGap }),
+    [visibleDatasets, viewSize.w, viewSize.h, stretchMax, ringGap],
   )
-  const links = useMemo(() => _erFkLinks(datasets), [datasets])
+  const links = useMemo(() => _erFkLinks(visibleDatasets), [visibleDatasets])
 
   // Per-dataset PK/FK column sets (normalised) for in-card key badges — derived
   // from the same _erFkLinks that drives the edges and the description panel, so
   // the three always agree.
   const keysById = useMemo(() => {
     const map = new Map<string, { pk: Set<string>; fk: Set<string> }>()
-    for (const d of datasets) map.set(d.id, { pk: new Set(), fk: new Set() })
+    for (const d of visibleDatasets) map.set(d.id, { pk: new Set(), fk: new Set() })
     for (const l of links) {
       map.get(l.fromId)?.pk.add(l.column)
       map.get(l.toId)?.fk.add(l.column)
     }
     return map
-  }, [datasets, links])
+  }, [visibleDatasets, links])
 
   // Fit reads the ACTUAL rendered geometry (getBBox on the transform group) and
   // the LIVE pane size. Because it measures what's truly on screen, it can never
@@ -653,6 +671,10 @@ export function ERDiagramPanel({
   }, [hoverId, links])
 
   const isEmpty = datasets.length === 0
+  // The filter hid everything (e.g. "Derived" with zero derived tables). The
+  // panel still has datasets, so we show an in-canvas notice rather than the
+  // top-level "No datasets yet" empty state.
+  const noVisible = !isEmpty && visibleDatasets.length === 0
 
   return (
     <section
@@ -664,6 +686,39 @@ export function ERDiagramPanel({
           Schema
         </h2>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          {/* Origin filter — declutters the diagram by showing only uploaded or
+              only derived tables. Internal/uncontrolled; styled like the
+              Analyse-tab TablesCard filter pills. Counts come from the full set. */}
+          <div role="group" aria-label="Diagram type filter" className="flex gap-1.5">
+            {(
+              [
+                { key: 'all', label: 'All', count: allCount },
+                { key: 'uploaded', label: 'Uploaded', count: uploadedCount },
+                { key: 'derived', label: 'Derived', count: derivedCount },
+              ] as const
+            ).map(({ key, label, count }) => {
+              const active = typeFilter === key
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setTypeFilter(key)}
+                  aria-pressed={active}
+                  disabled={isEmpty}
+                  className={`rounded-full border px-3 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
+                    active
+                      ? 'border-blue-300 bg-blue-50 text-blue-700'
+                      : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
+                  }`}
+                >
+                  {label}
+                  <span className={active ? 'ml-1 text-blue-400' : 'ml-1 text-gray-400'}>
+                    ({count})
+                  </span>
+                </button>
+              )
+            })}
+          </div>
           {/* Live layout-tuning sliders — fine-tune the radial layout in place. */}
           <label
             className="flex items-center gap-1.5 text-[11px] font-medium text-gray-500"
@@ -813,6 +868,17 @@ export function ERDiagramPanel({
               })}
             </g>
           </svg>
+
+          {/* Filter hid every table (e.g. "Derived" with none). The canvas stays
+              mounted so the toolbar pills above can switch back. */}
+          {noVisible && (
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+              <p className="text-sm font-medium text-gray-500">No {typeFilter} datasets</p>
+              <p className="mt-1 text-xs text-gray-400">
+                Switch the filter above to see the diagram.
+              </p>
+            </div>
+          )}
 
           {/* Legend — table origin (squares), column dtype (dots), FK edge. */}
           <div className="pointer-events-none absolute bottom-2 left-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded bg-white/85 px-2 py-1 text-[10px] text-gray-500 shadow-sm">
