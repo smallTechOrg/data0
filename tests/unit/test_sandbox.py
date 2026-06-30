@@ -124,9 +124,17 @@ def test_echart_bar_returns_option_with_series():
     assert option["xAxis"]["data"] == ["North", "South", "East"]
     assert option["yAxis"]["type"] == "value"
     assert option["tooltip"]["trigger"] == "axis"
-    assert option["legend"]["top"] == 0
-    assert option["grid"] == {"left": 60, "right": 24, "top": 48, "bottom": 40}
+    # Legend now sits on the RIGHT, outside the plot (vertical + scrollable).
+    assert option["legend"]["orient"] == "vertical"
+    assert "right" in option["legend"]
+    assert option["legend"]["type"] == "scroll"
+    # Grid reserves room on the right for the legend and keeps labels inside.
+    assert option["grid"]["right"] == 120
+    assert option["grid"]["right"] > option["grid"]["left"]
+    assert option["grid"]["containLabel"] is True
+    # Title stays top-centered above the plot.
     assert option["title"]["text"] == "Revenue by region"
+    assert option["title"]["left"] == "center"
     # One series of bars with the y-column values.
     assert option["series"][0]["type"] == "bar"
     assert option["series"][0]["data"] == [120, 90, 150]
@@ -147,6 +155,13 @@ def test_echart_pie_uses_item_tooltip_and_name_value_data():
     assert option["tooltip"]["trigger"] == "item"
     assert option["series"][0]["type"] == "pie"
     assert option["series"][0]["data"][0] == {"name": "North", "value": 120}
+    # Pie has no grid; instead the center is shifted left to clear the right legend.
+    assert "grid" not in option
+    assert option["series"][0]["center"] == ["40%", "54%"]
+    assert option["series"][0]["radius"]
+    # Legend stays the right-vertical default.
+    assert option["legend"]["orient"] == "vertical"
+    assert "right" in option["legend"]
 
 
 def test_echart_scatter_builds_xy_points():
@@ -168,6 +183,30 @@ def test_echart_raw_option_escape_hatch():
     option = echart("bar", option=raw)
     assert "series" in option
     assert option["series"] == raw["series"]
+    # Defaults are merged in when the caller didn't set them.
+    assert option["legend"]["orient"] == "vertical"
+    assert "right" in option["legend"]
+    # This raw option has axes, so the grid defaults get extended in.
+    assert option["grid"]["right"] == 120
+    assert option["grid"]["containLabel"] is True
+
+
+def test_echart_raw_option_preserves_caller_legend_and_grid():
+    """Caller-supplied legend/grid are NOT overridden by the defaults."""
+    echart = make_echart()
+    raw = {
+        "legend": {"top": 0},
+        "grid": {"left": 60, "right": 24},
+        "xAxis": {"type": "category", "data": ["A", "B"]},
+        "yAxis": {"type": "value"},
+        "series": [{"type": "bar", "data": [1, 2]}],
+    }
+    option = echart("bar", option=raw)
+    # Explicit legend kept as-is.
+    assert option["legend"] == {"top": 0}
+    # Explicit grid right kept; containLabel extended in since absent.
+    assert option["grid"]["right"] == 24
+    assert option["grid"]["containLabel"] is True
 
 
 def test_echart_raw_option_without_series_raises():

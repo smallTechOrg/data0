@@ -68,12 +68,18 @@ export interface SessionSidebarViewProps {
   onBulkDelete: (ids: string[]) => void
 }
 
-/** Format an ISO timestamp as a compact local date-time, or null if absent/invalid. */
+/**
+ * Format an ISO timestamp as a compact local date-time (e.g. "Jun 30 3:05 PM"),
+ * or null if absent/invalid. Omits the year and the date/time comma to keep the
+ * "Started … · upd …" line short enough to fit on one row.
+ */
 function fmtTime(iso?: string | null): string | null {
   if (!iso) return null
   const d = new Date(iso)
   if (isNaN(d.getTime())) return null
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  return `${date} ${time}`
 }
 
 /**
@@ -262,7 +268,7 @@ export function SessionSidebarView({
           No sessions yet. Ask a question to start one.
         </div>
       ) : (
-        <ul role="list" className="max-h-[20rem] space-y-1.5 overflow-y-auto pr-1">
+        <ul role="list" className="max-h-[20rem] space-y-1 overflow-y-auto pr-1">
           {sessions.map(s => {
             const active = activeSessionId === s.id
             const label = s.name?.trim() || s.first_question?.trim() || 'Untitled session'
@@ -270,7 +276,7 @@ export function SessionSidebarView({
             return (
               <li
                 key={s.id}
-                className={`rounded-lg border px-2.5 py-1.5 transition-colors ${
+                className={`rounded-lg border px-2.5 py-1 transition-colors ${
                   active ? 'border-green-400 bg-green-50' : 'border-gray-200 hover:bg-gray-50'
                 }`}
               >
@@ -280,7 +286,9 @@ export function SessionSidebarView({
                       autoFocus
                       value={renameValue}
                       onChange={e => setRenameValue(e.target.value)}
+                      onClick={e => e.stopPropagation()}
                       onKeyDown={e => {
+                        e.stopPropagation()
                         if (e.key === 'Enter') commitRename(s.id)
                         if (e.key === 'Escape') setRenamingId(null)
                       }}
@@ -304,7 +312,19 @@ export function SessionSidebarView({
                     </button>
                   </div>
                 ) : (
-                  <div>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onResume(s.id)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        onResume(s.id)
+                      }
+                    }}
+                    aria-label={`Resume session ${label}`}
+                    className="cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400 rounded"
+                  >
                     {/* Row 1: checkbox + label (click to resume) */}
                     <div className="flex items-center gap-2">
                       {/* Checkbox — stops propagation so row-click (resume) is not triggered */}
@@ -316,13 +336,9 @@ export function SessionSidebarView({
                         onClick={e => e.stopPropagation()}
                         className="h-3.5 w-3.5 flex-shrink-0 cursor-pointer rounded border-gray-300 accent-green-600"
                       />
-                      <button
-                        type="button"
-                        onClick={() => onResume(s.id)}
-                        className="block min-w-0 flex-1 truncate text-left text-sm font-medium text-gray-900 hover:text-indigo-600"
-                      >
+                      <span className="block min-w-0 flex-1 truncate text-left text-sm font-medium text-gray-900">
                         {label}
-                      </button>
+                      </span>
                     </div>
 
                     {/* Row 2: meta + actions, all on one compact line */}
@@ -336,7 +352,10 @@ export function SessionSidebarView({
                       </span>
                       <button
                         type="button"
-                        onClick={() => startRename(s)}
+                        onClick={e => {
+                          e.stopPropagation()
+                          startRename(s)
+                        }}
                         aria-label="Rename session"
                         title="Rename"
                         className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
@@ -361,7 +380,8 @@ export function SessionSidebarView({
                           <span className="text-gray-600">Delete?</span>
                           <button
                             type="button"
-                            onClick={() => {
+                            onClick={e => {
+                              e.stopPropagation()
                               setConfirmingId(null)
                               onDelete(s.id)
                             }}
@@ -372,7 +392,10 @@ export function SessionSidebarView({
                           </button>
                           <button
                             type="button"
-                            onClick={() => setConfirmingId(null)}
+                            onClick={e => {
+                              e.stopPropagation()
+                              setConfirmingId(null)
+                            }}
                             className="font-medium text-gray-500 hover:text-gray-800 transition-colors"
                           >
                             No
@@ -381,7 +404,10 @@ export function SessionSidebarView({
                       ) : (
                         <button
                           type="button"
-                          onClick={() => setConfirmingId(s.id)}
+                          onClick={e => {
+                            e.stopPropagation()
+                            setConfirmingId(s.id)
+                          }}
                           aria-label="Delete session"
                           title="Delete"
                           className="rounded p-1 text-red-600 hover:bg-gray-100 hover:text-rose-800 transition-colors"
@@ -407,14 +433,19 @@ export function SessionSidebarView({
                       )}
                     </div>
 
-                    {/* Row 3: session start + last-updated timestamps */}
+                    {/* Row 3: session start + last-updated timestamps — single line, truncates */}
                     {(fmtTime(s.created_at) || fmtTime(s.updated_at)) && (
-                      <div className="mt-0.5 pl-[1.375rem] text-[10px] text-gray-400">
+                      <div className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap pl-[1.375rem] text-[10px] text-gray-400">
                         {fmtTime(s.created_at) && <span>Started {fmtTime(s.created_at)}</span>}
                         {fmtTime(s.created_at) && fmtTime(s.updated_at) && (
-                          <span aria-hidden="true"> · </span>
+                          <span aria-hidden="true"> · upd </span>
                         )}
-                        {fmtTime(s.updated_at) && <span>Updated {fmtTime(s.updated_at)}</span>}
+                        {fmtTime(s.updated_at) &&
+                          (fmtTime(s.created_at) ? (
+                            <span>{fmtTime(s.updated_at)}</span>
+                          ) : (
+                            <span>Updated {fmtTime(s.updated_at)}</span>
+                          ))}
                       </div>
                     )}
                   </div>

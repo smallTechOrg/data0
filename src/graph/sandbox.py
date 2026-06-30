@@ -231,6 +231,14 @@ _ECHART_KINDS = {"bar", "line", "scatter", "pie", "heatmap"}
 # Tooltip `trigger` per kind: axis-based charts use 'axis'; item-based use 'item'.
 _ITEM_TOOLTIP_KINDS = {"pie", "scatter"}
 
+# Default layout: a vertical, right-side, scrollable legend (outside the plot)
+# plus a grid that reserves room on the right for it. Pie has no grid — instead
+# its center is shifted left so the right legend never overlaps the slices.
+_DEFAULT_LEGEND = {"type": "scroll", "orient": "vertical", "right": 8, "top": "middle"}
+_DEFAULT_GRID = {"left": 8, "right": 120, "top": 48, "bottom": 24, "containLabel": True}
+_DEFAULT_PIE_CENTER = ["40%", "54%"]
+_DEFAULT_PIE_RADIUS = "62%"
+
 
 def _as_jsonable(value: Any) -> Any:
     """Coerce numpy / pandas scalars to plain JSON-serialisable Python values.
@@ -271,9 +279,14 @@ def _build_echart_option(
 ) -> dict[str, Any]:
     """Build a sensible ECharts `option` dict from a DataFrame for `kind`.
 
-    Layout defaults keep the legend (top) from overlapping the axis labels:
-    `legend:{top:0}` + `grid:{left:60,right:24,top:48,bottom:40}`. Tooltip trigger
-    is 'item' for pie/scatter, 'axis' otherwise. Raises ValueError on bad input.
+    Layout defaults put the legend on the RIGHT, outside the plot, so it never
+    overlaps the top-centered title or the axis labels: a vertical, scrollable
+    `legend:{type:'scroll',orient:'vertical',right:8,top:'middle'}` plus a
+    `grid:{left:8,right:120,top:48,bottom:24,containLabel:true}` that reserves
+    room for it (bar/line/scatter/heatmap). Pie has no grid — its center is
+    shifted left (`["40%","54%"]`) so the right legend clears the slices. The
+    title is top-centered (`{left:'center',top:6}`). Tooltip trigger is 'item'
+    for pie/scatter, 'axis' otherwise. Raises ValueError on bad input.
     """
     if kind not in _ECHART_KINDS:
         raise ValueError(
@@ -285,13 +298,18 @@ def _build_echart_option(
         raise ValueError(f"echart({kind!r}): `df` must be a pandas DataFrame")
 
     option: dict[str, Any] = {}
+    # Title: always top-centered; only carry `text` when a title was given.
+    title_opt: dict[str, Any] = {"left": "center", "top": 6}
     if title:
-        option["title"] = {"text": str(title)}
+        title_opt["text"] = str(title)
+    option["title"] = title_opt
     option["tooltip"] = {
         "trigger": "item" if kind in _ITEM_TOOLTIP_KINDS else "axis"
     }
-    option["legend"] = {"top": 0}
-    option["grid"] = {"left": 60, "right": 24, "top": 48, "bottom": 40}
+    option["legend"] = dict(_DEFAULT_LEGEND)
+    # Pie has no grid; every other kind reserves room on the right for the legend.
+    if kind != "pie":
+        option["grid"] = dict(_DEFAULT_GRID)
 
     # `series` (raw ECharts series list) takes precedence over the y= shorthand.
     if series is not None:
@@ -322,7 +340,9 @@ def _build_echart_option(
         option["series"] = [
             {
                 "type": "pie",
-                "radius": "60%",
+                "radius": _DEFAULT_PIE_RADIUS,
+                # Shift the pie left so the right-side legend clears the slices.
+                "center": list(_DEFAULT_PIE_CENTER),
                 "data": [
                     {"name": _as_jsonable(n), "value": v}
                     for n, v in zip(labels, values)
@@ -398,13 +418,29 @@ def make_echart(on_chart=None):
         option: dict[str, Any] | None = None,
         **opts: Any,
     ) -> dict[str, Any]:
-        # Raw-option escape hatch: accept a full ECharts option dict as-is.
+        # Raw-option escape hatch: accept a full ECharts option dict. Validate it
+        # has a `series` key, then MERGE IN the same right-vertical layout defaults
+        # — but only for keys the caller did not set explicitly (never override).
         if option is not None:
             if not isinstance(option, dict) or "series" not in option:
                 raise ValueError(
                     "echart(option=...): option must be a dict containing a 'series' key"
                 )
             built = dict(option)
+            # Right-vertical legend when the caller didn't supply one.
+            if "legend" not in built:
+                built["legend"] = dict(_DEFAULT_LEGEND)
+            # Axis-based options (have an xAxis/yAxis or a grid) get the grid
+            # defaults extended in — pie-style options (no axes/grid) are left
+            # alone so the legend doesn't collide with a non-existent plot box.
+            has_axes = "xAxis" in built or "yAxis" in built
+            if has_axes or "grid" in built:
+                grid = dict(built.get("grid") or {})
+                if "right" not in grid:
+                    grid["right"] = _DEFAULT_GRID["right"]
+                if "containLabel" not in grid:
+                    grid["containLabel"] = _DEFAULT_GRID["containLabel"]
+                built["grid"] = grid
         else:
             built = _build_echart_option(
                 kind, df, x=x, y=y, series=series, title=title, opts=opts
