@@ -99,6 +99,71 @@ export function CleanModal({
 
   if (!open || !datasetId) return null
 
+  return (
+    <CleanModalView
+      open={open}
+      filename={filename}
+      instruction={instruction}
+      preview={preview}
+      previewing={previewing}
+      applying={applying}
+      error={error}
+      inputRef={inputRef}
+      onClose={onClose}
+      onInstructionChange={setInstruction}
+      onPreview={() => void runPreview()}
+      onApply={() => void runApply()}
+    />
+  )
+}
+
+export interface CleanModalViewProps {
+  /** Whether the modal is open. */
+  open: boolean
+  /** Filename shown in the title, if any. */
+  filename: string | null
+  /** Current value of the cleaning instruction input. */
+  instruction: string
+  /** Preview result (before/after counts + generated code), or null. */
+  preview: CleanPreviewResponse | null
+  /** True while a preview request is in flight. */
+  previewing: boolean
+  /** True while an apply request is in flight. */
+  applying: boolean
+  /** Inline error message to surface, or null. */
+  error: string | null
+  /** Ref for the instruction textarea (container focuses it on open). */
+  inputRef?: React.Ref<HTMLTextAreaElement>
+  /** Close the modal. */
+  onClose: () => void
+  /** Update the instruction value (controlled input). */
+  onInstructionChange: (value: string) => void
+  /** Trigger a preview run. */
+  onPreview: () => void
+  /** Trigger an apply run. */
+  onApply: () => void
+}
+
+/**
+ * Pure presentational view for {@link CleanModal}. All displayed values and
+ * actions arrive via props — no data loading, no effects, no api calls.
+ */
+export function CleanModalView({
+  open,
+  filename,
+  instruction,
+  preview,
+  previewing,
+  applying,
+  error,
+  inputRef,
+  onClose,
+  onInstructionChange,
+  onPreview,
+  onApply,
+}: CleanModalViewProps) {
+  if (!open) return null
+
   const busy = previewing || applying
 
   return (
@@ -142,11 +207,11 @@ export function CleanModal({
             ref={inputRef}
             rows={2}
             value={instruction}
-            onChange={e => setInstruction(e.target.value)}
+            onChange={e => onInstructionChange(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
-                if (!busy && instruction.trim()) void runPreview()
+                if (!busy && instruction.trim()) onPreview()
               }
             }}
             placeholder="e.g. drop rows with nulls; trim whitespace from the name column"
@@ -157,7 +222,7 @@ export function CleanModal({
           <div className="mt-2 flex justify-end">
             <button
               type="button"
-              onClick={() => void runPreview()}
+              onClick={onPreview}
               disabled={busy || instruction.trim().length === 0}
               className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -208,7 +273,7 @@ export function CleanModal({
           </button>
           <button
             type="button"
-            onClick={() => void runApply()}
+            onClick={onApply}
             disabled={!preview || busy}
             title={!preview ? 'Preview first' : undefined}
             className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500"

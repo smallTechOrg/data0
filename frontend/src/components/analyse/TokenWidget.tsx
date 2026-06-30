@@ -86,70 +86,37 @@ function formatCost(value: number | null): string {
   return `$${value.toFixed(value < 0.01 ? 5 : 4)}`
 }
 
-export function TokenWidget({
+/**
+ * Props for the pure presentational view. Every value displayed arrives here;
+ * the View performs no data loading and has no effects.
+ */
+export interface TokenWidgetViewProps {
+  /** Provider/mode label source (from GET /health). */
+  provider?: string
+  /** Most recent answer's live token counts (passed from the Conversation card). */
+  lastTokens: LastQueryTokens | null
+  /** Daily usage stats (GET /stats/daily), or null while loading/unavailable. */
+  stats: DailyStats | null
+  /** Error message from the daily-stats fetch, or null. */
+  statsError: string | null
+  /** Dataset aggregate rows (GET /datasets), or null when unavailable. */
+  datasets: DatasetSummary[] | null
+  /** Resolved per-token price: user-configured price > hardcoded table, or null. */
+  userPrice: ModelPrice | null
+}
+
+/**
+ * Pure presentational widget. Renders the entire token-usage card from props
+ * with no fetching, effects, or side effects.
+ */
+export function TokenWidgetView({
   provider,
   lastTokens,
-  settingsVersion = 0,
-  datasetsVersion = 0,
-}: {
-  provider?: string
-  lastTokens: LastQueryTokens | null
-  settingsVersion?: number
-  /** Bump token from AnalyseTab; re-fetches the dataset aggregate on change. */
-  datasetsVersion?: number
-}) {
-  const [stats, setStats] = useState<DailyStats | null>(null)
-  const [statsError, setStatsError] = useState<string | null>(null)
-  const [userPrice, setUserPrice] = useState<ModelPrice | null>(null)
-  // Dataset aggregate (count + summed rows) for the sidebar line.
-  const [datasets, setDatasets] = useState<DatasetSummary[] | null>(null)
-
-  const loadStats = useCallback(async () => {
-    setStatsError(null)
-    try {
-      setStats(await api.dailyStats())
-    } catch (err) {
-      setStatsError(err instanceof Error ? err.message : 'Failed to load usage stats.')
-    }
-  }, [])
-
-  // Load on mount, on a new answer (lastTokens), AND when settings are saved
-  // (settingsVersion) — so the model badge + context bar reflect a model change.
-  useEffect(() => {
-    void loadStats()
-  }, [loadStats, lastTokens, settingsVersion])
-
-  // Dataset aggregate (Datasets / Rows): load on mount and re-fetch whenever the
-  // dataset universe changes (upload/delete bump `datasetsVersion`). Best-effort:
-  // a failure simply leaves the aggregate hidden rather than blocking the widget.
-  useEffect(() => {
-    let cancelled = false
-    api
-      .listDatasets()
-      .then(rows => {
-        if (!cancelled) setDatasets(rows)
-      })
-      .catch(() => {
-        if (!cancelled) setDatasets(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [datasetsVersion])
-
-  // Fetch user-configured pricing from Settings; re-fetch when settings change.
-  useEffect(() => {
-    api.getSettings().then(s => {
-      const inp = parseFloat(s.price_input_per_million ?? '')
-      const out = parseFloat(s.price_output_per_million ?? '')
-      if (!isNaN(inp) && !isNaN(out)) {
-        setUserPrice({ inputPerMillion: inp, outputPerMillion: out })
-      } else {
-        setUserPrice(null)
-      }
-    }).catch(() => {})
-  }, [settingsVersion])
-
+  stats,
+  statsError,
+  datasets,
+  userPrice,
+}: TokenWidgetViewProps) {
   const mode =
     provider === 'stub' ? 'Stub (offline)' : provider ? provider : '—'
 
@@ -291,6 +258,87 @@ export function TokenWidget({
         )}
       </div>
     </section>
+  )
+}
+
+/**
+ * Container — owns all data loading (daily stats, dataset aggregate, user price)
+ * and renders the pure {@link TokenWidgetView}. Same export name/signature as
+ * before, so no caller's imports change.
+ */
+export function TokenWidget({
+  provider,
+  lastTokens,
+  settingsVersion = 0,
+  datasetsVersion = 0,
+}: {
+  provider?: string
+  lastTokens: LastQueryTokens | null
+  settingsVersion?: number
+  /** Bump token from AnalyseTab; re-fetches the dataset aggregate on change. */
+  datasetsVersion?: number
+}) {
+  const [stats, setStats] = useState<DailyStats | null>(null)
+  const [statsError, setStatsError] = useState<string | null>(null)
+  const [userPrice, setUserPrice] = useState<ModelPrice | null>(null)
+  // Dataset aggregate (count + summed rows) for the sidebar line.
+  const [datasets, setDatasets] = useState<DatasetSummary[] | null>(null)
+
+  const loadStats = useCallback(async () => {
+    setStatsError(null)
+    try {
+      setStats(await api.dailyStats())
+    } catch (err) {
+      setStatsError(err instanceof Error ? err.message : 'Failed to load usage stats.')
+    }
+  }, [])
+
+  // Load on mount, on a new answer (lastTokens), AND when settings are saved
+  // (settingsVersion) — so the model badge + context bar reflect a model change.
+  useEffect(() => {
+    void loadStats()
+  }, [loadStats, lastTokens, settingsVersion])
+
+  // Dataset aggregate (Datasets / Rows): load on mount and re-fetch whenever the
+  // dataset universe changes (upload/delete bump `datasetsVersion`). Best-effort:
+  // a failure simply leaves the aggregate hidden rather than blocking the widget.
+  useEffect(() => {
+    let cancelled = false
+    api
+      .listDatasets()
+      .then(rows => {
+        if (!cancelled) setDatasets(rows)
+      })
+      .catch(() => {
+        if (!cancelled) setDatasets(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [datasetsVersion])
+
+  // Fetch user-configured pricing from Settings; re-fetch when settings change.
+  useEffect(() => {
+    api.getSettings().then(s => {
+      const inp = parseFloat(s.price_input_per_million ?? '')
+      const out = parseFloat(s.price_output_per_million ?? '')
+      if (!isNaN(inp) && !isNaN(out)) {
+        setUserPrice({ inputPerMillion: inp, outputPerMillion: out })
+      } else {
+        setUserPrice(null)
+      }
+    }).catch(() => {})
+  }, [settingsVersion])
+
+  return (
+    <TokenWidgetView
+      provider={provider}
+      lastTokens={lastTokens}
+      stats={stats}
+      statsError={statsError}
+      datasets={datasets}
+      userPrice={userPrice}
+    />
   )
 }
 

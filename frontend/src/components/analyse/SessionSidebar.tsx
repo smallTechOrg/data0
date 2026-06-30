@@ -25,57 +25,79 @@ import { api, type Session } from '@/lib/api'
  * The list refreshes whenever `refreshToken` changes (the parent bumps it after
  * each completed ask so turn counts / ordering update). All states (loading,
  * error, empty, list) render explicitly so a failure never blanks the panel.
+ *
+ * This module is split container/presentational:
+ *  - `SessionSidebarView` — PURE presentation. Receives the session list, the
+ *    active id, busy/error flags, and `on*` callbacks; owns only purely-local
+ *    UI state (the rename text field, the per-row checkbox selection, and the
+ *    inline confirm toggles). It performs NO data loading or `api.*` calls.
+ *  - `SessionSidebar` — thin CONTAINER. Owns all `useEffect`/`api.*`/data state
+ *    and renders `<SessionSidebarView ... />`.
  */
-export function SessionSidebar({
+
+export interface SessionSidebarViewProps {
+  /** Sessions to render (most-recently-updated first). */
+  sessions: Session[]
+  /** The currently-active session id, or null. */
+  activeSessionId: string | null
+  /** True while the initial list is loading and no sessions are shown yet. */
+  loading: boolean
+  /** A load/CRUD error message to display, or null. */
+  error: string | null
+  /** Id of the session currently mid-flight for rename/delete, or null. */
+  busyId: string | null
+  /** True while a bulk-delete request is in flight. */
+  bulkDeleting: boolean
+  /** True while the clear-all request is in flight. */
+  clearingAll: boolean
+  /** Resume (open) the session with this id. */
+  onResume: (id: string) => void
+  /** Start a fresh conversation. */
+  onNew: () => void
+  /** Open the project-notes / global-memory modal. */
+  onOpenMemory: () => void
+  /** Retry loading the list after an error. */
+  onRetry: () => void
+  /** Commit a rename for `id` to `name` (already trimmed, non-empty). */
+  onRename: (id: string, name: string) => void
+  /** Delete the single session with this id. */
+  onDelete: (id: string) => void
+  /** Clear (delete) all sessions. */
+  onClearAll: () => void
+  /** Bulk-delete the given session ids. */
+  onBulkDelete: (ids: string[]) => void
+}
+
+/**
+ * PURE presentational sidebar. Renders entirely from props; the only state it
+ * keeps is local UI affordance state (rename text, checkbox selection, inline
+ * confirm toggles) that is not application data.
+ */
+export function SessionSidebarView({
+  sessions,
   activeSessionId,
-  refreshToken,
+  loading,
+  error,
+  busyId,
+  bulkDeleting,
+  clearingAll,
   onResume,
   onNew,
-  onSessionDeleted,
-  onAllDeleted,
   onOpenMemory,
-}: {
-  activeSessionId: string | null
-  refreshToken: number
-  onResume: (id: string) => void
-  onNew: () => void
-  onSessionDeleted: (id: string) => void
-  onAllDeleted: () => void
-  onOpenMemory: () => void
-}) {
-  const [sessions, setSessions] = useState<Session[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
+  onRetry,
+  onRename,
+  onDelete,
+  onClearAll,
+  onBulkDelete,
+}: SessionSidebarViewProps) {
+  // Purely-local UI state (not application data).
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<string | null>(null)
   const [confirmClearAll, setConfirmClearAll] = useState(false)
-  const [clearingAll, setClearingAll] = useState(false)
-
-  // Bulk-selection state
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [bulkDeleting, setBulkDeleting] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const list = await api.listSessions()
-      setSessions(Array.isArray(list) ? list : [])
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load sessions.')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void load()
-  }, [load, refreshToken])
-
-  // Clear selection whenever the session list changes (e.g. after a delete/refresh)
+  // Clear selection whenever the session list changes (e.g. after a delete/refresh).
   useEffect(() => {
     setSelected(new Set())
   }, [sessions])
@@ -86,58 +108,19 @@ export function SessionSidebar({
   }, [])
 
   const commitRename = useCallback(
-    async (id: string) => {
+    (id: string) => {
       const name = renameValue.trim()
       if (!name) {
         setRenamingId(null)
         return
       }
-      setBusyId(id)
-      try {
-        await api.renameSession(id, name)
-        setRenamingId(null)
-        await load()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to rename session.')
-      } finally {
-        setBusyId(null)
-      }
+      setRenamingId(null)
+      onRename(id, name)
     },
-    [renameValue, load],
+    [renameValue, onRename],
   )
 
-  const doDelete = useCallback(
-    async (id: string) => {
-      setBusyId(id)
-      try {
-        await api.deleteSession(id)
-        setConfirmingId(null)
-        setSessions(prev => prev.filter(s => s.id !== id))
-        onSessionDeleted(id)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to delete session.')
-      } finally {
-        setBusyId(null)
-      }
-    },
-    [onSessionDeleted],
-  )
-
-  const doClearAll = useCallback(async () => {
-    setClearingAll(true)
-    try {
-      await api.deleteAllSessions()
-      setConfirmClearAll(false)
-      setSessions([])
-      onAllDeleted()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to clear sessions.')
-    } finally {
-      setClearingAll(false)
-    }
-  }, [onAllDeleted])
-
-  // Toggle one checkbox
+  // Toggle one checkbox.
   const toggleSelect = useCallback((id: string) => {
     setSelected(prev => {
       const next = new Set(prev)
@@ -150,7 +133,7 @@ export function SessionSidebar({
     })
   }, [])
 
-  // Select all / deselect all
+  // Select all / deselect all.
   const allSelected = sessions.length > 0 && sessions.every(s => selected.has(s.id))
   const toggleSelectAll = useCallback(() => {
     if (allSelected) {
@@ -160,35 +143,11 @@ export function SessionSidebar({
     }
   }, [allSelected, sessions])
 
-  // Bulk delete selected sessions
-  const doDeleteSelected = useCallback(async () => {
+  const doBulkDelete = useCallback(() => {
     const ids = [...selected]
     if (ids.length === 0) return
-    setBulkDeleting(true)
-    try {
-      const result = await api.bulkDeleteSessions(ids)
-      // Remove deleted ids from local list (those skipped by server stay)
-      // Re-fetch to get the accurate post-delete list
-      const remaining = await api.listSessions()
-      setSessions(Array.isArray(remaining) ? remaining : [])
-      setSelected(new Set())
-      // Notify parent for each id that was actually in the deleted set.
-      // We don't know exactly which were skipped, so notify for the ones no
-      // longer present in the refreshed list.
-      const remainingIds = new Set((Array.isArray(remaining) ? remaining : []).map(s => s.id))
-      for (const id of ids) {
-        if (!remainingIds.has(id)) {
-          onSessionDeleted(id)
-        }
-      }
-      // If the result deleted nothing (all skipped), still update the list.
-      void result // suppress unused-var warning
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to delete selected sessions.')
-    } finally {
-      setBulkDeleting(false)
-    }
-  }, [selected, onSessionDeleted])
+    onBulkDelete(ids)
+  }, [selected, onBulkDelete])
 
   return (
     <section
@@ -233,7 +192,7 @@ export function SessionSidebar({
         {selected.size > 0 && (
           <button
             type="button"
-            onClick={() => void doDeleteSelected()}
+            onClick={doBulkDelete}
             disabled={bulkDeleting}
             className="rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-rose-100 disabled:opacity-60 transition-colors"
           >
@@ -247,7 +206,7 @@ export function SessionSidebar({
               <span className="text-xs text-gray-600">Clear all?</span>
               <button
                 type="button"
-                onClick={() => void doClearAll()}
+                onClick={onClearAll}
                 disabled={clearingAll}
                 className="rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-rose-100 disabled:opacity-60 transition-colors"
               >
@@ -284,7 +243,7 @@ export function SessionSidebar({
           <span>{error}</span>
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={onRetry}
             className="rounded-lg border border-red-300 bg-white px-2 py-0.5 font-medium text-red-700 hover:bg-rose-100 transition-colors"
           >
             Retry
@@ -314,7 +273,7 @@ export function SessionSidebar({
                       value={renameValue}
                       onChange={e => setRenameValue(e.target.value)}
                       onKeyDown={e => {
-                        if (e.key === 'Enter') void commitRename(s.id)
+                        if (e.key === 'Enter') commitRename(s.id)
                         if (e.key === 'Escape') setRenamingId(null)
                       }}
                       aria-label={`Rename session ${label}`}
@@ -322,7 +281,7 @@ export function SessionSidebar({
                     />
                     <button
                       type="button"
-                      onClick={() => void commitRename(s.id)}
+                      onClick={() => commitRename(s.id)}
                       disabled={busyId === s.id}
                       className="rounded-lg border border-green-400 bg-green-50 px-2 py-1 text-[11px] font-medium text-green-700 hover:bg-green-50 disabled:opacity-60 transition-colors"
                     >
@@ -379,7 +338,10 @@ export function SessionSidebar({
                           <span className="text-gray-600">Delete?</span>
                           <button
                             type="button"
-                            onClick={() => void doDelete(s.id)}
+                            onClick={() => {
+                              setConfirmingId(null)
+                              onDelete(s.id)
+                            }}
                             disabled={busyId === s.id}
                             className="font-medium text-red-600 hover:text-rose-800 disabled:opacity-60"
                           >
@@ -414,4 +376,141 @@ export function SessionSidebar({
   )
 }
 
+/**
+ * Thin container: owns all data loading, `api.*` CRUD, and async state, then
+ * renders `<SessionSidebarView ... />`. Public signature is unchanged.
+ */
+export function SessionSidebar({
+  activeSessionId,
+  refreshToken,
+  onResume,
+  onNew,
+  onSessionDeleted,
+  onAllDeleted,
+  onOpenMemory,
+}: {
+  activeSessionId: string | null
+  refreshToken: number
+  onResume: (id: string) => void
+  onNew: () => void
+  onSessionDeleted: (id: string) => void
+  onAllDeleted: () => void
+  onOpenMemory: () => void
+}) {
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [clearingAll, setClearingAll] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const list = await api.listSessions()
+      setSessions(Array.isArray(list) ? list : [])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load sessions.')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load, refreshToken])
+
+  const handleRename = useCallback(
+    async (id: string, name: string) => {
+      setBusyId(id)
+      try {
+        await api.renameSession(id, name)
+        await load()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to rename session.')
+      } finally {
+        setBusyId(null)
+      }
+    },
+    [load],
+  )
+
+  const handleDelete = useCallback(
+    async (id: string) => {
+      setBusyId(id)
+      try {
+        await api.deleteSession(id)
+        setSessions(prev => prev.filter(s => s.id !== id))
+        onSessionDeleted(id)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to delete session.')
+      } finally {
+        setBusyId(null)
+      }
+    },
+    [onSessionDeleted],
+  )
+
+  const handleClearAll = useCallback(async () => {
+    setClearingAll(true)
+    try {
+      await api.deleteAllSessions()
+      setSessions([])
+      onAllDeleted()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear sessions.')
+    } finally {
+      setClearingAll(false)
+    }
+  }, [onAllDeleted])
+
+  const handleBulkDelete = useCallback(
+    async (ids: string[]) => {
+      if (ids.length === 0) return
+      setBulkDeleting(true)
+      try {
+        const result = await api.bulkDeleteSessions(ids)
+        // Re-fetch to get the accurate post-delete list (server may skip some).
+        const remaining = await api.listSessions()
+        setSessions(Array.isArray(remaining) ? remaining : [])
+        // Notify parent for each id no longer present in the refreshed list.
+        const remainingIds = new Set(
+          (Array.isArray(remaining) ? remaining : []).map(s => s.id),
+        )
+        for (const id of ids) {
+          if (!remainingIds.has(id)) {
+            onSessionDeleted(id)
+          }
+        }
+        void result // suppress unused-var warning
+      } catch (err) {
+        alert(err instanceof Error ? err.message : 'Failed to delete selected sessions.')
+      } finally {
+        setBulkDeleting(false)
+      }
+    },
+    [onSessionDeleted],
+  )
+
+  return (
+    <SessionSidebarView
+      sessions={sessions}
+      activeSessionId={activeSessionId}
+      loading={loading}
+      error={error}
+      busyId={busyId}
+      bulkDeleting={bulkDeleting}
+      clearingAll={clearingAll}
+      onResume={onResume}
+      onNew={onNew}
+      onOpenMemory={onOpenMemory}
+      onRetry={() => void load()}
+      onRename={(id, name) => void handleRename(id, name)}
+      onDelete={id => void handleDelete(id)}
+      onClearAll={() => void handleClearAll()}
+      onBulkDelete={ids => void handleBulkDelete(ids)}
+    />
+  )
+}

@@ -221,6 +221,145 @@ export function TableDescriptionPanel({
   }, [datasetId, onDeleted])
 
   // --- render --------------------------------------------------------------
+  return (
+    <TableDescriptionPanelView
+      datasetId={datasetId}
+      detail={detail}
+      preview={preview}
+      loading={loading}
+      error={error}
+      keys={keys}
+      pkSet={pkSet}
+      fkMap={fkMap}
+      allDatasets={allDatasets}
+      notes={notes}
+      savingNotes={savingNotes}
+      savedNotes={savedNotes}
+      notesStatus={notesStatus}
+      showCode={showCode}
+      cleanOpen={cleanOpen}
+      confirmDelete={confirmDelete}
+      busy={busy}
+      onCollapse={onCollapse}
+      onToggleCode={() => setShowCode(v => !v)}
+      onRetry={() => datasetId && void loadDetail(datasetId)}
+      onNotesChange={onNotesChange}
+      onGenerateNotes={() => void generateNotes()}
+      onReDerive={() => void doReDerive()}
+      onOpenClean={() => setCleanOpen(true)}
+      onCloseClean={() => setCleanOpen(false)}
+      onCleanApplied={id => {
+        setCleanOpen(false)
+        void loadDetail(id)
+        onChanged()
+      }}
+      onRequestDelete={() => setConfirmDelete(true)}
+      onCancelDelete={() => setConfirmDelete(false)}
+      onConfirmDelete={() => void doDelete()}
+    />
+  )
+}
+
+/**
+ * Presentational view for the Table Description panel — PURE.
+ *
+ * Renders the entire panel (badges, lineage, keys, columns, context notes,
+ * preview, actions, and the embedded {@link CleanModal}) from props alone. It
+ * holds NO data-loading or mutation logic: every displayed value and every
+ * action arrives via props from {@link TableDescriptionPanel}.
+ */
+export interface TableDescriptionPanelViewProps {
+  /** Currently-selected dataset id (null ⇒ empty state). */
+  datasetId: string | null
+  /** Loaded detail for the selection, or null while empty/loading/errored. */
+  detail: DatasetDetail | null
+  /** ~10-row data preview, or null when unavailable. */
+  preview: PreviewResponse | null
+  /** True while the initial detail load is in flight. */
+  loading: boolean
+  /** Fatal (no detail) or inline (with detail) error message, or null. */
+  error: string | null
+  /** Inferred PK/FK keys (single source of truth, shared with the ER diagram). */
+  keys: ErKeys
+  /** Set of column names that are primary keys (for the columns table badges). */
+  pkSet: Set<string>
+  /** Map of FK column name → referenced table (for the columns table badges). */
+  fkMap: Map<string, string>
+  /** All datasets, used to resolve parent ids → filenames in the lineage block. */
+  allDatasets: ErDataset[]
+  /** Current value of the editable context-notes textarea. */
+  notes: string
+  /** True while a debounced notes auto-save is in flight. */
+  savingNotes: boolean
+  /** True briefly after a successful notes auto-save. */
+  savedNotes: boolean
+  /** Auto-notes generation status ('pending' | 'done' | 'failed' | null). */
+  notesStatus: string | null
+  /** Whether the derivation-code block is expanded. */
+  showCode: boolean
+  /** Whether the clean modal is open. */
+  cleanOpen: boolean
+  /** Whether the inline delete confirmation is showing. */
+  confirmDelete: boolean
+  /** Which long-running mutation is active, or null. */
+  busy: null | 'rederive' | 'delete' | 'describe'
+  /** Collapse this panel (hide it), when provided. */
+  onCollapse?: () => void
+  /** Toggle the derivation-code block. */
+  onToggleCode: () => void
+  /** Retry loading after a fatal load error. */
+  onRetry: () => void
+  /** Edit the context-notes value (drives debounced auto-save in the container). */
+  onNotesChange: (value: string) => void
+  /** Trigger LLM notes generation. */
+  onGenerateNotes: () => void
+  /** Re-derive a derived+stale dataset. */
+  onReDerive: () => void
+  /** Open the clean modal. */
+  onOpenClean: () => void
+  /** Close the clean modal. */
+  onCloseClean: () => void
+  /** A clean was applied to the given dataset id. */
+  onCleanApplied: (id: string) => void
+  /** Show the delete confirmation. */
+  onRequestDelete: () => void
+  /** Dismiss the delete confirmation. */
+  onCancelDelete: () => void
+  /** Confirm and perform the delete. */
+  onConfirmDelete: () => void
+}
+
+export function TableDescriptionPanelView({
+  datasetId,
+  detail,
+  preview,
+  loading,
+  error,
+  keys,
+  pkSet,
+  fkMap,
+  allDatasets,
+  notes,
+  savingNotes,
+  savedNotes,
+  notesStatus,
+  showCode,
+  cleanOpen,
+  confirmDelete,
+  busy,
+  onCollapse,
+  onToggleCode,
+  onRetry,
+  onNotesChange,
+  onGenerateNotes,
+  onReDerive,
+  onOpenClean,
+  onCloseClean,
+  onCleanApplied,
+  onRequestDelete,
+  onCancelDelete,
+  onConfirmDelete,
+}: TableDescriptionPanelViewProps) {
   const derived = detail?.origin === 'derived'
   const stale = detail?.stale === true
   const parentIds = detail?.derived_from_dataset_ids ?? []
@@ -281,7 +420,7 @@ export function TableDescriptionPanel({
           <span>{error}</span>
           <button
             type="button"
-            onClick={() => void loadDetail(datasetId)}
+            onClick={onRetry}
             className="rounded border border-red-300 bg-white px-2 py-0.5 font-medium text-red-700 hover:bg-red-100"
           >
             Retry
@@ -334,7 +473,7 @@ export function TableDescriptionPanel({
                 <div className="mt-2">
                   <button
                     type="button"
-                    onClick={() => setShowCode(v => !v)}
+                    onClick={onToggleCode}
                     aria-expanded={showCode ? 'true' : 'false'}
                     className="text-[11px] font-medium text-green-700 hover:text-green-900"
                   >
@@ -445,7 +584,7 @@ export function TableDescriptionPanel({
                 ) : null}
                 <button
                   type="button"
-                  onClick={() => void generateNotes()}
+                  onClick={onGenerateNotes}
                   disabled={busy === 'describe' || notesStatus === 'pending'}
                   className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
                 >
@@ -513,7 +652,7 @@ export function TableDescriptionPanel({
           <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
             <button
               type="button"
-              onClick={() => setCleanOpen(true)}
+              onClick={onOpenClean}
               className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
             >
               Clean
@@ -522,7 +661,7 @@ export function TableDescriptionPanel({
             {derived && stale && (
               <button
                 type="button"
-                onClick={() => void doReDerive()}
+                onClick={onReDerive}
                 disabled={busy === 'rederive'}
                 className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
@@ -537,7 +676,7 @@ export function TableDescriptionPanel({
                   <span className="text-xs text-gray-600">Delete this dataset?</span>
                   <button
                     type="button"
-                    onClick={() => void doDelete()}
+                    onClick={onConfirmDelete}
                     disabled={busy === 'delete'}
                     className="inline-flex items-center gap-1.5 rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
                   >
@@ -546,7 +685,7 @@ export function TableDescriptionPanel({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setConfirmDelete(false)}
+                    onClick={onCancelDelete}
                     disabled={busy === 'delete'}
                     className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60"
                   >
@@ -556,7 +695,7 @@ export function TableDescriptionPanel({
               ) : (
                 <button
                   type="button"
-                  onClick={() => setConfirmDelete(true)}
+                  onClick={onRequestDelete}
                   className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
                 >
                   Delete
@@ -572,12 +711,8 @@ export function TableDescriptionPanel({
         datasetId={cleanOpen ? datasetId : null}
         filename={detail?.filename ?? null}
         open={cleanOpen}
-        onClose={() => setCleanOpen(false)}
-        onApplied={id => {
-          setCleanOpen(false)
-          void loadDetail(id)
-          onChanged()
-        }}
+        onClose={onCloseClean}
+        onApplied={onCleanApplied}
       />
     </section>
   )

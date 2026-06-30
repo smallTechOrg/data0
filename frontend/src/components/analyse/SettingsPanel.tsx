@@ -44,73 +44,47 @@ for (const m of LLM_MODELS) {
   }
 }
 
-export function SettingsPanel({
-  open,
-  onClose,
-  onSaved,
-}: {
+export interface SettingsPanelViewProps {
   open: boolean
+  /** Current form values (controlled by the container). */
+  form: SettingsData
+  /** Models to render, in display order. */
+  models: ModelEntry[]
+  saving: boolean
+  error: string | null
+  saved: boolean
+  /** Whether the pricing fields were just auto-filled from the model choice. */
+  priceAutoFilled: boolean
   onClose: () => void
-  onSaved?: () => void
-}) {
-  const [form, setForm] = useState<SettingsData>({
-    llm_model: null,
-    max_iterations: null,
-    price_input_per_million: null,
-    price_output_per_million: null,
-  })
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
-  const [priceAutoFilled, setPriceAutoFilled] = useState(false)
+  onModelChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
+  onMaxIterationsChange: (e: React.ChangeEvent<HTMLInputElement>) => void
+  onPriceChange: (
+    key: 'price_input_per_million' | 'price_output_per_million',
+  ) => (e: React.ChangeEvent<HTMLInputElement>) => void
+  onSave: (e: React.FormEvent) => void
+}
 
-  useEffect(() => {
-    if (!open) return
-    api.getSettings().then(data => setForm(data)).catch(() => {})
-  }, [open])
-
+/**
+ * Pure presentational panel — renders the settings form entirely from props.
+ * Holds no data-loading or persistence logic; the container owns that.
+ */
+export function SettingsPanelView({
+  open,
+  form,
+  models,
+  saving,
+  error,
+  saved,
+  priceAutoFilled,
+  onClose,
+  onModelChange,
+  onMaxIterationsChange,
+  onPriceChange,
+  onSave,
+}: SettingsPanelViewProps) {
   if (!open) return null
 
-  const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const modelVal = e.target.value || null
-    const known = modelVal ? PRICE_LOOKUP[modelVal] : undefined
-    if (known) {
-      setForm(prev => ({
-        ...prev,
-        llm_model: modelVal,
-        price_input_per_million: String(known.input),
-        price_output_per_million: String(known.output),
-      }))
-      setPriceAutoFilled(true)
-    } else {
-      setForm(prev => ({ ...prev, llm_model: modelVal }))
-      setPriceAutoFilled(false)
-    }
-  }
-
-  const handlePriceChange = (key: 'price_input_per_million' | 'price_output_per_million') =>
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      setPriceAutoFilled(false)
-      setForm(prev => ({ ...prev, [key]: e.target.value || null }))
-    }
-
-  const save = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setSaving(true)
-    setError(null)
-    try {
-      await api.patchSettings(form)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-      onSaved?.()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const activeModel = LLM_MODELS.find(m => m.value === (form.llm_model ?? ''))
+  const activeModel = models.find(m => m.value === (form.llm_model ?? ''))
   const showUnknownPrice = activeModel && activeModel.input === null
 
   return (
@@ -131,23 +105,23 @@ export function SettingsPanel({
           </button>
         </div>
 
-        <form onSubmit={save} className="space-y-4">
+        <form onSubmit={onSave} className="space-y-4">
           {/* LLM Model */}
           <div>
             <label className="mb-1 block text-xs font-medium text-gray-700">LLM Model</label>
             <select
               value={form.llm_model ?? ''}
-              onChange={handleModelChange}
+              onChange={onModelChange}
               className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">Default (env)</option>
               <optgroup label="Gemini">
-                {LLM_MODELS.filter(m => m.value.startsWith('gemini')).map(m => (
+                {models.filter(m => m.value.startsWith('gemini')).map(m => (
                   <option key={m.value} value={m.value}>{m.label}</option>
                 ))}
               </optgroup>
               <optgroup label="Claude (Anthropic)">
-                {LLM_MODELS.filter(m => m.value.startsWith('claude')).map(m => (
+                {models.filter(m => m.value.startsWith('claude')).map(m => (
                   <option key={m.value} value={m.value}>{m.label}</option>
                 ))}
               </optgroup>
@@ -165,7 +139,7 @@ export function SettingsPanel({
               min={1}
               max={25}
               value={form.max_iterations ?? ''}
-              onChange={e => setForm(prev => ({ ...prev, max_iterations: e.target.value || null }))}
+              onChange={onMaxIterationsChange}
               placeholder="Default (12)"
               className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
@@ -197,7 +171,7 @@ export function SettingsPanel({
                   min={0}
                   step="any"
                   value={form.price_input_per_million ?? ''}
-                  onChange={handlePriceChange('price_input_per_million')}
+                  onChange={onPriceChange('price_input_per_million')}
                   placeholder="e.g. 0.075"
                   className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
@@ -209,7 +183,7 @@ export function SettingsPanel({
                   min={0}
                   step="any"
                   value={form.price_output_per_million ?? ''}
-                  onChange={handlePriceChange('price_output_per_million')}
+                  onChange={onPriceChange('price_output_per_million')}
                   placeholder="e.g. 0.30"
                   className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
@@ -238,6 +212,95 @@ export function SettingsPanel({
         </form>
       </div>
     </div>
+  )
+}
+
+/**
+ * Container — owns settings load/save and wiring, renders {@link SettingsPanelView}.
+ */
+export function SettingsPanel({
+  open,
+  onClose,
+  onSaved,
+}: {
+  open: boolean
+  onClose: () => void
+  onSaved?: () => void
+}) {
+  const [form, setForm] = useState<SettingsData>({
+    llm_model: null,
+    max_iterations: null,
+    price_input_per_million: null,
+    price_output_per_million: null,
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+  const [priceAutoFilled, setPriceAutoFilled] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    api.getSettings().then(data => setForm(data)).catch(() => {})
+  }, [open])
+
+  const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const modelVal = e.target.value || null
+    const known = modelVal ? PRICE_LOOKUP[modelVal] : undefined
+    if (known) {
+      setForm(prev => ({
+        ...prev,
+        llm_model: modelVal,
+        price_input_per_million: String(known.input),
+        price_output_per_million: String(known.output),
+      }))
+      setPriceAutoFilled(true)
+    } else {
+      setForm(prev => ({ ...prev, llm_model: modelVal }))
+      setPriceAutoFilled(false)
+    }
+  }
+
+  const handleMaxIterationsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setForm(prev => ({ ...prev, max_iterations: e.target.value || null }))
+  }
+
+  const handlePriceChange = (key: 'price_input_per_million' | 'price_output_per_million') =>
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setPriceAutoFilled(false)
+      setForm(prev => ({ ...prev, [key]: e.target.value || null }))
+    }
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSaving(true)
+    setError(null)
+    try {
+      await api.patchSettings(form)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+      onSaved?.()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <SettingsPanelView
+      open={open}
+      form={form}
+      models={LLM_MODELS}
+      saving={saving}
+      error={error}
+      saved={saved}
+      priceAutoFilled={priceAutoFilled}
+      onClose={onClose}
+      onModelChange={handleModelChange}
+      onMaxIterationsChange={handleMaxIterationsChange}
+      onPriceChange={handlePriceChange}
+      onSave={save}
+    />
   )
 }
 

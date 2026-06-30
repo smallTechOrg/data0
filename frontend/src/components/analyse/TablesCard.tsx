@@ -28,10 +28,351 @@ import { CleanModal } from '@/components/database/CleanModal'
 const FILTERS = ['All', 'Uploaded', 'Derived', 'This session'] as const
 type Filter = (typeof FILTERS)[number]
 
-interface ColsState {
+export interface ColsState {
   loading: boolean
   error: string | null
   columns: ColumnSchema[] | null
+}
+
+/**
+ * Presentational view for {@link TablesCard}.
+ *
+ * PURE: renders the datasets list, selection bar, filter tabs and per-row
+ * actions entirely from props — no `useEffect`, no `api.*`, no data loading.
+ * The filter-tab selection is purely-local UI state and lives here. All
+ * displayed values arrive as props and every action is an `on*` callback the
+ * container wires to its load/refresh/`api.*` logic.
+ */
+export interface TablesCardViewProps {
+  /** All datasets to render (already loaded by the container). */
+  datasets: DatasetSummary[]
+  /** True while the initial load is in flight (first paint only). */
+  loading: boolean
+  /** Load/action error to surface in the shared banner, or null. */
+  error: string | null
+  /** Ids of datasets pinned for the next question. */
+  selectedDatasetIds: string[]
+  /** Per-row "cols" disclosure state, keyed by dataset id. */
+  colsById: Record<string, ColsState>
+  /** True while a bulk delete is in flight. */
+  deletingBulk: boolean
+  /** Id of the derived dataset currently re-deriving, or null. */
+  rederivingId: string | null
+  /** Re-run the dataset load. */
+  onRefresh: () => void
+  /** Pin/unpin a single dataset. */
+  onToggleSelect: (id: string) => void
+  /** Pin every dataset id. */
+  onSelectAll: (ids: string[]) => void
+  /** Clear the pinned selection. */
+  onClearSelection: () => void
+  /** Delete every currently-selected dataset. */
+  onDeleteSelected: () => void
+  /** Toggle (lazy-load / collapse) the column schema for a dataset. */
+  onToggleCols: (id: string) => void
+  /** Open the clean modal for an uploaded dataset. */
+  onClean: (ds: DatasetSummary) => void
+  /** Re-derive a stale derived dataset. */
+  onReDerive: (id: string) => void
+}
+
+export function TablesCardView({
+  datasets,
+  loading,
+  error,
+  selectedDatasetIds,
+  colsById,
+  deletingBulk,
+  rederivingId,
+  onRefresh,
+  onToggleSelect,
+  onSelectAll,
+  onClearSelection,
+  onDeleteSelected,
+  onToggleCols,
+  onClean,
+  onReDerive,
+}: TablesCardViewProps) {
+  const [filter, setFilter] = useState<Filter>('All')
+  // Bulk-delete inline-confirm state (pure UI — lives with the view).
+  const [confirmBulk, setConfirmBulk] = useState(false)
+
+  // Client-side filter by origin / current selection (the filter tabs).
+  const visibleDatasets = useMemo(() => {
+    switch (filter) {
+      case 'Uploaded':
+        return datasets.filter(d => d.origin !== 'derived')
+      case 'Derived':
+        return datasets.filter(d => d.origin === 'derived')
+      case 'This session':
+        // No per-session dataset set is plumbed here; approximate by the pinned
+        // selection (the datasets chosen for the next ask). Empty → show all.
+        return selectedDatasetIds.length > 0
+          ? datasets.filter(d => selectedDatasetIds.includes(d.id))
+          : datasets
+      default:
+        return datasets
+    }
+  }, [datasets, filter, selectedDatasetIds])
+
+  const uploadedCount = datasets.filter(d => d.origin !== 'derived').length
+  const derivedCount = datasets.filter(d => d.origin === 'derived').length
+
+  return (
+    <section
+      aria-labelledby="tables-heading"
+      className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+    >
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h2 id="tables-heading" className="text-lg font-bold text-gray-900">
+          Tables
+        </h2>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          aria-label="Refresh datasets"
+        >
+          Refresh
+        </button>
+      </div>
+
+      {/* Selection mode: explicit datasets vs. let the agent pick (C19).
+          Action buttons are left-anchored (Select all is always present —
+          disabled when everything is selected — so the cluster never shifts);
+          the "N selected" count floats to the far right via ml-auto. */}
+      {datasets.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs">
+          <button
+            type="button"
+            onClick={() => onSelectAll(datasets.map(d => d.id))}
+            disabled={selectedDatasetIds.length >= datasets.length}
+            className="rounded border border-gray-300 bg-white px-2 py-0.5 font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-50 disabled:text-gray-300"
+          >
+            Select all
+          </button>
+          {selectedDatasetIds.length > 0 && (
+            <button
+              type="button"
+              onClick={onClearSelection}
+              className="rounded border border-gray-300 bg-white px-2 py-0.5 font-medium text-gray-600 hover:bg-gray-50"
+            >
+              Clear
+            </button>
+          )}
+          {selectedDatasetIds.length > 0 &&
+            (confirmBulk ? (
+              <span className="flex items-center gap-1">
+                <span className="text-gray-600">
+                  Delete {selectedDatasetIds.length} dataset
+                  {selectedDatasetIds.length === 1 ? '' : 's'}?
+                </span>
+                <button
+                  type="button"
+                  onClick={onDeleteSelected}
+                  disabled={deletingBulk}
+                  className="rounded border border-red-300 bg-red-50 px-2 py-0.5 font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
+                >
+                  {deletingBulk ? 'Deleting…' : 'Yes, delete'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmBulk(false)}
+                  disabled={deletingBulk}
+                  className="rounded border border-gray-300 bg-white px-2 py-0.5 font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmBulk(true)}
+                className="rounded border border-red-300 bg-red-50 px-2 py-0.5 font-medium text-red-700 hover:bg-red-100"
+              >
+                Delete selected ({selectedDatasetIds.length})
+              </button>
+            ))}
+          {selectedDatasetIds.length > 0 && (
+            <span className="ml-auto font-medium text-gray-700">
+              {`${selectedDatasetIds.length} dataset${
+                selectedDatasetIds.length === 1 ? '' : 's'
+              } selected`}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Filter tabs — REAL client-side filters by origin / selection. */}
+      <div role="group" aria-label="Dataset filters" className="mb-4 flex flex-wrap gap-2">
+        {FILTERS.map(f => {
+          const active = filter === f
+          const count =
+            f === 'Uploaded' ? uploadedCount : f === 'Derived' ? derivedCount : null
+          return (
+            <button
+              key={f}
+              type="button"
+              onClick={() => setFilter(f)}
+              aria-pressed={active}
+              className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                active
+                  ? 'border-blue-300 bg-blue-50 text-blue-700'
+                  : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
+              }`}
+            >
+              {f}
+              {count !== null && <span className="ml-1 text-gray-400">({count})</span>}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* States: loading / error / empty / list */}
+      {loading && datasets.length === 0 ? (
+        <div className="rounded-md border border-dashed border-gray-200 px-3 py-8 text-center text-xs text-gray-400">
+          Loading datasets…
+        </div>
+      ) : error ? (
+        <div
+          role="alert"
+          className="flex flex-col items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-6 text-center text-xs text-red-700"
+        >
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="rounded border border-red-300 bg-white px-2 py-0.5 font-medium text-red-700 hover:bg-red-100"
+          >
+            Retry
+          </button>
+        </div>
+      ) : datasets.length === 0 ? (
+        <div className="rounded-md border border-dashed border-gray-200 px-3 py-8 text-center text-xs text-gray-400">
+          No datasets yet. Upload a CSV below to get started.
+        </div>
+      ) : visibleDatasets.length === 0 ? (
+        <div className="rounded-md border border-dashed border-gray-200 px-3 py-8 text-center text-xs text-gray-400">
+          No {filter.toLowerCase()} datasets.
+        </div>
+      ) : (
+        <ul role="list" className="max-h-[24rem] space-y-1.5 overflow-y-auto pr-1">
+          {visibleDatasets.map(ds => {
+            const cols = colsById[ds.id]
+            const selected = selectedDatasetIds.includes(ds.id)
+            const derived = ds.origin === 'derived'
+            const stale = derived && ds.stale === true
+            return (
+              <li
+                key={ds.id}
+                className={`rounded-md border px-3 py-1.5 ${
+                  selected ? 'border-blue-300 bg-blue-50' : 'border-gray-200'
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex min-w-0 flex-1 items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => onToggleSelect(ds.id)}
+                      aria-label={`Include ${ds.filename} in the next question`}
+                      className="h-4 w-4 shrink-0"
+                    />
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium text-gray-800">
+                      {ds.filename}
+                    </span>
+                  </label>
+
+                  {derived && (
+                    <span className="shrink-0 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
+                      Derived
+                    </span>
+                  )}
+                  {stale && (
+                    <span
+                      title="A parent changed after this dataset was derived"
+                      className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800"
+                    >
+                      Stale
+                    </span>
+                  )}
+
+                  <span className="shrink-0 text-xs tabular-nums text-gray-500">
+                    {ds.row_count} × {ds.col_count}
+                  </span>
+                  <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gray-500">
+                    {ds.format}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => onToggleCols(ds.id)}
+                    aria-expanded={Boolean(cols)}
+                    aria-label={`Toggle columns for ${ds.filename}`}
+                    className="shrink-0 rounded border border-gray-200 bg-white px-2 py-0.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    cols
+                  </button>
+
+                  {/* Clean — uploaded datasets only (C24). */}
+                  {!derived && (
+                    <button
+                      type="button"
+                      onClick={() => onClean(ds)}
+                      aria-label={`Clean ${ds.filename}`}
+                      className="shrink-0 rounded border border-gray-200 bg-white px-2 py-0.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Clean
+                    </button>
+                  )}
+
+                  {/* Re-derive — stale derived datasets only (C25). */}
+                  {stale && (
+                    <button
+                      type="button"
+                      onClick={() => onReDerive(ds.id)}
+                      disabled={rederivingId === ds.id}
+                      aria-label={`Re-derive ${ds.filename}`}
+                      className="shrink-0 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+                    >
+                      {rederivingId === ds.id ? 'Re-deriving…' : 'Re-derive'}
+                    </button>
+                  )}
+                </div>
+
+                {/* Columns disclosure */}
+                {cols && (
+                  <div className="mt-2 border-t border-gray-100 pt-2">
+                    {cols.loading ? (
+                      <p className="text-xs text-gray-400">Loading columns…</p>
+                    ) : cols.error ? (
+                      <p role="alert" className="text-xs text-red-600">
+                        {cols.error}
+                      </p>
+                    ) : cols.columns && cols.columns.length > 0 ? (
+                      <ul className="flex flex-wrap gap-1.5">
+                        {cols.columns.map(c => (
+                          <li
+                            key={c.name}
+                            className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-700"
+                          >
+                            <span className="font-medium">{c.name}</span>
+                            <span className="text-gray-400"> · {c.dtype}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-gray-400">No columns reported.</p>
+                    )}
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
+  )
 }
 
 export function TablesCard({
@@ -52,12 +393,10 @@ export function TablesCard({
   const [datasets, setDatasets] = useState<DatasetSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<Filter>('All')
 
   // Per-row "cols" expansion state, keyed by dataset id.
   const [colsById, setColsById] = useState<Record<string, ColsState>>({})
-  // Bulk-delete inline-confirm + in-flight state for the selection bar.
-  const [confirmBulk, setConfirmBulk] = useState(false)
+  // Bulk-delete in-flight state for the selection bar.
   const [deletingBulk, setDeletingBulk] = useState(false)
   // Which derived row is currently re-deriving.
   const [rederivingId, setRederivingId] = useState<string | null>(null)
@@ -143,7 +482,6 @@ export function TablesCard({
         setDatasets(prev => prev.filter(d => !succeeded.includes(d.id)))
       }
       if (firstError) setError(firstError)
-      setConfirmBulk(false)
     } finally {
       setDeletingBulk(false)
     }
@@ -166,280 +504,25 @@ export function TablesCard({
     [load],
   )
 
-  // Client-side filter by origin / current selection (the filter tabs).
-  const visibleDatasets = useMemo(() => {
-    switch (filter) {
-      case 'Uploaded':
-        return datasets.filter(d => d.origin !== 'derived')
-      case 'Derived':
-        return datasets.filter(d => d.origin === 'derived')
-      case 'This session':
-        // No per-session dataset set is plumbed here; approximate by the pinned
-        // selection (the datasets chosen for the next ask). Empty → show all.
-        return selectedDatasetIds.length > 0
-          ? datasets.filter(d => selectedDatasetIds.includes(d.id))
-          : datasets
-      default:
-        return datasets
-    }
-  }, [datasets, filter, selectedDatasetIds])
-
-  const uploadedCount = datasets.filter(d => d.origin !== 'derived').length
-  const derivedCount = datasets.filter(d => d.origin === 'derived').length
-
   return (
-    <section
-      aria-labelledby="tables-heading"
-      className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
-    >
-      <div className="mb-4 flex items-center justify-between gap-2">
-        <h2 id="tables-heading" className="text-lg font-bold text-gray-900">
-          Tables
-        </h2>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm font-medium text-gray-700 hover:bg-gray-50"
-          aria-label="Refresh datasets"
-        >
-          Refresh
-        </button>
-      </div>
-
-      {/* Selection mode: explicit datasets vs. let the agent pick (C19).
-          Action buttons are left-anchored (Select all is always present —
-          disabled when everything is selected — so the cluster never shifts);
-          the "N selected" count floats to the far right via ml-auto. */}
-      {datasets.length > 0 && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs">
-          <button
-            type="button"
-            onClick={() => onSelectAll(datasets.map(d => d.id))}
-            disabled={selectedDatasetIds.length >= datasets.length}
-            className="rounded border border-gray-300 bg-white px-2 py-0.5 font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-50 disabled:text-gray-300"
-          >
-            Select all
-          </button>
-          {selectedDatasetIds.length > 0 && (
-            <button
-              type="button"
-              onClick={onClearSelection}
-              className="rounded border border-gray-300 bg-white px-2 py-0.5 font-medium text-gray-600 hover:bg-gray-50"
-            >
-              Clear
-            </button>
-          )}
-          {selectedDatasetIds.length > 0 &&
-            (confirmBulk ? (
-              <span className="flex items-center gap-1">
-                <span className="text-gray-600">
-                  Delete {selectedDatasetIds.length} dataset
-                  {selectedDatasetIds.length === 1 ? '' : 's'}?
-                </span>
-                <button
-                  type="button"
-                  onClick={() => void deleteSelected()}
-                  disabled={deletingBulk}
-                  className="rounded border border-red-300 bg-red-50 px-2 py-0.5 font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
-                >
-                  {deletingBulk ? 'Deleting…' : 'Yes, delete'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmBulk(false)}
-                  disabled={deletingBulk}
-                  className="rounded border border-gray-300 bg-white px-2 py-0.5 font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60"
-                >
-                  Cancel
-                </button>
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConfirmBulk(true)}
-                className="rounded border border-red-300 bg-red-50 px-2 py-0.5 font-medium text-red-700 hover:bg-red-100"
-              >
-                Delete selected ({selectedDatasetIds.length})
-              </button>
-            ))}
-          {selectedDatasetIds.length > 0 && (
-            <span className="ml-auto font-medium text-gray-700">
-              {`${selectedDatasetIds.length} dataset${
-                selectedDatasetIds.length === 1 ? '' : 's'
-              } selected`}
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Filter tabs — REAL client-side filters by origin / selection. */}
-      <div role="group" aria-label="Dataset filters" className="mb-4 flex flex-wrap gap-2">
-        {FILTERS.map(f => {
-          const active = filter === f
-          const count =
-            f === 'Uploaded' ? uploadedCount : f === 'Derived' ? derivedCount : null
-          return (
-            <button
-              key={f}
-              type="button"
-              onClick={() => setFilter(f)}
-              aria-pressed={active}
-              className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                active
-                  ? 'border-blue-300 bg-blue-50 text-blue-700'
-                  : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
-              }`}
-            >
-              {f}
-              {count !== null && <span className="ml-1 text-gray-400">({count})</span>}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* States: loading / error / empty / list */}
-      {loading && datasets.length === 0 ? (
-        <div className="rounded-md border border-dashed border-gray-200 px-3 py-8 text-center text-xs text-gray-400">
-          Loading datasets…
-        </div>
-      ) : error ? (
-        <div
-          role="alert"
-          className="flex flex-col items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-6 text-center text-xs text-red-700"
-        >
-          <span>{error}</span>
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="rounded border border-red-300 bg-white px-2 py-0.5 font-medium text-red-700 hover:bg-red-100"
-          >
-            Retry
-          </button>
-        </div>
-      ) : datasets.length === 0 ? (
-        <div className="rounded-md border border-dashed border-gray-200 px-3 py-8 text-center text-xs text-gray-400">
-          No datasets yet. Upload a CSV below to get started.
-        </div>
-      ) : visibleDatasets.length === 0 ? (
-        <div className="rounded-md border border-dashed border-gray-200 px-3 py-8 text-center text-xs text-gray-400">
-          No {filter.toLowerCase()} datasets.
-        </div>
-      ) : (
-        <ul role="list" className="max-h-[24rem] space-y-1.5 overflow-y-auto pr-1">
-          {visibleDatasets.map(ds => {
-            const cols = colsById[ds.id]
-            const selected = selectedDatasetIds.includes(ds.id)
-            const derived = ds.origin === 'derived'
-            const stale = derived && ds.stale === true
-            return (
-              <li
-                key={ds.id}
-                className={`rounded-md border px-3 py-1.5 ${
-                  selected ? 'border-blue-300 bg-blue-50' : 'border-gray-200'
-                }`}
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="flex min-w-0 flex-1 items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() => onToggleSelect(ds.id)}
-                      aria-label={`Include ${ds.filename} in the next question`}
-                      className="h-4 w-4 shrink-0"
-                    />
-                    <span className="min-w-0 flex-1 truncate text-xs font-medium text-gray-800">
-                      {ds.filename}
-                    </span>
-                  </label>
-
-                  {derived && (
-                    <span className="shrink-0 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
-                      Derived
-                    </span>
-                  )}
-                  {stale && (
-                    <span
-                      title="A parent changed after this dataset was derived"
-                      className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800"
-                    >
-                      Stale
-                    </span>
-                  )}
-
-                  <span className="shrink-0 text-xs tabular-nums text-gray-500">
-                    {ds.row_count} × {ds.col_count}
-                  </span>
-                  <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gray-500">
-                    {ds.format}
-                  </span>
-
-                  <button
-                    type="button"
-                    onClick={() => void toggleCols(ds.id)}
-                    aria-expanded={Boolean(cols)}
-                    aria-label={`Toggle columns for ${ds.filename}`}
-                    className="shrink-0 rounded border border-gray-200 bg-white px-2 py-0.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                  >
-                    cols
-                  </button>
-
-                  {/* Clean — uploaded datasets only (C24). */}
-                  {!derived && (
-                    <button
-                      type="button"
-                      onClick={() => setCleanTarget(ds)}
-                      aria-label={`Clean ${ds.filename}`}
-                      className="shrink-0 rounded border border-gray-200 bg-white px-2 py-0.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                    >
-                      Clean
-                    </button>
-                  )}
-
-                  {/* Re-derive — stale derived datasets only (C25). */}
-                  {stale && (
-                    <button
-                      type="button"
-                      onClick={() => void reDerive(ds.id)}
-                      disabled={rederivingId === ds.id}
-                      aria-label={`Re-derive ${ds.filename}`}
-                      className="shrink-0 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-60"
-                    >
-                      {rederivingId === ds.id ? 'Re-deriving…' : 'Re-derive'}
-                    </button>
-                  )}
-                </div>
-
-                {/* Columns disclosure */}
-                {cols && (
-                  <div className="mt-2 border-t border-gray-100 pt-2">
-                    {cols.loading ? (
-                      <p className="text-xs text-gray-400">Loading columns…</p>
-                    ) : cols.error ? (
-                      <p role="alert" className="text-xs text-red-600">
-                        {cols.error}
-                      </p>
-                    ) : cols.columns && cols.columns.length > 0 ? (
-                      <ul className="flex flex-wrap gap-1.5">
-                        {cols.columns.map(c => (
-                          <li
-                            key={c.name}
-                            className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-700"
-                          >
-                            <span className="font-medium">{c.name}</span>
-                            <span className="text-gray-400"> · {c.dtype}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-xs text-gray-400">No columns reported.</p>
-                    )}
-                  </div>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      )}
+    <>
+      <TablesCardView
+        datasets={datasets}
+        loading={loading}
+        error={error}
+        selectedDatasetIds={selectedDatasetIds}
+        colsById={colsById}
+        deletingBulk={deletingBulk}
+        rederivingId={rederivingId}
+        onRefresh={() => void load()}
+        onToggleSelect={onToggleSelect}
+        onSelectAll={onSelectAll}
+        onClearSelection={onClearSelection}
+        onDeleteSelected={() => void deleteSelected()}
+        onToggleCols={id => void toggleCols(id)}
+        onClean={setCleanTarget}
+        onReDerive={id => void reDerive(id)}
+      />
 
       {/* NL data-cleaning modal (C24) — opened from a uploaded row's Clean button. */}
       <CleanModal
@@ -452,7 +535,7 @@ export function TablesCard({
           void load()
         }}
       />
-    </section>
+    </>
   )
 }
 
