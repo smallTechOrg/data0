@@ -6,7 +6,7 @@
   "entry": "./frontend/.ds-entry.tsx",
   "srcDir": "src/components",
   "tsconfig": "tsconfig.json",
-  "cssEntry": "out/_next/static/css/59b2a6a828554be1.css",
+  "cssEntry": "out/_next/static/css/47ea3235b497b5c2.css",
   "readmeHeader": ".design-sync/conventions.md",
   "componentSrcMap": {
     "StubBanner": "src/components/StubBanner.tsx",
