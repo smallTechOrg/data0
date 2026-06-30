@@ -19,7 +19,7 @@ import { useState } from 'react'
  * of the snake_case key name.
  */
 const LABEL_MAP: Record<string, string> = {
-  total_prompt: 'Total prompt',
+  total_prompt: 'Input total',
   dataset_schemas: 'Dataset schemas',
   conversation_history: 'Conversation history',
   memory: 'Memory',
@@ -44,13 +44,20 @@ function barClass(isTotal: boolean): string {
 export function PromptBreakdown({ breakdown }: { breakdown: Record<string, number> }) {
   const [open, setOpen] = useState(false)
 
-  // Extract total_prompt for proportional bars. Fall back to summing all other
-  // keys if total_prompt is absent so bars are still meaningful.
-  const total = breakdown.total_prompt ?? Object.values(breakdown).reduce((a, b) => a + b, 0)
+  // Extract total_prompt for proportional bars. Fall back to summing all
+  // component keys (excluding total_prompt AND tokens_output) if total_prompt
+  // is absent so bars are still meaningful.
+  const total =
+    breakdown.total_prompt ??
+    Object.entries(breakdown)
+      .filter(([k]) => k !== 'total_prompt' && k !== 'tokens_output')
+      .reduce((a, [, b]) => a + b, 0)
 
-  // Separate total_prompt from the component rows; sort components by value desc.
+  // Separate total_prompt and tokens_output from the component rows; the six
+  // input components sum to total_prompt and are shown as proportional bars.
+  // Output is rendered separately below the list. Sort components by value desc.
   const componentEntries = Object.entries(breakdown)
-    .filter(([k]) => k !== 'total_prompt')
+    .filter(([k]) => k !== 'total_prompt' && k !== 'tokens_output')
     .sort(([, a], [, b]) => b - a)
 
   const hasComponents = componentEntries.length > 0
@@ -64,10 +71,10 @@ export function PromptBreakdown({ breakdown }: { breakdown: Record<string, numbe
         className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-900"
       >
         <span aria-hidden="true">{open ? '▾' : '▸'}</span>
-        Prompt breakdown
+        Token breakdown
         {total > 0 && (
           <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold text-gray-500 tabular-nums">
-            {total.toLocaleString()} tok
+            {total.toLocaleString()} in · {(breakdown.tokens_output ?? 0).toLocaleString()} out
           </span>
         )}
       </button>
@@ -77,8 +84,8 @@ export function PromptBreakdown({ breakdown }: { breakdown: Record<string, numbe
           {/* Caption: clarifies this widget shows the composition of the most recent
               prompt, distinct from cumulative query tokens in the Token usage panel. */}
           <p className="mb-2 text-[11px] text-gray-400">
-            Composition of the most recent prompt — cumulative query tokens are shown
-            under Token usage.
+            Input tokens for this query, broken down by component (sums to Last
+            query In). Output is the model&apos;s response.
           </p>
           {/* Summary row: total_prompt */}
           <div className="mb-2 flex items-center justify-between gap-2 text-[11px]">
@@ -134,6 +141,17 @@ export function PromptBreakdown({ breakdown }: { breakdown: Record<string, numbe
                 )
               })}
             </ol>
+          )}
+
+          {/* Output row: the model's response tokens, distinct from the input
+              partition above — no proportional bar, shown under a thin divider. */}
+          {(breakdown.tokens_output ?? 0) > 0 && (
+            <div className="mt-3 flex items-center justify-between gap-2 border-t border-gray-200 pt-2 text-[11px]">
+              <span className="font-medium text-gray-600">Output (response)</span>
+              <span className="font-medium tabular-nums text-gray-600">
+                {breakdown.tokens_output.toLocaleString()}
+              </span>
+            </div>
           )}
 
           {!hasComponents && total === 0 && (

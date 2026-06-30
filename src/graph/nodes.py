@@ -275,7 +275,7 @@ def _plan_prompt_sections(state: AgentState, wrap_up: bool) -> dict[str, str]:
     Returns a dict mapping a stable section key to its rendered text (empty string
     when the section is absent). The keys partition the WHOLE assembled user prompt
     with no overlap — `_assemble_plan_prompt` joins the non-empty ones, and
-    `_plan_prompt_components` measures them into the six C29 buckets. The `tag`,
+    `_plan_prompt_chars` measures them into the six C29 buckets. The `tag`,
     `question`, `wrap_up`, and `footer` keys are the fixed scaffolding; `datasets`,
     `memory`, `history`, and `actions` are the variable context blocks.
 
@@ -356,15 +356,27 @@ def _assemble_plan_prompt(state: AgentState, wrap_up: bool) -> str:
     return "\n\n".join(parts)
 
 
-def _plan_prompt_components(
+# The six C29 buckets, in the order the breakdown reports them.
+_PLAN_COMPONENT_KEYS = (
+    "system_overhead",
+    "dataset_schemas",
+    "dataset_notes",
+    "memory",
+    "history",
+    "action_history",
+)
+
+
+def _plan_prompt_chars(
     state: AgentState, wrap_up: bool, system_text: str
 ) -> dict[str, int]:
-    """C29: partition the assembled plan prompt + system template into six buckets.
+    """C29: partition THIS iteration's assembled plan prompt + system template into
+    the six buckets, measured in raw CHARS (not tokens).
 
     The six keys partition the WHOLE prompt (system template `plan_action.md` plus
-    every section of the assembled user prompt) with NO overlap and NO omission,
-    each measured with the `chars/4` estimator. `total_prompt` is therefore exactly
-    the sum of the six.
+    every section of the assembled user prompt) with NO overlap and NO omission. The
+    runner accumulates these across all iterations and then scales the cumulative
+    char counts to the real cumulative provider `tokens_input`.
 
       - system_overhead = system template + fixed scaffolding (tag + question +
         wrap-up + instruction footer). All the fixed pieces and the question.
@@ -376,22 +388,35 @@ def _plan_prompt_components(
     """
     s = _plan_prompt_sections(state, wrap_up)
     system_overhead = (
-        _estimate_tokens(system_text or "")
-        + _estimate_tokens(s["tag"])
-        + _estimate_tokens(s["question"])
-        + _estimate_tokens(s["wrap_up"])
-        + _estimate_tokens(s["footer"])
+        len(system_text or "")
+        + len(s["tag"])
+        + len(s["question"])
+        + len(s["wrap_up"])
+        + len(s["footer"])
     )
-    components = {
+    return {
         "system_overhead": system_overhead,
-        "dataset_schemas": _estimate_tokens(s["datasets"]),
+        "dataset_schemas": len(s["datasets"]),
         "dataset_notes": 0,
-        "memory": _estimate_tokens(s["memory"]),
-        "history": _estimate_tokens(s["history"]),
-        "action_history": _estimate_tokens(s["actions"]),
+        "memory": len(s["memory"]),
+        "history": len(s["history"]),
+        "action_history": len(s["actions"]),
     }
-    components["total_prompt"] = sum(components.values())
-    return components
+
+
+def _accumulate_component_chars(
+    prior: dict | None, this_iter: dict[str, int]
+) -> dict[str, int]:
+    """ADD this iteration's per-bucket char counts into the cumulative dict.
+
+    Defensive: a missing/empty prior dict starts every bucket at zero, and any
+    bucket absent from `prior` is treated as 0.
+    """
+    prior = prior or {}
+    return {
+        key: int(prior.get(key, 0)) + int(this_iter.get(key, 0))
+        for key in _PLAN_COMPONENT_KEYS
+    }
 
 
 def plan_action(state: AgentState) -> AgentState:
@@ -409,9 +434,13 @@ def plan_action(state: AgentState) -> AgentState:
     try:
         system = _load_prompt(_PLAN_PROMPT_PATH)
         prompt = _assemble_plan_prompt(state, wrap_up)
-        # C29: capture the partition of THIS (most recent) assembled prompt so the
-        # runner's prompt_breakdown describes the real last plan_action composition.
-        prompt_components = _plan_prompt_components(state, wrap_up, system)
+        # C29: measure THIS iteration's per-bucket char counts and ADD them into the
+        # cumulative dict on state, so the runner's prompt_breakdown describes the
+        # CUMULATIVE input composition of the whole query (aligned with "Last query In").
+        this_iter_chars = _plan_prompt_chars(state, wrap_up, system)
+        prompt_component_chars = _accumulate_component_chars(
+            state.get("prompt_component_chars"), this_iter_chars
+        )
         resp = LLMClient().complete(prompt, system=system)
     except Exception as exc:  # noqa: BLE001 — fatal LLM error
         logger.warning("plan_action_failed", run_id=state.get("run_id"), error=str(exc))
@@ -437,7 +466,7 @@ def plan_action(state: AgentState) -> AgentState:
         "iteration_count": iteration + 1,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
-        "prompt_components": prompt_components,
+        "prompt_component_chars": prompt_component_chars,
     }
 
 

@@ -25,18 +25,13 @@ from db.models import DatasetRow, QueryRunRow
 from db.session import create_db_session
 from graph.agent import agentic_ai
 from graph.cancellation import discard as discard_cancel
-from graph.nodes import _safe_memory_block, get_derived_created, release_derived_created
+from graph.nodes import get_derived_created, release_derived_created
 from graph.preflight import check_clarification, select_datasets
 from graph.state import AgentState
 from graph.suggestions import generate_suggestions
 from observability.events import get_logger
 
 logger = get_logger("graph.runner")
-
-
-def _estimate_tokens(text: str) -> int:
-    """~4 chars/token heuristic (matches nodes.py / suggestions.py)."""
-    return max(1, len(text or "") // 4)
 
 
 def _uploads_dir() -> Path:
@@ -95,8 +90,6 @@ def _peek_columns(dataset_id: str) -> list[str]:
     return []
 
 
-_PLAN_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "plan_action.md"
-
 # The six C29 component keys (the frontend renders these). `total_prompt` is their
 # exact sum — see spec/capabilities/context-window-display.md.
 _BREAKDOWN_COMPONENT_KEYS = (
@@ -109,63 +102,52 @@ _BREAKDOWN_COMPONENT_KEYS = (
 )
 
 
-def _load_plan_system_text() -> str:
-    """Load the plan_action.md system template (best-effort; empty on failure)."""
-    try:
-        return _PLAN_PROMPT_PATH.read_text(encoding="utf-8").strip()
-    except Exception as exc:  # noqa: BLE001 — breakdown is best-effort context
-        logger.warning("plan_prompt_load_failed", error=str(exc))
-        return ""
-
-
 def _build_prompt_breakdown(
     *,
-    prompt_components: dict | None,
-    question: str,
-    conversation_history: list[dict],
-    dataset_context: str,
-    memory_block: str,
-    action_history: list[dict],
-    dataset_notes: str = "",
+    prompt_component_chars: dict | None,
+    tokens_input: int,
+    tokens_output: int,
 ) -> dict[str, int]:
-    """C29: the composition of the LAST assembled plan_action prompt (char/4).
+    """C29: the CUMULATIVE input composition of the whole query, scaled to the real
+    provider-reported cumulative `tokens_input`.
 
-    The six components PARTITION that one representative prompt with no overlap and
-    no omission, so `total_prompt` == sum of the six EXACTLY. This describes prompt
-    *composition*, NOT the cumulative per-query token cost — that is reported
-    separately via `tokens_input`/`tokens_output` (the Token usage panel).
-    See spec/capabilities/context-window-display.md.
+    `plan_action` accumulates per-bucket CHAR counts across all ReAct iterations on
+    the state (`prompt_component_chars`). Here we scale those cumulative char counts
+    to the real cumulative `tokens_input`: each bucket gets
+    `round(cum[bucket] / total_chars * tokens_input)`, then the rounding residual is
+    added to the largest bucket so the six components sum EXACTLY to `tokens_input`.
+    `total_prompt` is the real cumulative input; `tokens_output` is the real
+    cumulative output (carried for the response). This aligns the breakdown with the
+    "Last query (In / Out)" row. See spec/capabilities/context-window-display.md.
 
-    Preferred path: the real measured partition `plan_action` stored on the state
-    (`prompt_components`). Fallback (a run that never planned — clarification
-    short-circuit, cancelled-before-plan): recompute a best-effort partition from
-    the available text, still including the `plan_action.md` system template in
-    `system_overhead` and still making `total_prompt` the exact sum.
+    Fallback (a run that never planned — clarification short-circuit,
+    cancelled-before-plan, or zero total chars): the six buckets are 0,
+    `total_prompt` is `tokens_input` (likely 0), `tokens_output` is `tokens_output`.
+    Never crashes.
     """
-    # Preferred: the real measured partition from the last plan_action call.
-    if prompt_components:
-        components = {key: int(prompt_components.get(key, 0)) for key in _BREAKDOWN_COMPONENT_KEYS}
-        components["total_prompt"] = sum(components.values())
+    cum = prompt_component_chars or {}
+    total_chars = sum(int(cum.get(key, 0)) for key in _BREAKDOWN_COMPONENT_KEYS)
+    real_in = int(tokens_input or 0)
+
+    if total_chars <= 0:
+        components = {key: 0 for key in _BREAKDOWN_COMPONENT_KEYS}
+        components["total_prompt"] = real_in
+        components["tokens_output"] = int(tokens_output or 0)
         return components
 
-    # Fallback: best-effort partition from whatever text is available. Mirrors the
-    # plan-prompt bucketing — notes are folded into dataset_schemas (no double-count).
-    history_text = "\n".join(
-        f"Q: {t.get('question', '')}\nA: {t.get('answer', '')}" for t in conversation_history
-    )
-    action_text = "\n".join(
-        f"{s.get('action', '')} -> {s.get('result', '')}" for s in action_history
-    )
-    system_overhead = _estimate_tokens(_load_plan_system_text()) + _estimate_tokens(question or "")
     components = {
-        "system_overhead": system_overhead,
-        "dataset_schemas": _estimate_tokens(dataset_context or "") + _estimate_tokens(dataset_notes or ""),
-        "dataset_notes": 0,
-        "memory": _estimate_tokens(memory_block or ""),
-        "history": _estimate_tokens(history_text),
-        "action_history": _estimate_tokens(action_text),
+        key: round(int(cum.get(key, 0)) / total_chars * real_in)
+        for key in _BREAKDOWN_COMPONENT_KEYS
     }
-    components["total_prompt"] = sum(components.values())
+    # Fix rounding so the six sum EXACTLY to real_in: push the residual into the
+    # largest bucket (the most stable place to absorb a +/-1 adjustment).
+    residual = real_in - sum(components.values())
+    if residual:
+        largest = max(_BREAKDOWN_COMPONENT_KEYS, key=lambda k: components[k])
+        components[largest] += residual
+
+    components["total_prompt"] = real_in
+    components["tokens_output"] = int(tokens_output or 0)
     return components
 
 
@@ -307,20 +289,10 @@ def run_agent(
     # the run-scoped registry, then release it.
     derived_dataset_ids = get_derived_created(run_id)
     release_derived_created(run_id)
-    dataset_context = final.get("dataset_context") or ""
     is_best_effort = status == "completed" and error_message in (
         "max_iterations",
         "consecutive_errors",
     )
-
-    # C29: collect dataset notes text for the prompt breakdown.
-    dataset_notes_text = ""
-    if resolved_ids:
-        with create_db_session() as _notes_session:
-            _notes_rows = [_notes_session.get(DatasetRow, did) for did in resolved_ids]
-            dataset_notes_text = " ".join(
-                (r.context or "").strip() for r in _notes_rows if r is not None
-            )
 
     # ------------------------------------------------------------------ #
     # Follow-up suggestions (graph-adjacent; add its tokens to the total).
@@ -333,18 +305,13 @@ def run_agent(
         tokens_input += s_in
         tokens_output += s_out
 
-    # C29 prompt breakdown: composition of the LAST assembled plan_action prompt.
-    # PREFER the real measured partition from plan_action; fall back to a best-effort
-    # recompute when the run never planned. NEVER set total_prompt to the cumulative
-    # tokens_input — that cumulative cost is reported via tokens_input/tokens_output.
+    # C29 prompt breakdown: the CUMULATIVE input composition of the whole query,
+    # scaled to the real cumulative tokens_input so it aligns with "Last query In".
+    # Carries tokens_output (the real cumulative output) for the response.
     prompt_breakdown = _build_prompt_breakdown(
-        prompt_components=final.get("prompt_components"),
-        question=question,
-        conversation_history=conversation_history,
-        dataset_context=dataset_context,
-        memory_block=_safe_memory_block(),
-        action_history=action_history,
-        dataset_notes=dataset_notes_text,
+        prompt_component_chars=final.get("prompt_component_chars"),
+        tokens_input=tokens_input,
+        tokens_output=tokens_output,
     )
 
     # ------------------------------------------------------------------ #

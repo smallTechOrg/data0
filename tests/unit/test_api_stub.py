@@ -190,16 +190,17 @@ def test_ask_single_dataset_returns_answer(api_client):
     assert len(data["steps"]) >= 1
     assert data["status"] == "completed"
     assert data["suggested_questions"] == []
-    # C29 prompt_breakdown is built from token estimates for every run regardless
-    # of provider (spec/api.md), so it is a populated dict — not {} — in Phase 3.
+    # C29 prompt_breakdown is built for every run regardless of provider
+    # (spec/api.md), so it is a populated dict — not {} — in Phase 3.
     assert isinstance(data["prompt_breakdown"], dict)
-    assert data["prompt_breakdown"]  # non-empty: carries the measured components
+    assert data["prompt_breakdown"]  # non-empty: carries the scaled components
     assert "total_prompt" in data["prompt_breakdown"]
     # All named spec components must be present (spec/capabilities/context-window-display.md).
     assert "dataset_notes" in data["prompt_breakdown"]
-    # C29: the six components PARTITION the most-recent plan_action prompt — they
-    # sum EXACTLY to total_prompt (no overlap, no omission). The breakdown describes
-    # prompt composition, not the cumulative per-query token cost.
+    # C29: the breakdown now represents the CUMULATIVE input of the whole query —
+    # the six components are scaled to sum EXACTLY to total_prompt, which equals the
+    # run's real cumulative tokens_input ("Last query In"). It also carries the real
+    # cumulative tokens_output.
     breakdown = data["prompt_breakdown"]
     component_keys = [
         "system_overhead",
@@ -211,10 +212,16 @@ def test_ask_single_dataset_returns_answer(api_client):
     ]
     for key in component_keys:
         assert key in breakdown, key
+    # The six components sum EXACTLY to total_prompt (rounding residual absorbed).
     assert sum(breakdown[key] for key in component_keys) == breakdown["total_prompt"]
-    # system_overhead now includes the plan_action.md system template, so it is a
-    # clearly non-trivial bucket (the largest fixed contributor).
-    assert breakdown["system_overhead"] > 100
+    # total_prompt == the run's real cumulative tokens_input.
+    run = api_client.get(f"/runs/{data['run_id']}").json()["data"]
+    assert breakdown["total_prompt"] == run["tokens_input"]
+    # tokens_output carries the run's real cumulative output.
+    assert breakdown["tokens_output"] == run["tokens_output"]
+    # system_overhead remains a present, non-trivial bucket (after scaling it may no
+    # longer be the largest — drop the "largest" assumption, just assert presence).
+    assert breakdown["system_overhead"] > 0
 
 
 def test_ask_404_when_dataset_missing(api_client):
