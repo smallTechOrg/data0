@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "jsx": "preserve",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "plotly.js": ["./.ds-stubs/plotly-stub.ts"],
+      "plotly.js-dist-min": ["./.ds-stubs/plotly-stub.ts"],
+      "jspdf": ["./.ds-stubs/jspdf-stub.ts"]
+    }
+  }
+}

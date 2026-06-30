@@ -1,38 +1,33 @@
 # Data Analysis Agent — UI components
 
-These are React components extracted from the **Data Analysis Agent** web app
-(a local tool: upload data, ask questions in plain English, get explainable
-answers). This sync covers the **presentational** subset — components that render
-from props alone. The app's data-bound components (upload, tables, sessions,
-conversation, token usage, database tab) are intentionally **not** included
-because they fetch from the app's backend on mount.
+React components from the **Data Analysis Agent** web app (a local tool: upload
+data, ask questions in plain English, get explainable answers). This library is
+the **prop-driven, presentational** surface of the app: the original presentational
+components plus `…View` primitives extracted from the data-bound components (their
+containers keep the fetching; the `…View`s hold the markup and take data via props).
 
 ## Setup / wrapping
 
-- **No provider or theme wrapper is required.** Every component here renders
-  standalone from its props. Import and render directly.
-- All components are React client components — render them in a browser/client
-  context, not as server-only output.
-- Each component's API is its `<Name>.d.ts` (the `<Name>Props` interface). Read
-  it before composing — props are the only configuration surface.
+- **No provider or theme wrapper is required.** Every component renders standalone
+  from its props. Import and render directly.
+- All components are React client components — render in a browser/client context.
+- Each component's API is its `<Name>.d.ts` (`<Name>Props`). Read it before
+  composing — props are the only configuration surface. The `…View` components are
+  pure: pass them data + `on*` callbacks.
 
 ## Styling idiom — Tailwind utility classes (with one caveat)
 
-The components are styled with **Tailwind CSS utility classes** baked into their
-markup. The shipped `styles.css` carries the **compiled subset of Tailwind that
-these components actually use** — it is NOT a full Tailwind build.
+Components are styled with **Tailwind CSS utility classes** baked into their markup.
+The shipped `styles.css` carries the **compiled subset of Tailwind these components
+use** — NOT a full Tailwind build.
 
-- The components render fully styled out of the box (colors, spacing, borders,
-  rounded corners) — you do not configure Tailwind to use them.
-- **Caveat for your own layout glue:** an arbitrary Tailwind class you invent
-  (e.g. `bg-purple-500`) may not exist in the shipped CSS, so it can render
-  unstyled. Prefer **inline `style={{…}}`** for your own wrapper layout, or reuse
-  the class vocabulary the components already use. Common families present
-  (used by these components): `flex`, `items-center`, `justify-between`, `gap-*`,
-  `rounded-md`/`rounded-full`, `border`, `px-*`/`py-*`/`mt-*`/`mb-*`,
-  `text-xs`/`text-sm`, `font-medium`/`font-semibold`, and the gray / blue /
-  amber / green palette (`text-gray-*`, `bg-gray-50`, `bg-blue-50`,
-  `text-blue-700`, `bg-amber-50`, `text-amber-900`).
+- Components render fully styled out of the box.
+- **Caveat for your own layout glue:** an arbitrary Tailwind class you invent may
+  not exist in the shipped CSS and can render unstyled. Prefer **inline `style={{…}}`**
+  for your own wrappers, or reuse the components' class vocabulary: `flex`,
+  `items-center`, `justify-between`, `gap-*`, `rounded-md`/`rounded-full`, `border`,
+  `px-*`/`py-*`, `text-xs`/`text-sm`, `font-medium`/`font-semibold`, and the gray /
+  blue / amber / green / rose palette.
 
 ## Where the truth lives
 
@@ -40,29 +35,38 @@ these components actually use** — it is NOT a full Tailwind build.
 - Styles: `styles.css` and its `@import` closure (`_ds_bundle.css`).
 - Per-component usage: `components/<group>/<Name>/<Name>.prompt.md`.
 
-## Component summary
+## Components
 
-- **StubBanner** — yellow offline-mode banner (`provider="stub"`).
-- **ProgressBar** — live agent progress (`label`, `iteration`, `max`); pass
-  `iteration={null}` for an indeterminate state.
-- **SuggestionChips** — clickable follow-up chips (`suggestions: string[]`,
-  `onPick`).
-- **Markdown** — renders a markdown string (`children`) with GFM tables/lists.
-- **ClarificationTurn** — amber "agent is asking" turn (`clarificationQuestion`,
-  `onResubmit`).
-- **PromptBreakdown** / **StepsInspector** — collapsible widgets; they render
-  collapsed by default and expand on click.
+**Answer / conversation:**
+- `Markdown` — renders an answer's markdown (GFM tables/lists).
+- `ConversationTurnView` — a full Q&A turn: question, markdown answer, steps,
+  suggestion chips, token breakdown. (Charts are stubbed in this bundle — pass a
+  turn without `charts`; chart rendering needs the live app's plotly.)
+- `SuggestionChips` — follow-up chips. `ClarificationTurn` — amber "agent asks".
+- `StepsInspector` / `PromptBreakdown` — collapsible widgets (render collapsed).
+- `ProgressBar` — live agent progress. `StubBanner` — offline-mode banner.
+
+**Data / sidebar panels (extracted `…View`s — pass data via props):**
+- `TokenWidgetView` — token-usage + cost panel.
+- `SessionSidebarView` — conversation session list.
+- `TablesCardView` — datasets/tables list with filters + actions.
+- `TableDescriptionPanelView` — one dataset's schema, keys, notes, preview.
+- `ERDiagramPanel` — ER diagram of datasets with inferred FK edges.
+- `UploadCard` — file drop zone.
+
+**Modals (`…View`s — render with `open`/data props):**
+- `MemoryModalView`, `SettingsPanelView`, `CleanModalView`.
 
 ## One idiomatic build snippet
 
 ```tsx
-import { Markdown, SuggestionChips } from 'agent-frontend'
+import { ConversationTurnView, SuggestionChips } from 'agent-frontend'
 
-function AnswerBlock({ answer, followups }: { answer: string; followups: string[] }) {
+function AnswerPanel({ turn }) {
   return (
-    <div style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <Markdown>{answer}</Markdown>
-      <SuggestionChips suggestions={followups} onPick={(q) => console.log(q)} />
+    <div style={{ maxWidth: 720, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <ConversationTurnView turn={turn} expanded collapsible
+        onToggle={() => {}} onResubmitClarification={() => {}} busy={false} />
     </div>
   )
 }

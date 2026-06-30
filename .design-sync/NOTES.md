@@ -18,16 +18,34 @@ Repo-specific gotchas for future syncs.
 - Build command: `node .ds-sync/package-build.mjs --config .design-sync/config.json
   --node-modules ./frontend/node_modules --entry ./frontend/.ds-entry.tsx --out ./ds-bundle`
 
-## Scope decision
+## Scope decision (now 17 components)
 
-- Synced the **7 presentational components** only: StubBanner, ProgressBar,
-  SuggestionChips, Markdown, ClarificationTurn, PromptBreakdown, StepsInspector.
-- The other 14 components were excluded because they **fetch from the backend on
-  mount** (TokenWidget, SessionSidebar, TablesCard, ConversationCard, DatabaseTab,
-  MemoryModal, SettingsPanel, UploadCard, AppShell, AnalyseTab, ChartRender,
-  CleanModal, ERDiagramPanel, TableDescriptionPanel) and cannot render standalone
-  in the design tool. ChartRender also pulls in plotly.js (~9 MB bundle, over the
-  5 MB upload cap).
+- Original 7 presentational: StubBanner, ProgressBar, SuggestionChips, Markdown,
+  ClarificationTurn, PromptBreakdown, StepsInspector.
+- **Refactor (container/View split, committed to the app):** the data-bound
+  components were split into a fetching container + a pure `<Name>View`. The Views
+  are synced: TokenWidgetView, SessionSidebarView, TablesCardView,
+  TableDescriptionPanelView, MemoryModalView, SettingsPanelView, CleanModalView,
+  ConversationTurnView (extracted from ConversationCard). To re-sync these you need
+  the View exports present — the split lives in the same source files.
+- Already prop-driven, synced as-is: ERDiagramPanel, UploadCard.
+- **Excluded:** AppShell / AnalyseTab / DatabaseTab (page-shell orchestration, not
+  primitives), and **ChartRender** (a thin plotly wrapper; plotly can't ship — see
+  below).
+
+## Plotly / jspdf stub (bundle size)
+
+- ChartRender (and therefore ConversationTurnView, which composes it) dynamically
+  imports `plotly.js-dist-min` (~9 MB) and `jspdf`. Those can't ship in the bundle
+  (5 MB cap) and the converter only externalizes React.
+- Fix: `frontend/.ds-bundle-tsconfig.json` (set as `cfg.tsconfig`) maps
+  `plotly.js-dist-min` / `plotly.js` / `jspdf` to no-op stubs in
+  `frontend/.ds-stubs/`. Keeps the bundle ~0.6 MB.
+- **Consequence:** charts do NOT render in the design tool. ConversationTurnView
+  previews/usage must pass turns WITHOUT a `charts` array. In the real app, charts
+  work (real plotly); in design-built UIs they won't. Documented in conventions.md.
+- Re-sync: `.ds-bundle-tsconfig.json` + `.ds-stubs/` are committed sync inputs —
+  keep `cfg.tsconfig` pointed at the bundle tsconfig, not the app `tsconfig.json`.
 
 ## Known render warns
 

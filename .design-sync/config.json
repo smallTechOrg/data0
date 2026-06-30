@@ -5,7 +5,7 @@
   "globalName": "DAA",
   "entry": "./frontend/.ds-entry.tsx",
   "srcDir": "src/components",
-  "tsconfig": "tsconfig.json",
+  "tsconfig": ".ds-bundle-tsconfig.json",
   "cssEntry": "out/_next/static/css/6fbfb0b73c640c7b.css",
   "readmeHeader": ".design-sync/conventions.md",
   "componentSrcMap": {
@@ -15,6 +15,16 @@
     "Markdown": "src/components/analyse/Markdown.tsx",
     "ClarificationTurn": "src/components/analyse/ClarificationTurn.tsx",
     "PromptBreakdown": "src/components/analyse/PromptBreakdown.tsx",
-    "StepsInspector": "src/components/analyse/StepsInspector.tsx"
+    "StepsInspector": "src/components/analyse/StepsInspector.tsx",
+    "TokenWidgetView": "src/components/analyse/TokenWidget.tsx",
+    "MemoryModalView": "src/components/analyse/MemoryModal.tsx",
+    "SettingsPanelView": "src/components/analyse/SettingsPanel.tsx",
+    "CleanModalView": "src/components/database/CleanModal.tsx",
+    "SessionSidebarView": "src/components/analyse/SessionSidebar.tsx",
+    "TablesCardView": "src/components/analyse/TablesCard.tsx",
+    "TableDescriptionPanelView": "src/components/database/TableDescriptionPanel.tsx",
+    "ConversationTurnView": "src/components/analyse/ConversationTurnView.tsx",
+    "ERDiagramPanel": "src/components/database/ERDiagramPanel.tsx",
+    "UploadCard": "src/components/analyse/UploadCard.tsx"
   }
 }
