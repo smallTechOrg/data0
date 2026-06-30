@@ -80,6 +80,8 @@ Pre-flight C26 (unless `skip_clarification`) → may return `{type:"clarificatio
 
 > **`charts` field:** a list of Plotly figure JSON strings (`list[str]`). Each element is the serialised output of `plotly.graph_objects.Figure.to_json()` — a self-contained Plotly spec that can be passed directly to `Plotly.react()` / `JSON.parse()`. The list is empty (`[]`) when the agent produced no charts during the run. Charts are also persisted to `query_runs.charts_json` and surfaced via `GET /sessions/{id}` on each turn.
 
+> **`prompt_breakdown` field (C29):** an object built by `_build_prompt_breakdown` (see `src/graph/runner.py`) describing the run's CUMULATIVE input composition. Keys: the six components `system_overhead`, `dataset_schemas`, `dataset_notes`, `memory`, `history`, `action_history` (each an integer token count), plus `total_prompt` and `tokens_output`. The six components are derived by accumulating per-bucket char counts across all ReAct iterations and **scaling** them to the real cumulative `tokens_input` (rounding residual absorbed into the largest bucket). **Invariant:** the six components sum **EXACTLY** to `total_prompt`, and `total_prompt` equals the run's REAL cumulative `tokens_input`. `tokens_output` carries the run's REAL cumulative output tokens. Fallback for a run that never planned (clarification short-circuit / cancelled-before-plan / zero total chars): the six buckets are `0`, `total_prompt` is the (likely `0`) `tokens_input`, and `tokens_output` is the cumulative output. See `spec/capabilities/context-window-display.md`.
+
 | Status | Condition |
 |--------|-----------|
 | 404 | dataset or session not found |
@@ -124,9 +126,11 @@ Cooperatively cancel an in-flight run — the UI **Stop** button. Flags the run 
 > **Active runs routes:** `GET /runs/current`, `GET /runs/{run_id}`, and `POST /runs/{run_id}/cancel` are active. The boilerplate `POST /runs` route from the skeleton was removed — analysis runs are created exclusively via `POST /ask`.
 
 ### `GET /stats/daily`
-`{date, model, tokens_input, tokens_output, query_count, context_limit, last_prompt_tokens}` aggregated over today's completed runs (server-local day); `context_limit` from a hard-coded model table (unknown → 128000). Always 200.
+`{date, model, tokens_input, tokens_output, query_count, context_limit, last_prompt_tokens, last_tokens_input, last_tokens_output}` aggregated over today's completed runs (server-local day); `context_limit` from a hard-coded model table (unknown → 128000). Always 200.
 
 > **`last_prompt_tokens`:** an integer — the MOST RECENT completed run's input (`tokens_input`) tokens, i.e. the last query's prompt size (not the cumulative daily total). This is the per-request value the C29 context-window bar plots against `context_limit`; `0` when there are no completed runs today.
+
+> **`last_tokens_input` / `last_tokens_output`:** integers — the latest completed run's input and output tokens. `last_tokens_input` is an explicit alias of `last_prompt_tokens`; `last_tokens_output` is the latest run's output tokens. The TokenWidget uses both to repopulate the "Last query (In / Out)" row after a reload/resume (when the live in-memory counts are gone). Each `0` when there are no completed runs today.
 
 ### `GET /memory` and `PATCH /memory`
 Read / replace the global persistent memory text; PATCH triggers C31 compression. Memory is injected into every `plan_action` prompt as authoritative. Always 200 on read; PATCH **400** if body invalid.

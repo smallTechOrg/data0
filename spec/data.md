@@ -48,11 +48,11 @@ One analysis run (one question → one answer), with its full step history.
 | answer | Text | no | Final Markdown answer |
 | status | Text | yes | `pending` \| `running` \| `completed` \| `failed` \| `clarification` |
 | error_message | Text | no | Failure reason, or `max_iterations` / `consecutive_errors` (informational on completed force-finalize) |
-| action_history | JSON | no | `[{action, result, is_error}]` (C23 steps) |
+| action_history | JSON | no | `[{action, result, is_error, reasoning}]` (C23 steps; `reasoning` is the C33 per-step rationale, `""` when the model emitted none) |
 | iteration_count | Integer | yes | Steps taken (live-polled, C22) |
 | tokens_input | Integer | yes | Accumulated prompt tokens (C7) |
 | tokens_output | Integer | yes | Accumulated completion tokens (C7) |
-| prompt_breakdown | JSON | no | C29 per-component token estimate |
+| prompt_breakdown | JSON | no | C29 token breakdown: six components scaled to sum to `total_prompt` (= cumulative `tokens_input`), plus `tokens_output` |
 | charts_json | JSON | no | Persisted chart array from the run; reloaded as `charts[]` in `GET /sessions/{id}` turns so charts survive server restarts |
 | dataset_ids_json | JSON | no | All datasets loaded for this run (C14) |
 | selector_reasoning | Text | no | C19 selector rationale |

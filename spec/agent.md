@@ -54,7 +54,7 @@ The agent does not use the LLM-native tool-calling API; its single "tool" is **e
 
 **Tool selection strategy:** The LLM chooses the next pandas expression each iteration (free-form reasoning). The agent does not route between multiple tools — it either executes the expression or, on `FINAL ANSWER:`, finalizes.
 
-**Tool failure handling:** An exception in `execute_action` is caught, recorded as `{action, result, is_error: true}` in `action_history`, and the graph routes **back to `plan_action`** so the model self-corrects (recoverable). Three consecutive errors → `force_finalize`. A fatal error (e.g. DataFrame load failure in `setup`) → `handle_error`.
+**Tool failure handling:** An exception in `execute_action` is caught, recorded as `{action, result, is_error: true, reasoning}` in `action_history`, and the graph routes **back to `plan_action`** so the model self-corrects (recoverable). Three consecutive errors → `force_finalize`. A fatal error (e.g. DataFrame load failure in `setup`) → `handle_error`.
 
 ---
 
@@ -73,12 +73,13 @@ class AgentState(TypedDict, total=False):
     conversation_history: list[dict]     # prior turns {question, answer} for the session
 
     # Pipeline data (populated progressively by nodes)
-    action_history: list[dict]           # [{action, result, is_error}] appended by execute_action
+    action_history: list[dict]           # [{action, result, is_error, reasoning}] appended by execute_action (reasoning="" when the model emitted no REASONING: line, C33)
     iteration_count: int                 # incremented by plan_action
     llm_response: str                    # latest raw model reply (action or FINAL ANSWER)
     tokens_input: int                    # accumulated prompt tokens
     tokens_output: int                   # accumulated completion tokens
     charts: list[str]                    # Plotly figure JSON strings captured in execute_action
+    prompt_component_chars: dict         # C29: CUMULATIVE per-bucket char counts summed across all plan_action calls (used to build the prompt_breakdown)
 
     # Output
     answer: str | None                   # final markdown answer (FINAL ANSWER stripped)
@@ -110,7 +111,7 @@ This replaces the skeleton's 4-field `AgentState`. `TypedDict, total=False` per 
 
 ### `plan_action`
 
-**Reads:** `question`, `action_history`, `conversation_history`, `dataset_context`, `iteration_count`. **Writes:** `llm_response`, `iteration_count` (+1), `tokens_input`, `tokens_output`. **LLM:** yes — `plan_action.md` system prompt + assembled context + injected `<node:plan>` tag.
+**Reads:** `question`, `action_history`, `conversation_history`, `dataset_context`, `iteration_count`. **Writes:** `llm_response`, `iteration_count` (+1), `tokens_input`, `tokens_output`, `prompt_component_chars` (C29: accumulates this iteration's per-bucket char counts into the cumulative dict). **LLM:** yes — `plan_action.md` system prompt + assembled context + injected `<node:plan>` tag.
 
 **Behaviour:** Assemble the prompt (question + Action/Result/Error transcript + conversation history + dataset context + persistent memory + column schema), call the LLM, store the reply, increment `iteration_count`, add token counts. When `iteration_count >= max_iterations - 2`, append a wrap-up instruction telling the model to produce `FINAL ANSWER:` now from its best findings (no extra LLM call). A fatal LLM error sets `error`.
 
@@ -118,7 +119,7 @@ This replaces the skeleton's 4-field `AgentState`. `TypedDict, total=False` per 
 
 **Reads:** `llm_response`, `action_history`, `iteration_count`, the loaded DataFrame(s). **Writes:** `action_history`, `charts`. **LLM:** no.
 
-**Behaviour:** First run the planner reply through `_extract_code` — it strips a ```` ```python ```` / bare ```` ``` ```` fence (taking the LAST fenced block when several are present) and inline-code backticks (`` `expr` ``), falling back to the bare reply — so a model that wraps its action in a fence + reasoning prose still has its REAL code executed instead of `eval()` choking on the prose. Then eval/exec the extracted pandas expression in the sandbox namespace; capture charts as JSON into `charts` from three sources (the directly-returned figure, any `go.Figure` reachable in the namespace, and — as a FALLBACK — any OPEN matplotlib figures converted via `plotly.tools.mpl_to_plotly` so a model that used `.plot()`/`plt.*` instead of Plotly still yields a chart; the prompt still steers models to Plotly); convert the result to a string; append `{action, result, is_error}` to `action_history`; write `iteration_count` to the DB each step for live progress polling (`GET /runs/current`). On exception, mark `is_error=true` and route back to `plan_action` to self-correct (recoverable). 3 consecutive errors OR max-iter → `force_finalize`. A non-recoverable fatal error → `handle_error`.
+**Behaviour:** First split an OPTIONAL leading `REASONING:` line off `llm_response` (C33): if the first non-empty line starts with `REASONING:` (case-insensitive), its text is this step's `reasoning` and the REMAINDER flows on unchanged; otherwise `reasoning=""` and the whole reply flows on. Then run the (remaining) planner reply through `_extract_code` — it strips a ```` ```python ```` / bare ```` ``` ```` fence (taking the LAST fenced block when several are present) and inline-code backticks (`` `expr` ``), falling back to the bare reply — so a model that wraps its action in a fence + reasoning prose still has its REAL code executed instead of `eval()` choking on the prose. Then eval/exec the extracted pandas expression in the sandbox namespace; capture charts as JSON into `charts` from three sources (the directly-returned figure, any `go.Figure` reachable in the namespace, and — as a FALLBACK — any OPEN matplotlib figures converted via `plotly.tools.mpl_to_plotly` so a model that used `.plot()`/`plt.*` instead of Plotly still yields a chart; the prompt still steers models to Plotly); convert the result to a string; append `{action, result, is_error, reasoning}` to `action_history` (`reasoning=""` when no `REASONING:` line was emitted, C33); write `iteration_count` to the DB each step for live progress polling (`GET /runs/current`). On exception, mark `is_error=true` and route back to `plan_action` to self-correct (recoverable). 3 consecutive errors OR max-iter → `force_finalize`. A non-recoverable fatal error → `handle_error`.
 
 | System | Operation | On Failure |
 |--------|-----------|------------|
@@ -229,7 +230,7 @@ The stub provider (offline fallback) branches **only on the injected node tag**,
 | **Conversation** | `conversation_sessions` + `query_runs` (`session_id`) | prior turns; loaded into `conversation_history` for multi-turn |
 | **Dataset notes** | `datasets.context` / `context_facts` | per-dataset notes injected into `dataset_context` |
 
-**Context window management:** `dataset_context` uses notes/compressed facts rather than full data; `action_history` is the running transcript; the C29 `prompt_breakdown` measures each component (system_overhead, dataset_schemas, history, memory, dataset_notes, action_history, total_prompt). When approaching `max_iterations`, the wrap-up instruction forces a `FINAL ANSWER:` rather than growing the context further.
+**Context window management:** `dataset_context` uses notes/compressed facts rather than full data; `action_history` is the running transcript (each entry `{action, result, is_error, reasoning}`, where `reasoning` is the per-step C33 rationale, `""` when the model emitted no `REASONING:` line). The C29 `prompt_breakdown` carries the six components (system_overhead, dataset_schemas, dataset_notes, memory, history, action_history) **scaled to sum EXACTLY to** `total_prompt` (= the run's real cumulative `tokens_input`), plus `tokens_output` (the run's real cumulative output). See `spec/capabilities/context-window-display.md`. When approaching `max_iterations`, the wrap-up instruction forces a `FINAL ANSWER:` rather than growing the context further.
 
 ---
 
