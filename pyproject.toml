@@ -18,7 +18,6 @@ dependencies = [
     "pyarrow>=16",
     "openpyxl>=3.1",
     "xlrd>=2.0",
-    "plotly>=5.22",
     "matplotlib>=3.9",
     "seaborn>=0.13",
     "scipy>=1.13",
