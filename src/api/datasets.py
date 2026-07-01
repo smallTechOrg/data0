@@ -396,6 +396,9 @@ def _delete_one(session: Session, dataset_id: str) -> int:
         session.delete(r)
     _delete_sessions_referencing(session, dataset_id)
     session.delete(row)
+    # Evict any cached DataFrame so a session that already loaded this dataset
+    # falls through to a real "not found" instead of serving stale data (C27).
+    invalidate_dataset_cache(dataset_id)
     return len(runs_to_delete)
 
 
@@ -441,6 +444,9 @@ def delete_all_datasets(session: Session = Depends(get_session)) -> dict:
     for row in rows:
         _delete_files(row)
         session.delete(row)
+        # Evict any cached DataFrame for this dataset (C27) — mirrors the
+        # single-delete path so no session keeps serving a deleted dataset.
+        invalidate_dataset_cache(row.id)
     # Clearing the whole data universe also clears every query_run...
     runs = session.execute(select(QueryRunRow)).scalars().all()
     for r in runs:

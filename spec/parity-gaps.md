@@ -4,7 +4,7 @@
 > **This repo (B):** the gen-3-harness rebuild of A. Source for capability IDs: `spec/capabilities/index.md` (C1–C32; C5/C28 don't exist → 30 capabilities).
 >
 > Audit date: **2026-06-29**, verified against actual code + tests (not commit messages).
-> **Scoreboard: 21 / 30 at parity or ahead · 9 gaps remaining** (2 correctness/overclaim · 3 cheap functional · 4 ingestion-UX).
+> **Scoreboard: 23 / 30 at parity or ahead · 7 gaps remaining** (0 correctness/overclaim · 3 cheap functional · 4 ingestion-UX).
 >
 > Drive each item with `/zero-shot-fix` from this repo. Every fix must pass the phase gate against the **real Gemini key** in `.env` before it counts — a stubbed pass does not.
 
@@ -21,8 +21,8 @@ This branch is fully pushed to its upstream (`fork/feature/data-analysis-agent-v
 - [x] **C31 — Semantic compression wired (2026-06-29).** `setup` now injects compressed `context_facts` into the dataset context (prefer-facts), with raw-notes fallback + lazy fire-and-forget self-heal when notes exist but facts don't — matching A. Tests in `tests/unit/test_graph_stub.py` (prefer-facts / fallback+self-heal / pure-decision). Offline gate green (197 passed). *Real-Gemini gate (`extract_facts` quality) still to run.*
   - Files: `src/graph/nodes.py` (`_dataset_notes_for_prompt`, `_facts_as_notes`, `_trigger_facts_self_heal`, `setup` call site)
 
-- [ ] **C27 — Session DataFrame cache can serve stale frames.** Count-based LRU only; missing `_invalidate_dataset` on clean / re-derive / delete (and A's byte-bounded eviction via `memory_usage` / `cache_limit_mb`). A cleaned or re-derived dataset can return cached pre-change rows within a session. Add invalidation (and ideally the byte bound).
-  - Files: `src/graph/nodes.py` (cache block), call sites in `src/api/datasets_ops.py`, `src/graph/derived.py`
+- [x] **C27 — Session DataFrame cache invalidation on delete (2026-07-01).** `clean`/`apply` and re-derive already called `invalidate_dataset_cache`; `delete_dataset`/`delete_all_datasets` did not, so a deleted dataset's stale in-memory frame could still be served mid-session. Added `invalidate_dataset_cache` calls to `_delete_one` (covers the direct target + cascade-deleted derived children) and to `delete_all_datasets`'s per-row loop. Regression tests in `tests/unit/test_datasets_delete_cache.py` (single delete, cascade, delete-all), red-before/green-after confirmed. Offline gate green (249 unit + 16 integration passed, 3 pre-existing provider-key skips). Byte-bounded eviction (`cache_limit_mb`) remains a nice-to-have, not required by spec — deferred.
+  - Files: `src/api/datasets.py` (`_delete_one`, `delete_all_datasets`), `src/graph/nodes.py` (`invalidate_dataset_cache`)
 
 - [x] **C29 — Prompt breakdown panel already shipped (re-verified 2026-07-01).** This entry predates the fix: `PromptBreakdown.tsx` renders the per-component breakdown (collapsible bars, ARIA `progressbar`, total/output summary), wired into `ConversationTurnView.tsx` (gated on `answer.prompt_breakdown`), fed by `runner.py`'s `_build_prompt_breakdown` via `query_runs.prompt_breakdown` → `/ask` + session/turn payloads. Confirmed live by `503e5b2`, `d846cb4`, `e28a37a`. **Remaining cosmetic-only question:** A puts the panel inside the Steps inspector; this build renders it at the conversation-turn level instead — not re-verified against A's exact placement, not treated as a functional gap.
   - Files: `frontend/src/components/analyse/PromptBreakdown.tsx`, `frontend/src/components/analyse/ConversationTurnView.tsx`, `src/graph/runner.py`
