@@ -343,15 +343,20 @@ html {
   background-color: var(--tint-stub);
 }
 
-/* Tab-switcher active label (AppShell.tsx, not design-synced): track
-   accent-solid in light mode, but force pure white in dark mode — the
-   active pill's background is --surface, which in dark mode sits close in
-   tone to every accent hue, so an accent-colored label doesn't stand out
-   the way it does against a white pill in light mode. */
-[data-theme] .tab-active-label {
-  color: var(--accent-solid);
+/* Tab-switcher active pill (AppShell.tsx, not design-synced): a filled
+   accent-solid capsule with white text, in both themes — reads as a bright
+   accent-colored pill against the deep indigo-900 header bar, rather than a
+   white (light mode) / near-black (dark mode, since bg-white maps to
+   --surface) block whose text color has to fight for contrast. */
+.tab-active-pill {
+  background-color: var(--accent-solid);
 }
-[data-theme='dark'] .tab-active-label {
+
+/* "Project notes" button (SessionSidebar.tsx, not design-synced): its default
+   text-gray-600 (--text-secondary) is readable but faint in dark mode against
+   the sidebar card's --surface — force pure white so it matches the header's
+   old "Project notes" button (removed as a duplicate) at a glance. */
+[data-theme='dark'] .project-notes-btn {
   color: #ffffff;
 }
 

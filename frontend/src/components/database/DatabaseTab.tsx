@@ -94,9 +94,9 @@ export function DatabaseTab() {
   const isEmpty = !loading && !error && datasets.length === 0
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
         <div>
           <h2 className="text-sm font-semibold text-gray-800">Database</h2>
           <p className="mt-0.5 text-xs text-gray-500 tabular-nums">

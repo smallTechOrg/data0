@@ -679,9 +679,9 @@ export function ERDiagramPanel({
   return (
     <section
       aria-labelledby="schema-heading"
-      className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+      className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm"
     >
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <h2 id="schema-heading" className="text-sm font-semibold text-gray-800">
           Schema
         </h2>

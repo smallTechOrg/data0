@@ -371,7 +371,7 @@ export function TableDescriptionPanelView({
   return (
     <section
       aria-labelledby="description-heading"
-      className="flex flex-col rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+      className="flex flex-col rounded-lg border border-gray-200 bg-white p-3 shadow-sm"
     >
       <div className="mb-3 flex items-center justify-between gap-2">
         <h2 id="description-heading" className="text-sm font-semibold text-gray-800">

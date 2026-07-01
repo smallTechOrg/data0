@@ -20,7 +20,7 @@ export const DENSITIES: readonly Density[] = ['compact', 'comfortable', 'spaciou
 
 export const DEFAULT_THEME: Theme = 'light'
 export const DEFAULT_ACCENT: Accent = 'blue'
-export const DEFAULT_DENSITY: Density = 'comfortable'
+export const DEFAULT_DENSITY: Density = 'compact'
 
 const STORAGE_KEYS = {
   theme: 'daa.theme',
@@ -38,19 +38,17 @@ function isTheme(value: string | null): value is Theme {
   return value === 'light' || value === 'dark'
 }
 
-function isAccent(value: string | null): value is Accent {
-  return value === 'blue' || value === 'purple' || value === 'green' || value === 'orange'
-}
-
-function isDensity(value: string | null): value is Density {
-  return value === 'compact' || value === 'comfortable' || value === 'spacious'
-}
-
 /**
  * Reads persisted preferences from `localStorage`, falling back to defaults
  * for any key that is absent or holds an unrecognised value. Safe to call in
  * non-browser contexts (returns defaults) — guards every `localStorage`
  * access so a SSR/build-time call never throws.
+ *
+ * Accent and density are pinned to their defaults regardless of any stored
+ * value — there is no picker for either (indigo accent + compact density are
+ * fixed product decisions, not user preferences) — but the `data-accent`/
+ * `data-density` attribute contract stays in place for `ChartRender.tsx` and
+ * the CSS remap, which still key off them.
  */
 export function readStoredPrefs(storage?: Storage): ThemePrefs {
   const store = storage ?? (typeof window !== 'undefined' ? window.localStorage : undefined)
@@ -60,12 +58,8 @@ export function readStoredPrefs(storage?: Storage): ThemePrefs {
   }
 
   let rawTheme: string | null = null
-  let rawAccent: string | null = null
-  let rawDensity: string | null = null
   try {
     rawTheme = store.getItem(STORAGE_KEYS.theme)
-    rawAccent = store.getItem(STORAGE_KEYS.accent)
-    rawDensity = store.getItem(STORAGE_KEYS.density)
   } catch {
     // localStorage can throw (e.g. disabled/private-mode quota) — fall back
     // to defaults rather than let a preference read crash the app.
@@ -73,8 +67,8 @@ export function readStoredPrefs(storage?: Storage): ThemePrefs {
 
   return {
     theme: isTheme(rawTheme) ? rawTheme : DEFAULT_THEME,
-    accent: isAccent(rawAccent) ? rawAccent : DEFAULT_ACCENT,
-    density: isDensity(rawDensity) ? rawDensity : DEFAULT_DENSITY,
+    accent: DEFAULT_ACCENT,
+    density: DEFAULT_DENSITY,
   }
 }
 

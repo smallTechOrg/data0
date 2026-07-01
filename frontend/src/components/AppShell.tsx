@@ -80,17 +80,17 @@ export function AppShell() {
       {/* Header — solid indigo bar: title (left), pill tabs (inline), and the
           Live badge + Project notes button (right). */}
       <header className="bg-indigo-900 text-white shadow-lg">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-x-8 gap-y-4 px-6 py-5">
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-x-8 gap-y-2 px-6 py-3">
           {/* Left: title + thin tagline + inline pill tabs */}
-          <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
             <div>
-              <div className="flex items-center gap-3">
-                <span className="text-3xl">📊</span>
-                <h1 className="text-2xl font-bold leading-tight tracking-tighter">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">📊</span>
+                <h1 className="text-lg font-bold leading-tight tracking-tighter">
                   Data Analysis Agent
                 </h1>
               </div>
-              <p className="mt-1 text-sm font-normal text-indigo-200">
+              <p className="text-xs font-normal text-indigo-200">
                 Ask questions, get explainable answers.
               </p>
             </div>
@@ -112,32 +112,25 @@ export function AppShell() {
             </div>
           </div>
 
-          {/* Right: theme/accent/density controls + live badge + Project notes */}
-          <div className="flex items-center gap-4">
+          {/* Right: theme toggle + live badge. Project notes lives only in the
+              Sessions sidebar now — this header used to duplicate it. */}
+          <div className="flex items-center gap-3">
             <ThemeControls prefs={themePrefs} onChange={setThemePrefs} />
             {isLive && (
               <span
-                className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3.5 py-2 text-sm font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/20"
+                className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3.5 py-1.5 text-sm font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/20"
                 title={`Live — provider: ${provider}${model ? `, model: ${model}` : ''}`}
               >
                 <span aria-hidden="true" className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
                 Live · {model ?? provider}
               </span>
             )}
-            <button
-              type="button"
-              onClick={() => setMemoryOpen(true)}
-              title="Edit the agent's global project notes (memory)"
-              className="rounded-lg bg-white/15 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/25 backdrop-blur-sm"
-            >
-              📝 Project notes
-            </button>
           </div>
         </div>
       </header>
 
       {/* Active tab */}
-      <main className="mx-auto max-w-[1600px] px-6 py-8">
+      <main className="mx-auto max-w-[1600px] px-6 py-4">
         {/* Analyse stays MOUNTED across tab switches (only hidden) so the active
             session + conversation survive a trip to the Database tab — clicking
             Database must not reset it. Database re-mounts on show for its fetch. */}
@@ -191,9 +184,7 @@ function TabButton({
       aria-controls={`panel-${label.toLowerCase()}`}
       onClick={onClick}
       className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${
-        active
-          ? 'bg-white tab-active-label shadow-md'
-          : 'text-white hover:bg-white/20'
+        active ? 'tab-active-pill text-white shadow-md' : 'text-white hover:bg-white/20'
       }`}
     >
       {label}

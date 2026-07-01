@@ -57,7 +57,7 @@ class FakeElement {
   }
 }
 
-test('readStoredPrefs returns light/blue/comfortable defaults when storage is empty', () => {
+test('readStoredPrefs returns light/blue/compact defaults when storage is empty', () => {
   const storage = new MemoryStorage()
   const prefs = readStoredPrefs(storage)
   assert.equal(prefs.theme, DEFAULT_THEME)
@@ -67,25 +67,30 @@ test('readStoredPrefs returns light/blue/comfortable defaults when storage is em
 
 test('readStoredPrefs returns defaults when storage is undefined (non-browser context)', () => {
   const prefs = readStoredPrefs(undefined)
-  assert.deepEqual(prefs, { theme: 'light', accent: 'blue', density: 'comfortable' })
+  assert.deepEqual(prefs, { theme: 'light', accent: 'blue', density: 'compact' })
 })
 
-test('readStoredPrefs round-trips a persisted valid choice', () => {
+test('readStoredPrefs round-trips a persisted theme choice', () => {
   const storage = new MemoryStorage()
   storage.setItem('daa.theme', 'dark')
+  const prefs = readStoredPrefs(storage)
+  assert.equal(prefs.theme, 'dark')
+})
+
+test('readStoredPrefs pins accent/density to their defaults regardless of any stored value — there is no picker for either', () => {
+  const storage = new MemoryStorage()
   storage.setItem('daa.accent', 'purple')
   storage.setItem('daa.density', 'spacious')
   const prefs = readStoredPrefs(storage)
-  assert.deepEqual(prefs, { theme: 'dark', accent: 'purple', density: 'spacious' })
+  assert.equal(prefs.accent, 'blue')
+  assert.equal(prefs.density, 'compact')
 })
 
-test('readStoredPrefs falls back to defaults for unrecognised/garbage values', () => {
+test('readStoredPrefs falls back to the default theme for an unrecognised/garbage value', () => {
   const storage = new MemoryStorage()
   storage.setItem('daa.theme', 'not-a-theme')
-  storage.setItem('daa.accent', 'chartreuse')
-  storage.setItem('daa.density', 'ultra-wide')
   const prefs = readStoredPrefs(storage)
-  assert.deepEqual(prefs, { theme: 'light', accent: 'blue', density: 'comfortable' })
+  assert.deepEqual(prefs, { theme: 'light', accent: 'blue', density: 'compact' })
 })
 
 test('storePref persists under the documented daa.* keys', () => {
@@ -109,22 +114,21 @@ test('applyPrefsToDocument sets data-theme/data-accent/data-density attributes',
   assert.equal(el.getAttribute('data-density'), 'spacious')
 })
 
-test('initTheme reads persisted prefs and applies them to the document in one call', () => {
+test('initTheme reads the persisted theme and applies it, pinning accent/density to their defaults', () => {
   const storage = new MemoryStorage()
   storage.setItem('daa.theme', 'dark')
   storage.setItem('daa.accent', 'purple')
-  storage.setItem('daa.density', 'compact')
   const el = new FakeElement()
 
   const returned = initTheme(storage, el as unknown as HTMLElement)
 
-  assert.deepEqual(returned, { theme: 'dark', accent: 'purple', density: 'compact' })
+  assert.deepEqual(returned, { theme: 'dark', accent: 'blue', density: 'compact' })
   assert.equal(el.getAttribute('data-theme'), 'dark')
-  assert.equal(el.getAttribute('data-accent'), 'purple')
+  assert.equal(el.getAttribute('data-accent'), 'blue')
   assert.equal(el.getAttribute('data-density'), 'compact')
 })
 
-test('initTheme applies the light/blue/comfortable defaults on first-ever load', () => {
+test('initTheme applies the light/blue/compact defaults on first-ever load', () => {
   const storage = new MemoryStorage()
   const el = new FakeElement()
 
@@ -132,7 +136,7 @@ test('initTheme applies the light/blue/comfortable defaults on first-ever load',
 
   assert.equal(el.getAttribute('data-theme'), 'light')
   assert.equal(el.getAttribute('data-accent'), 'blue')
-  assert.equal(el.getAttribute('data-density'), 'comfortable')
+  assert.equal(el.getAttribute('data-density'), 'compact')
 })
 
 test('setPref persists the new value, applies it to the DOM, and returns the merged prefs', () => {

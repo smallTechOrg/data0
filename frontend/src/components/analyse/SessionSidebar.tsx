@@ -175,7 +175,7 @@ export function SessionSidebarView({
         <button
           type="button"
           onClick={onOpenMemory}
-          className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+          className="project-notes-btn rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors"
         >
           Project notes
         </button>
@@ -268,7 +268,7 @@ export function SessionSidebarView({
           No sessions yet. Ask a question to start one.
         </div>
       ) : (
-        <ul role="list" className="max-h-[20rem] space-y-1 overflow-y-auto pr-1">
+        <ul role="list" className="max-h-[20rem] space-y-0.5 overflow-y-auto pr-1">
           {sessions.map(s => {
             const active = activeSessionId === s.id
             const label = s.name?.trim() || s.first_question?.trim() || 'Untitled session'
@@ -276,7 +276,7 @@ export function SessionSidebarView({
             return (
               <li
                 key={s.id}
-                className={`rounded-lg border px-2.5 py-1 transition-colors ${
+                className={`rounded-md border px-2 py-0.5 transition-colors ${
                   active ? 'border-green-400 bg-green-50' : 'border-gray-200 hover:bg-gray-50'
                 }`}
               >
@@ -342,7 +342,7 @@ export function SessionSidebarView({
                     </div>
 
                     {/* Row 2: meta + actions, all on one compact line */}
-                    <div className="mt-0.5 flex items-center gap-2 pl-[1.375rem] text-[11px]">
+                    <div className="flex items-center gap-2 pl-[1.375rem] text-[11px]">
                       <span className="whitespace-nowrap text-gray-500">
                         {s.turn_count} turn{s.turn_count === 1 ? '' : 's'}
                         {active ? ' · active' : ''}
