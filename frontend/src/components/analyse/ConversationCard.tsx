@@ -360,6 +360,12 @@ export function ConversationCard({
     downloadFile(md, `session-${stamp}.md`)
   }, [turns, model])
 
+  // Export the WHOLE session as a PDF via the browser's print dialog.
+  const exportSessionAsPdf = useCallback(() => {
+    if (turns.length === 0) return
+    printSessionAsPdf(turns, model)
+  }, [turns, model])
+
   const lastTurn = turns[turns.length - 1]
   const latestSuggestions =
     lastTurn?.status === 'answer' ? (lastTurn.answer?.suggested_questions ?? []) : []
@@ -374,16 +380,26 @@ export function ConversationCard({
           Conversation
         </h2>
         <div className="flex items-center gap-2">
-          {/* Session-level export — a full Markdown log of the conversation. */}
+          {/* Session-level export — Markdown download or PDF via print dialog. */}
           {turns.length > 0 && (
-            <button
-              type="button"
-              onClick={exportSession}
-              title="Download the whole conversation as a Markdown log"
-              className="rounded border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700"
-            >
-              Export session
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={exportSession}
+                title="Download the whole conversation as a Markdown log"
+                className="rounded border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+              >
+                Export MD
+              </button>
+              <button
+                type="button"
+                onClick={exportSessionAsPdf}
+                title="Print / save the whole conversation as a PDF"
+                className="rounded border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+              >
+                Export PDF
+              </button>
+            </>
           )}
           {/* C32 bulk collapse/expand controls. */}
           {collapsibleCount > 1 && (
@@ -599,6 +615,124 @@ function buildSessionMarkdown(turns: Turn[], model?: string): string {
   })
 
   return lines.join('\n')
+}
+
+/**
+ * Open a browser print dialog pre-loaded with a self-contained HTML rendition
+ * of the session — same sections as the Markdown export. The browser's native
+ * "Save as PDF" option in the print dialog handles PDF conversion; no extra
+ * packages are required.
+ */
+function printSessionAsPdf(turns: Turn[], model?: string): void {
+  const answered = turns.filter(t => t.status === 'answer')
+  const totalIn = answered.reduce((s, t) => s + (t.answer?.tokens_input ?? 0), 0)
+  const totalOut = answered.reduce((s, t) => s + (t.answer?.tokens_output ?? 0), 0)
+
+  const esc = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+  const sections: string[] = []
+
+  // Header
+  sections.push(`<h1>Conversation session</h1>`)
+  sections.push(`<ul>`)
+  sections.push(`<li><strong>Exported:</strong> ${esc(new Date().toLocaleString())}</li>`)
+  sections.push(`<li><strong>Model:</strong> ${esc(model || 'unknown')}</li>`)
+  sections.push(`<li><strong>Turns:</strong> ${turns.length}</li>`)
+  sections.push(`<li><strong>Total tokens:</strong> ${totalIn} in / ${totalOut} out</li>`)
+  sections.push(`</ul>`)
+  sections.push(`<hr>`)
+
+  turns.forEach((turn, i) => {
+    const a = turn.answer
+    sections.push(`<h2>Turn ${i + 1} &mdash; ${esc(turn.status)}</h2>`)
+    sections.push(`<p><strong>Prompt</strong></p>`)
+    sections.push(`<blockquote>${esc(turn.question)}</blockquote>`)
+
+    if (turn.status === 'clarification' && turn.clarificationQuestion) {
+      sections.push(`<p><strong>Clarification requested</strong></p>`)
+      sections.push(`<blockquote>${esc(turn.clarificationQuestion)}</blockquote>`)
+      sections.push(`<p><em>Re-submitted with clarification skipped.</em></p>`)
+    } else if (turn.status === 'error') {
+      sections.push(`<p><strong>Error:</strong> ${esc(turn.error ?? 'The question failed to run.')}</p>`)
+    } else if (a) {
+      const metaParts: string[] = []
+      if (turn.answeredAt !== undefined)
+        metaParts.push(`Asked at ${esc(new Date(turn.answeredAt).toLocaleTimeString())}`)
+      if (turn.durationMs !== undefined)
+        metaParts.push(`Response time ${esc(formatDuration(turn.durationMs))}`)
+      metaParts.push(`Status ${esc(a.status ?? 'completed')}`)
+      metaParts.push(`Iterations ${a.iteration_count ?? 0}`)
+      metaParts.push(`Tokens ${a.tokens_input ?? 0} in / ${a.tokens_output ?? 0} out`)
+      sections.push(`<ul><li>${metaParts.join(' &middot; ')}</li>`)
+      if (a.datasets_used && a.datasets_used.length > 0) {
+        sections.push(
+          `<li>Datasets used (${a.datasets_used.length}): ${esc(a.datasets_used.join(', '))}</li>`,
+        )
+      }
+      sections.push(`</ul>`)
+      sections.push(`<p><strong>Answer</strong></p>`)
+      sections.push(`<div>${esc(a.answer_markdown ?? '')}</div>`)
+
+      const steps = a.steps ?? []
+      if (steps.length > 0) {
+        sections.push(
+          `<p><strong>Backend code (${steps.length} step${steps.length === 1 ? '' : 's'})</strong></p>`,
+        )
+        steps.forEach((step, si) => {
+          sections.push(
+            `<p>Step ${si + 1} &mdash; ${step.is_error ? 'error' : 'ok'}</p>`,
+          )
+          sections.push(`<pre><code>${esc(step.action ?? '')}</code></pre>`)
+          const out = (step.result ?? '').slice(0, 1500)
+          if (out.trim()) {
+            sections.push(`<p>Output:</p>`)
+            sections.push(`<pre><code>${esc(out)}</code></pre>`)
+          }
+        })
+      }
+
+      if (a.prompt_breakdown && Object.keys(a.prompt_breakdown).length > 0) {
+        const parts = Object.entries(a.prompt_breakdown)
+          .map(([k, v]) => `${esc(k)}: ${v}`)
+          .join(', ')
+        sections.push(`<p><strong>Prompt breakdown (tokens):</strong> ${parts}</p>`)
+      }
+    }
+
+    sections.push(`<hr>`)
+  })
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Conversation session</title>
+<style>
+  * { box-sizing: border-box; }
+  @page { margin: 2cm; }
+  body { font-family: Georgia, 'Times New Roman', serif; font-size: 13px; line-height: 1.6; color: #111; margin: 0; padding: 0; }
+  h1 { font-size: 1.6em; margin-bottom: 0.5em; }
+  h2 { font-size: 1.2em; margin-top: 1.5em; margin-bottom: 0.4em; }
+  hr { border: none; border-top: 1px solid #ccc; margin: 1.2em 0; }
+  ul { margin: 0.4em 0 0.8em 1.4em; padding: 0; }
+  li { margin: 0.15em 0; }
+  blockquote { margin: 0.5em 0 0.5em 1em; padding-left: 0.8em; border-left: 3px solid #bbb; color: #333; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #f5f5f5; padding: 8px; border-radius: 4px; font-size: 0.85em; }
+  code { font-family: 'Courier New', monospace; }
+  @media print { body { -webkit-print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+${sections.join('\n')}
+</body>
+</html>`
+
+  const newWin = window.open('')
+  if (!newWin) return
+  newWin.document.write(html)
+  newWin.document.close()
+  newWin.print()
 }
 
 function Spinner() {
