@@ -79,7 +79,7 @@ export function ConversationTurnView({
       </div>
 
       {/* Body */}
-      <div className="rounded-lg rounded-bl-sm border border-gray-200 bg-white px-3 py-2">
+      <div className="density-card-padding rounded-lg rounded-bl-sm border border-gray-200 bg-white">
         {turn.status === 'pending' ? (
           <p className="inline-flex items-center gap-2 text-xs text-gray-500">
             <Spinner /> The agent is working on it…

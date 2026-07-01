@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react'
 
+import { buildThemeOption, readThemeColors } from './chartTheme'
+export { buildThemeOption, readThemeColors, type ThemeColors } from './chartTheme'
+
 import * as echarts from 'echarts/core'
 import {
   BarChart,
@@ -106,13 +109,26 @@ function EChart({ option, index }: { option: EChartsOption; index: number }) {
     const chart = echarts.init(el)
     chartRef.current = chart
     chart.setOption(option)
+    // Apply the active theme's colors on top of the chart's own option (C34).
+    chart.setOption(buildThemeOption(readThemeColors()))
 
     // Keep the chart sized to its (responsive) container.
     const observer = new ResizeObserver(() => chart.resize())
     observer.observe(el)
 
+    // Re-theme the chart in place when the user flips light/dark while this
+    // chart is already on screen (slice-7a flips `data-theme` on <html>).
+    const themeObserver = new MutationObserver(() => {
+      chart.setOption(buildThemeOption(readThemeColors()))
+    })
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    })
+
     return () => {
       observer.disconnect()
+      themeObserver.disconnect()
       chart.dispose()
       chartRef.current = null
     }
@@ -122,7 +138,8 @@ function EChart({ option, index }: { option: EChartsOption; index: number }) {
     const chart = chartRef.current
     if (!chart) return
     try {
-      const url = chart.getDataURL({ type: format, pixelRatio: 2, backgroundColor: '#fff' })
+      const backgroundColor = readThemeColors().surface
+      const url = chart.getDataURL({ type: format, pixelRatio: 2, backgroundColor })
       const a = document.createElement('a')
       a.href = url
       a.download = `chart-${index + 1}.${format === 'jpeg' ? 'jpg' : 'png'}`
@@ -136,7 +153,8 @@ function EChart({ option, index }: { option: EChartsOption; index: number }) {
     const chart = chartRef.current
     if (!chart) return
     try {
-      const url = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#fff' })
+      const backgroundColor = readThemeColors().surface
+      const url = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor })
       const blob = await (await fetch(url)).blob()
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
       setCopied(true)

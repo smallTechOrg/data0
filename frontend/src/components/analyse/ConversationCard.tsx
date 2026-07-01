@@ -436,7 +436,7 @@ export function ConversationCard({
         role="log"
         aria-live="polite"
         aria-label="Conversation thread"
-        className="flex flex-1 flex-col gap-3 overflow-y-auto rounded-md border border-gray-100 bg-gray-50/50 p-3"
+        className="density-thread-gap flex flex-1 flex-col overflow-y-auto rounded-md border border-gray-100 bg-gray-50/50 p-3"
       >
         {turns.length === 0 ? (
           <div className="flex flex-1 items-center justify-center text-center">

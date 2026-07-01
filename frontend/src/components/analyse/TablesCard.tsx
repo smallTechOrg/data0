@@ -355,7 +355,10 @@ export function TablesCardView({
           No {filter.toLowerCase()} datasets.
         </div>
       ) : (
-        <ul role="list" className="max-h-[24rem] space-y-1 overflow-y-auto pr-1">
+        <ul
+          role="list"
+          className="density-row-gap flex max-h-[24rem] flex-col overflow-y-auto pr-1"
+        >
           {visibleDatasets.map(ds => {
             const cols = colsById[ds.id]
             const selected = selectedDatasetIds.includes(ds.id)
@@ -367,7 +370,7 @@ export function TablesCardView({
               <li
                 key={ds.id}
                 title={TONE_LABEL[tone]}
-                className={`rounded-md border px-3 py-1 transition-colors ${
+                className={`density-row-padding rounded-md border transition-colors ${
                   selected ? pill.selected : pill.rest
                 }`}
               >

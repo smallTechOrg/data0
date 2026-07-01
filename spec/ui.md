@@ -14,7 +14,7 @@ Next.js 15 + React 19 + TypeScript (existing `frontend/`), static-exported to `f
 
 ## Shell & Global Chrome
 
-- **Header:** app name + tagline; a **Project notes** button opens the global-memory modal (memory/C29); a **yellow stub-mode banner** is shown when `GET /health` reports `provider == "stub"` (so demo output is never mistaken for real output).
+- **Header:** app name + tagline; a **Project notes** button opens the global-memory modal (memory/C29); a **yellow stub-mode banner** is shown when `GET /health` reports `provider == "stub"` (so demo output is never mistaken for real output); a **theme control cluster** (C34, Phase 7) — a light/dark toggle, a 4-swatch accent picker (blue/purple/green/orange), and a 3-step density picker (Compact/Comfortable/Spacious) — sits in the header's right-hand utility area alongside the Live badge and Project-notes button.
 - **Layout:** two-panel responsive shell; ≤960px stacks panels, ≤640px stacks cards.
 - **Tabs:** `[Analyse]` (default) and `[Database]`.
 
@@ -76,5 +76,6 @@ All `.modal-overlay`, backdrop + Escape close, focus first element: `memory-moda
 | Inline charts | labelled stub | labelled stub | labelled stub | **real** |
 | Database tab (ER diagram, description) | labelled stub | labelled stub | labelled stub | **real** |
 | Clean / Re-derive / Generate notes | labelled stub | labelled stub | labelled stub | **real** |
+| Theme/accent/density controls (C34) | n/a (not built yet) | n/a | n/a | n/a — ships fully real in **Phase 7**, no stub stage |
 
-A labelled stub renders the intended layout with a visible "coming in a later phase" tag so it is never mistaken for a bug.
+A labelled stub renders the intended layout with a visible "coming in a later phase" tag so it is never mistaken for a bug. Phase 7 (theming, C34) is the one exception to the phased stub-to-real pattern above: it has no earlier phases to appear in, and ships fully functional the moment it lands — see [capabilities/theming.md](capabilities/theming.md) and `spec/roadmap.md` → Phase 7.

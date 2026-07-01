@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { StubBanner } from '@/components/StubBanner'
+import { ThemeControls } from '@/components/ThemeControls'
 import { AnalyseTab } from '@/components/analyse/AnalyseTab'
 import { DatabaseTab } from '@/components/database/DatabaseTab'
 import { MemoryModal } from '@/components/analyse/MemoryModal'
 import { api } from '@/lib/api'
+import { DEFAULT_ACCENT, DEFAULT_DENSITY, DEFAULT_THEME, initTheme, type ThemePrefs } from '@/lib/theme'
 
 type Tab = 'analyse' | 'database'
 
@@ -30,6 +32,23 @@ export function AppShell() {
   const [model, setModel] = useState<string | undefined>(undefined)
   // Global-memory ("Project notes") modal — REAL in Phase 3.
   const [memoryOpen, setMemoryOpen] = useState(false)
+  // Theme/accent/density — client-only visual preference, never sent to the
+  // backend (see spec/capabilities/theming.md). Seeded with the untheming
+  // defaults so server-rendered markup matches the client's first paint;
+  // the real persisted choice is read and applied in the mount effect below.
+  const [themePrefs, setThemePrefs] = useState<ThemePrefs>({
+    theme: DEFAULT_THEME,
+    accent: DEFAULT_ACCENT,
+    density: DEFAULT_DENSITY,
+  })
+
+  // Apply the persisted theme/accent/density to <html> as early as possible
+  // on mount, before the rest of the tree's colors would otherwise paint with
+  // the light-mode default. A brief flash on hard reload is an accepted
+  // limitation (see theming.md) since this can't run before hydration.
+  useEffect(() => {
+    setThemePrefs(initTheme())
+  }, [])
 
   // Fetch /health (provider + active model). Called on mount and again after a
   // settings save, so the header badge reflects a model change without a reload.
@@ -93,8 +112,9 @@ export function AppShell() {
             </div>
           </div>
 
-          {/* Right: live badge + Project notes */}
+          {/* Right: theme/accent/density controls + live badge + Project notes */}
           <div className="flex items-center gap-4">
+            <ThemeControls prefs={themePrefs} onChange={setThemePrefs} />
             {isLive && (
               <span
                 className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3.5 py-2 text-sm font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/20"
