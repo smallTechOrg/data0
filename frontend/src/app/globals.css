@@ -238,9 +238,18 @@ html {
 [data-theme] .bg-blue-100 {
   background-color: var(--accent-soft);
 }
-[data-theme] .text-blue-600,
-[data-theme] .text-blue-700 {
+/* text-blue-600 is only ever used standalone (plain links/icons, never on a
+   bg-blue-50/100 chip) — accent-solid is correct there. text-blue-700/800 are
+   ONLY ever paired with a bg-blue-50/100 chip background (Keys badges, filter
+   pills, suggestion chips, buttons) — like the indigo-100/700 pair above,
+   a soft (dark, in dark mode) chip background needs the soft-fg text color,
+   not accent-solid, or the chip becomes low-contrast in dark mode. */
+[data-theme] .text-blue-600 {
   color: var(--accent-solid);
+}
+[data-theme] .text-blue-700,
+[data-theme] .text-blue-800 {
+  color: var(--accent-soft-fg);
 }
 [data-theme] .border-blue-200,
 [data-theme] .border-blue-300 {
@@ -259,6 +268,7 @@ html {
 [data-theme] .text-green-800 {
   color: var(--tint-success-fg);
 }
+[data-theme] .border-green-100,
 [data-theme] .border-green-200,
 [data-theme] .border-green-300 {
   border-color: var(--tint-success-border);
@@ -312,6 +322,97 @@ html {
 /* Modal overlays */
 [data-theme] .bg-black\/40 {
   background-color: var(--overlay);
+}
+
+/* Opacity-variant utilities — Tailwind emits a distinct class per bg-X/NN
+   token (a different string than the bare bg-X class), so each observed
+   variant needs its own override; there's no wildcard selector for the
+   "/NN" suffix. Mapped to the same variable the bare class would use. */
+[data-theme] .bg-gray-50\/50,
+[data-theme] .bg-gray-50\/60 {
+  background-color: var(--surface-muted);
+}
+[data-theme] .bg-green-50\/60,
+[data-theme] .bg-green-100\/60 {
+  background-color: var(--tint-success);
+}
+[data-theme] .bg-amber-100\/60 {
+  background-color: var(--tint-warning);
+}
+[data-theme] .bg-yellow-200\/70 {
+  background-color: var(--tint-stub);
+}
+
+/* Tab-switcher active label (AppShell.tsx, not design-synced): track
+   accent-solid in light mode, but force pure white in dark mode — the
+   active pill's background is --surface, which in dark mode sits close in
+   tone to every accent hue, so an accent-colored label doesn't stand out
+   the way it does against a white pill in light mode. */
+[data-theme] .tab-active-label {
+  color: var(--accent-solid);
+}
+[data-theme='dark'] .tab-active-label {
+  color: #ffffff;
+}
+
+/* hover: pseudo-class variants — Tailwind compiles `hover:bg-gray-50` to the
+   selector `.hover\:bg-gray-50:hover`, a different token from the bare
+   `.bg-gray-50` class above, so (like the opacity variants) each one needs
+   its own override; otherwise a hover state falls back to its literal
+   light-mode color and the element's already-remapped text can lose all
+   contrast against it (e.g. light theme text on a hover surface, or vice
+   versa). Mapped to the same variable the equivalent non-hover class uses. */
+[data-theme] .hover\:bg-gray-50:hover {
+  background-color: var(--surface-muted);
+}
+[data-theme] .hover\:bg-gray-100:hover,
+[data-theme] .hover\:bg-gray-700:hover {
+  background-color: var(--surface-muted-2);
+}
+[data-theme] .hover\:bg-blue-100:hover {
+  background-color: var(--accent-soft);
+}
+[data-theme] .hover\:bg-blue-700:hover {
+  background-color: color-mix(in srgb, var(--accent-solid) 80%, black);
+}
+[data-theme] .hover\:bg-green-50:hover,
+[data-theme] .hover\:bg-green-100:hover,
+[data-theme] .hover\:bg-green-100\/60:hover {
+  background-color: var(--tint-success);
+}
+[data-theme] .hover\:bg-amber-100:hover,
+[data-theme] .hover\:bg-amber-100\/60:hover {
+  background-color: var(--tint-warning);
+}
+[data-theme] .hover\:bg-red-50:hover,
+[data-theme] .hover\:bg-red-100:hover,
+[data-theme] .hover\:bg-rose-100:hover {
+  background-color: var(--tint-danger);
+}
+[data-theme] .hover\:border-blue-300:hover {
+  border-color: var(--accent-solid);
+}
+[data-theme] .hover\:text-blue-800:hover {
+  color: var(--accent-solid);
+}
+[data-theme] .hover\:text-gray-100:hover {
+  color: var(--text);
+}
+[data-theme] .hover\:text-gray-600:hover,
+[data-theme] .hover\:text-gray-700:hover {
+  color: var(--text-secondary);
+}
+[data-theme] .hover\:text-gray-800:hover,
+[data-theme] .hover\:text-gray-900:hover {
+  color: var(--text);
+}
+[data-theme] .hover\:text-green-800:hover,
+[data-theme] .hover\:text-green-900:hover {
+  color: var(--tint-success-fg);
+}
+[data-theme] .hover\:text-red-600:hover,
+[data-theme] .hover\:text-rose-800:hover {
+  color: var(--tint-danger-fg);
 }
 
 /* Density-driven spacing on cards, rows, and the conversation thread. Scoped

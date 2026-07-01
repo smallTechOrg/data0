@@ -192,7 +192,7 @@ function TabButton({
       onClick={onClick}
       className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${
         active
-          ? 'bg-white text-indigo-600 shadow-md'
+          ? 'bg-white tab-active-label shadow-md'
           : 'text-white hover:bg-white/20'
       }`}
     >
