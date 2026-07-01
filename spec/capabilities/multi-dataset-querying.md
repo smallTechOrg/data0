@@ -6,7 +6,7 @@ Lets a single question reason across multiple datasets loaded together.
 ## Inputs
 | Input | Type | Source | Required |
 |-------|------|--------|----------|
-| dataset_ids | list | `/ask` body or C19 selector | yes |
+| dataset catalog | list | ALL workspace datasets (agent picks + lazily loads) | yes |
 
 ## Outputs
 | Output | Type | Destination |
@@ -17,8 +17,8 @@ Lets a single question reason across multiple datasets loaded together.
 None beyond the ReAct loop.
 
 ## Business Rules
-- `setup` loads each dataset as `df1`/`df2`/… plus `<filename_stem>` aliases; `df` is the first.
-- The selector (C19) chooses the subset when datasets are not explicitly given.
+- `setup` builds a metadata-only catalog of ALL datasets; the sandbox exposes them as `df1`/`df2`/… plus `<filename_stem>` aliases (`df` is the first), each **lazily loaded** the first time the agent references it.
+- Selection is agent-driven (C19): the agent picks which catalog datasets to load — nothing is client-scoped.
 
 ## Success Criteria
 - [ ] A question that joins/compares two datasets returns a correct answer referencing both (real Gemini).

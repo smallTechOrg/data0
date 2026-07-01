@@ -5,7 +5,7 @@ provider). The agent is asked to PLOT a clearly-chartable column via the
 `echart(...)` helper; `execute_action` must capture the resulting ECharts `option`
 dict as JSON into `result["charts"]`.
 
-Driven via `run_agent(..., run_selector=True, skip_clarification=True)` (mirrors
+Driven via `run_agent(..., run_clarification=False, skip_clarification=True)` (mirrors
 `test_preflight_real.py`'s dataset fixture + uploads_dir monkeypatch) against the
 production SQLite driver (the isolated copy via `_isolated_db`). Asserts CONTENT:
 at least one chart captured, and the first chart is a valid ECharts `option`
@@ -90,7 +90,7 @@ def test_real_gemini_captures_an_echart_chart(uploads_dir):
     result = run_agent(
         question,
         [dataset_id],
-        run_selector=True,
+        run_clarification=False,
         skip_clarification=True,
     )
 

@@ -1,4 +1,5 @@
-"""Real-Gemini integration tests for slice-3b pre-flight (C26 + C19).
+"""Real-Gemini integration tests for slice-3b pre-flight (C26) + agent-driven
+dataset selection (C19).
 
 Requires `AGENT_GEMINI_API_KEY` in `.env` (auto-detect selects the real Gemini
 provider). These tests drive the REAL model — they assert on real behaviour:
@@ -7,10 +8,12 @@ provider). These tests drive the REAL model — they assert on real behaviour:
   named) with datasets NOT explicit -> `type == "clarification"` with a non-empty
   question. Re-asking the SAME question with `skip_clarification=True` proceeds to
   an `answer` (proves the skip path).
-- Selector (C19): two datasets about different things; a question clearly about
-  ONE -> the relevant dataset is selected (and ideally it is the ONLY one).
+- Agent-driven selection (C19): two datasets about different things all sit in the
+  catalog; a question clearly about ONE -> the agent references (and thus LOADS)
+  only the relevant dataset, so the run records ONLY that dataset id — no pre-flight
+  selector, no client scoping.
 
-Run via `run_agent` directly (precise control of `run_selector` /
+Run via `run_agent` directly (precise control of `run_clarification` /
 `skip_clarification`) against the production SQLite driver (the isolated copy via
 the `_isolated_db` conftest fixture). Model: `gemini-3.1-flash-lite`.
 """
@@ -87,11 +90,11 @@ def test_clarification_then_skip_real_gemini(uploads_dir):
     )
     dataset_id = _make_dataset(uploads_dir, "financials.csv", df)
 
-    # Datasets NOT explicit (run_selector=True) so pre-flight runs; do NOT skip.
+    # Run the clarification check (run_clarification=True); do NOT skip it.
     result = run_agent(
         "What is the average?",
         [dataset_id],
-        run_selector=True,
+        run_clarification=True,
         skip_clarification=False,
     )
 
@@ -109,7 +112,7 @@ def test_clarification_then_skip_real_gemini(uploads_dir):
     skipped = run_agent(
         "What is the average?",
         [dataset_id],
-        run_selector=True,
+        run_clarification=True,
         skip_clarification=True,
     )
     assert skipped["type"] == "answer", (
@@ -124,14 +127,16 @@ def test_clarification_then_skip_real_gemini(uploads_dir):
 
 
 # --------------------------------------------------------------------------- #
-# C19 selector — two datasets, question about ONE
+# C19 agent-driven selection — two datasets in the catalog, question about ONE
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.usefixtures("_require_llm_key")
-def test_selector_picks_relevant_dataset_real_gemini(uploads_dir):
-    """Two datasets (sales w/ revenue, employees w/ salary). A question clearly
-    about employee salaries -> the selector picks the employees dataset."""
+def test_agent_loads_only_relevant_dataset_real_gemini(uploads_dir):
+    """Two datasets (sales w/ revenue, employees w/ salary) both sit in the catalog.
+    A question clearly about employee salaries -> the agent references (and LOADS)
+    the employees dataset, so the run RECORDS it (used-tracking). No pre-flight
+    selector runs; selection is a side effect of which frames the agent touches."""
     sales = pd.DataFrame(
         {
             "region": ["north", "south", "east", "west"],
@@ -152,26 +157,27 @@ def test_selector_picks_relevant_dataset_real_gemini(uploads_dir):
     result = run_agent(
         "What is the average employee salary?",
         candidate_ids,
-        run_selector=True,
+        run_clarification=False,
         skip_clarification=True,  # avoid an unrelated clarification turn
     )
 
     assert result["type"] == "answer", f"expected an answer, got {result.get('type')}"
-    selected = result["dataset_ids"]
-    reasoning = result.get("selector_reasoning")
+    loaded = result["dataset_ids"]
 
-    print(f"\n[selector] selected={selected} (employees={employees_id})")
-    print(f"[selector] reasoning={reasoning!r}")
+    print(f"\n[agent-selection] loaded={loaded} (employees={employees_id})")
 
-    # The relevant dataset (employees, with the salary column) MUST be selected.
-    assert employees_id in selected, (
-        f"selector should have chosen the employees dataset {employees_id} for a "
-        f"salary question; got {selected} (reasoning: {reasoning!r})"
+    # The relevant dataset (employees, with the salary column) MUST have been loaded.
+    assert employees_id in loaded, (
+        f"agent should have loaded the employees dataset {employees_id} for a salary "
+        f"question; got {loaded}"
     )
-    # Ideally it is the ONLY one chosen (tolerant: at minimum the relevant one is in).
-    assert sales_id not in selected or len(selected) == len(candidate_ids), (
-        f"selector should prefer the minimal subset; got {selected}"
+    # Ideally it is the ONLY one loaded (tolerant: at minimum the relevant one is in,
+    # and the irrelevant sales set is not needlessly loaded).
+    assert sales_id not in loaded or len(loaded) == len(candidate_ids), (
+        f"agent should load the minimal set; got {loaded}"
     )
+    # selector_reasoning is retained for back-compat but is ALWAYS null now.
+    assert result.get("selector_reasoning") is None
 
     # And a real answer came out the other side.
     answer = result["answer"]
@@ -194,7 +200,7 @@ def test_real_answer_has_content_and_suggestions(uploads_dir):
     result = run_agent(
         "What is the average of the value column?",
         [dataset_id],
-        run_selector=True,
+        run_clarification=False,
         skip_clarification=True,
     )
 

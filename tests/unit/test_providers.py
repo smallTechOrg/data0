@@ -156,34 +156,6 @@ def test_stub_finalize_returns_nonempty_summary(stub):
     assert out.strip() != ""
 
 
-def test_stub_select_returns_first_id_as_json_array(stub):
-    prompt = (
-        "<node:select>\n"
-        "Schema block:\n"
-        '  - id: abc-123  filename: sales.csv\n'
-        '  - id: def-456  filename: returns.csv\n'
-    )
-    out = stub.call_model(prompt)
-    parsed = json.loads(out)
-    assert parsed == ["abc-123"]
-
-
-def test_stub_select_returns_first_uuid(stub):
-    prompt = (
-        "<node:select> available datasets:\n"
-        "11111111-2222-3333-4444-555555555555 (sales)\n"
-        "99999999-8888-7777-6666-555555555555 (returns)\n"
-    )
-    out = stub.call_model(prompt)
-    parsed = json.loads(out)
-    assert parsed == ["11111111-2222-3333-4444-555555555555"]
-
-
-def test_stub_select_empty_array_when_no_id(stub):
-    out = stub.call_model("<node:select> there is nothing parseable here")
-    assert json.loads(out) == []
-
-
 def test_stub_plan_first_call_returns_describe_action(stub):
     # No Result:/Error: markers yet -> first call.
     prompt = "<node:plan>\nQuestion: what is the average price?\n"

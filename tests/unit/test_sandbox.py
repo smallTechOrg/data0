@@ -7,6 +7,7 @@ import pytest
 
 from graph.sandbox import (
     _stringify,
+    build_lazy_namespace,
     build_namespace,
     eval_expression,
     make_echart,
@@ -286,3 +287,55 @@ def test_eval_expression_echart_registers_one_chart_via_accumulator():
     assert len(captured) == 1
     parsed = json.loads(json.dumps(captured[0]))
     assert "series" in parsed
+
+
+# --- C19 agent-driven selection: lazy namespace -----------------------------
+
+
+def test_build_lazy_namespace_loads_only_referenced_datasets():
+    """build_lazy_namespace maps `df` / `df{n}` / `<alias>` to a lazy loader: a
+    dataset's frame materialises on FIRST reference (and only then), so a question
+    that reads one table never loads the others. Library names stay pre-seeded and
+    resolve WITHOUT a load."""
+    frames = {
+        "id-sales": pd.DataFrame({"region": ["n", "s"], "revenue": [10, 20]}),
+        "id-emp": pd.DataFrame({"name": ["a", "b"], "salary": [50, 60]}),
+    }
+    cache: dict[str, pd.DataFrame] = {}
+    loaded: list[str] = []
+
+    def loader(dataset_id: str) -> pd.DataFrame:
+        # Mirrors the real per-run loader: cache by id, record only on first load.
+        if dataset_id not in cache:
+            loaded.append(dataset_id)
+            cache[dataset_id] = frames[dataset_id]
+        return cache[dataset_id]
+
+    catalog = [
+        {"id": "id-sales", "alias": "sales", "filename": "sales.csv",
+         "columns": ["region", "revenue"]},
+        {"id": "id-emp", "alias": "employees", "filename": "employees.csv",
+         "columns": ["name", "salary"]},
+    ]
+    ns = build_lazy_namespace(catalog, loader)
+
+    # Library seeds resolve WITHOUT touching the loader — nothing loaded yet.
+    assert callable(ns["echart"])
+    assert "pd" in ns and "np" in ns
+    assert loaded == []
+
+    # Referencing `df2` (employees) loads ONLY employees; sales stays cold.
+    result_str, _charts, is_error, error_str = eval_expression("df2['salary'].mean()", ns)
+    assert not is_error, error_str
+    assert "55" in result_str  # (50 + 60) / 2
+    assert loaded == ["id-emp"]
+
+    # `df` (== the first catalog dataset) loads sales on first reference.
+    _s, _c, is_error, error_str = eval_expression("df['revenue'].sum()", ns)
+    assert not is_error, error_str
+    assert loaded == ["id-emp", "id-sales"]
+
+    # `df1` is the SAME dataset as `df` (already loaded) -> no second load.
+    _s, _c, is_error, error_str = eval_expression("df1['region'].tolist()", ns)
+    assert not is_error, error_str
+    assert loaded == ["id-emp", "id-sales"]

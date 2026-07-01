@@ -6,7 +6,7 @@ with `save_dataset` — the run must register a NEW `origin="derived"` dataset w
 correct lineage (parents, producing run id, derivation code) and write its
 CSV + Parquet to disk.
 
-Driven via `run_agent(..., run_selector=True, skip_clarification=True)` against
+Driven via `run_agent(..., run_clarification=False, skip_clarification=True)` against
 the production SQLite driver (the isolated copy via `_isolated_db`). The uploads
 dir is monkeypatched for nodes, runner, AND `graph.derived` (the registration
 writes through `graph.derived._uploads_dir`). Asserts CONTENT — a real derived
@@ -88,7 +88,7 @@ def test_real_gemini_save_dataset_registers_derived(uploads_dir):
     result = run_agent(
         question,
         [parent_id],
-        run_selector=True,
+        run_clarification=False,
         skip_clarification=True,
     )
 

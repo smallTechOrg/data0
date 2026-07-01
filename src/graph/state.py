@@ -10,8 +10,8 @@ class AgentState(TypedDict, total=False):
     run_id: str                          # query_runs.id, set at initialisation
 
     # Input
-    dataset_ids: list[str]               # datasets to load (explicit or C19 selector)
-    dataset_context: str | None          # concatenated dataset notes + schema for the prompt
+    dataset_ids: list[str]               # ALL workspace datasets as the agent's catalog (it picks + lazily loads)
+    dataset_context: str | None          # metadata-only catalog of all datasets, injected into the prompt
     session_id: str | None               # set when the run belongs to a conversation session
     question: str                        # the user's plain-English question
     conversation_history: list[dict]     # prior turns {question, answer} for the session
@@ -27,7 +27,7 @@ class AgentState(TypedDict, total=False):
 
     # Output
     answer: str | None                   # final markdown answer (FINAL ANSWER stripped)
-    selector_reasoning: str | None       # C19 selector rationale (persisted on the run)
+    selector_reasoning: str | None       # retained for API/DB compat; always None under agent-driven selection
 
     # Control
     error: str | None                    # set by any node on fatal failure -> handle_error

@@ -145,6 +145,31 @@ def test_run_agent_persists_query_run(uploads_dir):
         assert row.action_history is not None
 
 
+def test_run_agent_records_only_loaded_datasets(uploads_dir):
+    """Agent-driven selection (C19) + used-tracking: with THREE datasets in the
+    catalog, the stub's first action is `df.describe()` — which references only `df`
+    (the first catalog dataset). The run must record ONLY that dataset in
+    `dataset_ids_json` (not all three), so "Datasets used" is accurate and the C15
+    cascade-delete of one dataset can't wipe conversations that never touched it."""
+    from db.models import QueryRunRow
+    from graph.runner import run_agent
+
+    first = _make_dataset(uploads_dir, filename="sales.csv")
+    second = _make_dataset(uploads_dir, filename="employees.csv")
+    third = _make_dataset(uploads_dir, filename="inventory.csv")
+
+    result = run_agent("Summarise the data.", [first, second, third])
+
+    # The stub loads only `df` (the first catalog dataset) -> only it is recorded.
+    assert result["dataset_ids"] == [first]
+    assert second not in result["dataset_ids"]
+    assert third not in result["dataset_ids"]
+
+    with create_db_session() as session:
+        row = session.get(QueryRunRow, result["run_id"])
+        assert row.dataset_ids_json == [first]
+
+
 def test_first_action_executes_describe(uploads_dir):
     """Stub's first <node:plan> reply is `df.describe().to_string()` — it must run
     cleanly against the real loaded DataFrame and be recorded as a non-error step."""
@@ -170,14 +195,19 @@ def test_run_releases_dataframe_registry(uploads_dir):
 
 
 # --------------------------------------------------------------------------- #
-# Error path: missing data file -> handle_error -> failed
+# Error path: a referenced dataset whose file is missing surfaces as a STEP error
 # --------------------------------------------------------------------------- #
 
 
-def test_missing_dataset_file_routes_to_handle_error(uploads_dir):
+def test_missing_dataset_file_surfaces_as_step_error(uploads_dir):
+    """Under agent-driven lazy loading, `setup` is metadata-only, so a missing CSV
+    no longer hard-fails the run at setup. It surfaces as an execution error the
+    first time the agent references the frame; the agent then wraps up best-effort
+    (the run completes rather than routing to handle_error)."""
     from graph.runner import run_agent
 
-    # Insert a datasets row but DO NOT write the CSV -> setup load fails.
+    # Insert a datasets row but DO NOT write the CSV -> the lazy load fails when the
+    # agent first references the frame (setup, being metadata-only, still succeeds).
     with create_db_session() as session:
         row = DatasetRow(
             filename="ghost.csv",
@@ -194,8 +224,14 @@ def test_missing_dataset_file_routes_to_handle_error(uploads_dir):
         dataset_id = row.id
 
     result = run_agent("anything", [dataset_id])
-    assert result["status"] == "failed"
-    assert result["answer"] is None
+
+    # The run does NOT hard-fail (metadata-only setup succeeded); it completes.
+    assert result["status"] == "completed"
+    # ...but the missing-file load was recorded as an execution error step.
+    steps = result.get("action_history", [])
+    assert any(step.get("is_error") for step in steps), (
+        f"expected the missing-file load to surface as an error step; got {steps}"
+    )
 
 
 def test_unknown_dataset_id_fails(uploads_dir):
@@ -353,14 +389,11 @@ def _set_context(dataset_id: str, *, context=None, facts=None) -> None:
             row.context_facts = facts
 
 
-def test_setup_injects_compressed_facts_not_raw_notes(uploads_dir, monkeypatch):
-    """C31: when a dataset has compressed facts, setup must inject the FACTS into
-    the dataset context — not the longer raw notes. This is the wiring that was
-    previously dead (facts extracted + stored but never used)."""
-    # On-demand compression must NOT fire when facts already exist; record any call.
-    calls: list[str] = []
-    monkeypatch.setattr(nodes_module, "extract_facts", lambda did: calls.append(did) or [])
-
+def test_setup_injects_compressed_facts_not_raw_notes(uploads_dir):
+    """C31: a dataset with compressed facts contributes those FACTS to its catalog
+    line — never the longer raw notes. `setup` reads ONLY the cached `context_facts`
+    and never compresses on demand (agent-driven selection: the catalog spans every
+    dataset, so a synchronous compress-per-dataset would be a first-turn storm)."""
     dataset_id = _make_dataset(uploads_dir)
     raw = "This is a long-winded paragraph of raw notes that should be compressed away."
     _set_context(dataset_id, context=raw, facts=["fiscal year starts in April", "revenue in USD"])
@@ -370,60 +403,6 @@ def test_setup_injects_compressed_facts_not_raw_notes(uploads_dir, monkeypatch):
 
     assert "fiscal year starts in April; revenue in USD" in ctx  # facts injected
     assert raw not in ctx  # raw notes NOT injected
-    assert calls == []  # no on-demand compression needed when facts exist
-
-
-def test_setup_compresses_on_demand_never_leaks_raw_notes(uploads_dir, monkeypatch):
-    """C31: with notes but no compressed facts yet, setup compresses SYNCHRONOUSLY
-    on demand and injects the resulting facts — it must never leak the raw notes."""
-    calls: list[str] = []
-
-    def _fake_extract(did: str) -> list[str]:
-        calls.append(did)
-        return ["revenue in USD", "fiscal year starts in April"]
-
-    monkeypatch.setattr(nodes_module, "extract_facts", _fake_extract)
-
-    dataset_id = _make_dataset(uploads_dir)
-    raw = "Revenue is always in USD; fiscal year starts in April; plus lots of prose."
-    _set_context(dataset_id, context=raw, facts=[])
-
-    result = nodes_module.setup({"run_id": "r-ondemand", "dataset_ids": [dataset_id]})
-    ctx = result["dataset_context"]
-
-    assert "revenue in USD; fiscal year starts in April" in ctx  # compressed facts used
-    assert raw not in ctx  # raw notes NEVER injected
-    assert calls == [dataset_id]  # on-demand compression ran exactly once
-
-
-def test_dataset_notes_for_prompt_never_returns_raw_notes(monkeypatch):
-    """Pure-function check: facts win; otherwise compress on demand; raw notes are
-    NEVER returned. If on-demand compression yields nothing, return "" (no notes)."""
-    # Facts win over raw context (no compression call).
-    monkeypatch.setattr(nodes_module, "extract_facts", lambda did: pytest.fail("unexpected"))
-    assert nodes_module._dataset_notes_for_prompt("d1", "raw notes", ["a", "b"]) == "a; b"
-    # Nothing at all -> "".
-    assert nodes_module._dataset_notes_for_prompt("d1", None, None) == ""
-    # Blank/whitespace facts are ignored; with no real facts and empty raw -> "".
-    assert nodes_module._dataset_notes_for_prompt("d1", "", ["", "  "]) == ""
-
-    # Raw notes present but no facts -> compress on demand, use the compressed facts.
-    monkeypatch.setattr(nodes_module, "extract_facts", lambda did: ["x", "y"])
-    assert nodes_module._dataset_notes_for_prompt("d1", "raw notes", []) == "x; y"
-
-    # Raw notes present but on-demand compression yields nothing -> "" (NOT the raw).
-    raw = "some raw uncompressed notes that must never reach the LLM"
-    monkeypatch.setattr(nodes_module, "extract_facts", lambda did: [])
-    out = nodes_module._dataset_notes_for_prompt("d1", raw, [])
-    assert out == ""
-    assert raw not in out
-
-    # Even if on-demand compression RAISES, we must return "" — never the raw notes.
-    def _boom(did: str):
-        raise RuntimeError("provider down")
-
-    monkeypatch.setattr(nodes_module, "extract_facts", _boom)
-    assert nodes_module._dataset_notes_for_prompt("d1", raw, []) == ""
 
 
 # --------------------------------------------------------------------------- #

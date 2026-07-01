@@ -35,7 +35,7 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 |-------|----------------|
 | **UI** (`frontend/`) | Two-tab SPA (Analyse + Database). Calls the REST API. Renders Markdown answers, charts, ER diagram. |
 | **API** (`src/api/`) | FastAPI routers; `ok()`/`api_error()` envelope; single-origin static mount of the built Next.js app; lifespan `init_db()`. |
-| **Agent** (`src/graph/`) | LangGraph ReAct `StateGraph`, nodes, edges, runner, sandbox, pre-flight (selector/clarification), graph-adjacent one-shot LLM calls (suggestions/describe/compress). |
+| **Agent** (`src/graph/`) | LangGraph ReAct `StateGraph`, nodes, edges, runner, sandbox (incl. the lazy catalog namespace), pre-flight clarification (C26), graph-adjacent one-shot LLM calls (suggestions/describe/compress). |
 | **LLM** (`src/llm/`) | `LLMClient` + provider factory; uniform `call_model(prompt, *, system)` over Gemini / OpenRouter / stub. |
 | **Domain** (`src/domain/`) | Pydantic models per entity (request/response + read models). |
 | **Storage** (`src/db/`) | SQLAlchemy 2.0 models extending `Base`; lazy engine/session singletons; `init_db()`. Alembic in `alembic/`. Files on disk in `uploads/`. |
@@ -45,7 +45,7 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 ## Data Flow
 
 1. **Trigger:** the user uploads a file (`POST /upload`) → parsed by pandas, sha256-hashed, duplicate-checked, saved as CSV + Parquet, a `datasets` row created.
-2. The user asks a question (`POST /ask`) → pre-flight clarification (C26) may short-circuit with a clarifying question; otherwise the dataset selector (C19) resolves which dataset IDs to load.
+2. The user asks a question (`POST /ask`) → pre-flight clarification (C26, first turn only) may short-circuit with a clarifying question; otherwise the agent is handed a metadata-only catalog of ALL datasets and picks + lazily loads which it needs inside the graph.
 3. A `query_runs` row is created (`status=running`), then `graph.runner.run_agent()` invokes the compiled `StateGraph`.
 4. `setup` loads DataFrame(s) (Parquet preferred, CSV fallback; session-cached). `plan_action` calls the LLM (real Gemini or stub) for the next pandas action or a `FINAL ANSWER:`. `execute_action` evals it in the sandbox, captures charts, appends to `action_history`, writes `iteration_count` to the DB for live polling, and loops. `finalize` / `force_finalize` produces the answer.
 5. **Output:** `/ask` returns `{type:"answer", run_id, answer_markdown, answer_html, steps, iteration_count, tokens_*, suggested_questions, prompt_breakdown, ...}`; the run row is persisted `status=completed`. The UI renders the Markdown answer, charts, and steps inspector.
@@ -100,11 +100,11 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 
 **New `src/` modules (added in place):**
 
-- `src/graph/`: `sandbox.py` (eval namespace + `save_dataset`), `preflight.py` (C19 selector + C26 clarification), `suggestions.py` (follow-up questions), `describe.py` (C30 notes), `compress.py` (C31 fact extraction), `derived.py` (derived-dataset registration / lineage / staleness), `memory.py` (global-memory block). `state.py`/`nodes.py`/`edges.py`/`agent.py`/`runner.py` are REWRITTEN in place for the ReAct loop.
+- `src/graph/`: `sandbox.py` (eval namespace + lazy catalog namespace + `save_dataset`), `preflight.py` (C26 clarification), `suggestions.py` (follow-up questions), `describe.py` (C30 notes), `compress.py` (C31 fact extraction), `derived.py` (derived-dataset registration / lineage / staleness), `memory.py` (global-memory block). `state.py`/`nodes.py`/`edges.py`/`agent.py`/`runner.py` are REWRITTEN in place for the ReAct loop.
 - `src/llm/providers/`: `base.py` (provider protocol), `stub.py` (node-tag-branching offline provider), `openrouter.py`. `gemini.py` keeps its shape (default-model note only).
 - `src/api/`: `upload.py`, `datasets.py`, `datasets_ops.py` (clean/describe/re-derive), `ask.py`, `sessions.py`, `stats.py`, `memory.py` (NEW); `health.py` + `runs.py` extended.
 - `src/domain/`: `dataset.py`, `query_run.py`, `session.py`, `setting.py` (NEW); `run.py` kept.
-- `src/prompts/`: `plan_action.md`, `finalize.md`, `clarify.md`, `select.md`, `suggest.md`, `describe.md`, `compress.md`, `clean.md` (NEW). The boilerplate `transform.md` is removed when the ReAct graph replaces `transform_text`.
+- `src/prompts/`: `plan_action.md`, `finalize.md`, `clarify.md`, `suggest.md`, `describe.md`, `compress.md`, `clean.md` (NEW). The boilerplate `transform.md` is removed when the ReAct graph replaces `transform_text`.
 
 **Avoid:** LangChain (LangGraph only); the repository pattern (use SQLAlchemy directly in routers/nodes per skeleton convention); Pydantic/dataclass for `AgentState` (use `TypedDict`); calling a provider SDK directly in a node (always go through `LLMClient`); a second top-level package or any rename of `agent`/`src/`.
 
@@ -114,7 +114,7 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 
 - `provider = settings.llm_provider`; if blank, auto-detect: `anthropic_api_key` → `anthropic`; else `gemini_api_key` → `gemini`; else `openrouter_api_key` → `openrouter`; else `stub`. Explicit `stub` always selects the stub. Anthropic is checked first when its key is set (it predates Gemini in the codebase and is retained as a first-class provider).
 - Each provider implements TWO methods (Protocol in `base.py`): `complete(prompt, *, system=None) -> LLMResponse` (text + REAL provider-reported `tokens_input`/`tokens_output`, `0` when the provider reports none) and `call_model(prompt, *, system=None) -> str` (the text-only wrapper over `complete`). The graph's `plan_action`/`force_finalize` use `complete()` for accurate token totals; the single-shot graph-adjacent helpers use `call_model`. `LLMResponse` is a `NamedTuple(text, tokens_input=0, tokens_output=0)`. `LLMClient` also exposes the resolved `provider` name and `model` (so `/health`, `/stats/daily`, and the UI can show the stub banner + active model).
-- **Stub provider** branches **only on injected node tags** in the prompt (never on prose): `<node:finalize>` → canned best-effort summary; `<node:select>` → first dataset id in the schema block as a 1-element JSON array; `<node:plan>` → 1st call returns `df.describe().to_string()`, later calls return a `FINAL ANSWER:` Markdown summary (iteration inferred from `Result:`/`Error:` markers so repeated calls differ); a `<node:plan>` tag missing → `FINAL ANSWER: [stub] Unable to process`. See `spec/agent.md` for the exact tags and node behavior.
+- **Stub provider** branches **only on injected node tags** in the prompt (never on prose): `<node:finalize>` → canned best-effort summary; `<node:plan>` → 1st call returns `df.describe().to_string()`, later calls return a `FINAL ANSWER:` Markdown summary (iteration inferred from `Result:`/`Error:` markers so repeated calls differ); a `<node:plan>` tag missing → `FINAL ANSWER: [stub] Unable to process`. There is no `<node:select>` branch (dataset selection is agent-driven — Phase 6). See `spec/agent.md` for the exact tags and node behavior.
 - **Model verification:** `gemini-3.1-flash-lite` was verified at the Phase 2/3 real-key gate — it resolves against the Gemini API and is the confirmed model in use. It is recorded in `README.md`. No fallback was needed.
 - **Model catalogue (bare IDs):** model ids are stored/consumed BARE (no provider prefix). The current selectable set (Settings dropdown + the `_CONTEXT_LIMITS` table in `stats.py`) is the Gemini family — `gemini-3.5-flash`, `gemini-3.1-pro-preview`, `gemini-3-pro-preview`, **`gemini-3.1-flash-lite` (default)**, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-2.0-flash-lite` — plus the Anthropic models (`claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`). The retired `gemini-1.5-*` models have been removed. An unknown model id falls back to a `128000` context limit.
 

@@ -1,16 +1,21 @@
 """Run a single analysis through the ReAct graph.
 
-Phase 3 signature: adds sessions (multi-turn), pre-flight (C26 clarification +
-C19 selector), follow-up suggestions, and the C29 prompt_breakdown. Pre-flight
-runs ONLY when the datasets are NOT explicit (`run_selector=True`) — explicit
-`dataset_ids` (the Phase-2 direct path) skip BOTH clarification and the selector,
-per `spec/agent.md` ("Pre-flight ... is SKIPPED when explicit dataset_ids are
-supplied").
+Datasets are AGENT-DRIVEN: the runner hands the agent a metadata-only catalog of
+ALL the workspace's datasets (built in `setup`) and the agent picks + lazily loads
+whichever it needs. There is no pre-selection roundtrip — the only remaining
+pre-flight is the C26 clarification check, run on the first turn of a conversation
+(`run_clarification=True`) and skipped on follow-ups.
 
-The runner creates the `query_runs` row, runs pre-flight, invokes the compiled
-`agentic_ai` graph, persists the result, calls `generate_suggestions`, and
-returns the `/ask` payload. It does NOT commit/push and is provider-agnostic
-(all LLM calls go through `LLMClient`).
+The run's recorded `dataset_ids` is therefore the set the agent ACTUALLY loaded
+(used-tracking via `get_loaded_ids`), not the full candidate list: this keeps
+"Datasets used" accurate and scopes the C15 cascade-delete to real dependencies
+(recording every dataset would cascade-delete every conversation whenever any one
+dataset is removed).
+
+The runner creates the `query_runs` row, runs the clarification check, invokes the
+compiled `agentic_ai` graph, records the agent's dataset pick, persists the result,
+calls `generate_suggestions`, and returns the `/ask` payload. It does NOT
+commit/push and is provider-agnostic (all LLM calls go through `LLMClient`).
 """
 from __future__ import annotations
 
@@ -25,8 +30,13 @@ from db.models import DatasetRow, QueryRunRow
 from db.session import create_db_session
 from graph.agent import agentic_ai
 from graph.cancellation import discard as discard_cancel
-from graph.nodes import get_derived_created, release_derived_created
-from graph.preflight import check_clarification, select_datasets
+from graph.nodes import (
+    get_derived_created,
+    get_loaded_ids,
+    release_derived_created,
+    release_loaded_ids,
+)
+from graph.preflight import check_clarification
 from graph.state import AgentState
 from graph.suggestions import generate_suggestions
 from observability.events import get_logger
@@ -39,20 +49,15 @@ def _uploads_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "uploads"
 
 
-def _candidate_schemas(dataset_ids: list[str]) -> tuple[list[dict], str]:
-    """Build a compact schema view of each candidate dataset for pre-flight.
+def _candidate_schemas_text(dataset_ids: list[str]) -> str:
+    """Build a human-readable schema block of the candidate datasets.
 
-    Returns `(schemas, schemas_text)`:
-    - `schemas`: list of `{"id", "filename", "columns", "notes"}` dicts for
-      `select_datasets`.
-    - `schemas_text`: a human-readable block for `check_clarification`.
-
-    Columns come from the cheap `datasets.columns_json` metadata (no file read).
-    Falls back to a header-only Parquet/CSV peek if the column list is missing.
+    The only remaining pre-flight consumer is the C26 `check_clarification` call
+    (dataset SELECTION is now the agent's job, so no machine-readable schema list is
+    needed). Columns come from the cheap `datasets.columns_json` metadata (no file
+    read); falls back to a header-only Parquet/CSV peek if the column list is missing.
     """
-    schemas: list[dict] = []
     text_parts: list[str] = []
-
     with create_db_session() as session:
         for dataset_id in dataset_ids:
             row = session.get(DatasetRow, dataset_id)
@@ -63,16 +68,12 @@ def _candidate_schemas(dataset_ids: list[str]) -> tuple[list[dict], str]:
                 columns = _peek_columns(dataset_id)
             filename = row.filename or f"{dataset_id}.csv"
             notes = (row.context or "").strip()
-            schemas.append(
-                {"id": dataset_id, "filename": filename, "columns": columns, "notes": notes}
-            )
             cols_text = ", ".join(str(c) for c in columns)
             block = f"- {filename} (id {dataset_id}): columns [{cols_text}]"
             if notes:
                 block += f"; notes: {notes[:200]}"
             text_parts.append(block)
-
-    return schemas, "\n".join(text_parts)
+    return "\n".join(text_parts)
 
 
 def _peek_columns(dataset_id: str) -> list[str]:
@@ -158,14 +159,19 @@ def run_agent(
     session_id: str | None = None,
     conversation_history: list[dict] | None = None,
     skip_clarification: bool = False,
-    run_selector: bool = False,
+    run_clarification: bool = False,
     max_iterations: int | None = None,
 ) -> dict[str, Any]:
     """Run a single analysis; return the `/ask` payload.
 
-    Pre-flight (clarification + selector) runs ONLY when `run_selector=True`
-    (datasets NOT explicit). With explicit ids (`run_selector=False`, the default
-    Phase-2 path) BOTH pre-flight calls are skipped.
+    `dataset_ids` is the FULL candidate set (every dataset in the workspace) — the
+    agent picks and lazily loads whichever it needs from the catalog `setup` builds.
+    The C26 clarification check runs ONLY when `run_clarification=True` (the first
+    turn of a conversation) and can be suppressed with `skip_clarification`.
+
+    The `query_runs` row is created with an EMPTY `dataset_ids_json` and updated
+    after the graph returns with the ids the agent actually loaded (`get_loaded_ids`)
+    — that used set is what drives "Datasets used", the C15 cascade, and the report.
 
     Returns either:
     - a clarification short-circuit (no graph run):
@@ -186,56 +192,55 @@ def run_agent(
     candidate_ids = [d for d in (dataset_ids or []) if d]
     conversation_history = conversation_history or []
 
+    # Dataset selection is agent-driven: the C19 selector roundtrip is gone, so the
+    # reasoning field is always None (kept in the payload/DB for schema stability).
     selector_reasoning: str | None = None
-    resolved_ids = list(candidate_ids)
 
     # ------------------------------------------------------------------ #
-    # Pre-flight (only when datasets are NOT explicit).
+    # Pre-flight: C26 clarification only, first turn of a conversation.
     # ------------------------------------------------------------------ #
-    if run_selector:
-        schemas, schemas_text = _candidate_schemas(candidate_ids)
-
-        # 1. C26 clarification — short-circuit on an ambiguous question.
-        if not skip_clarification:
-            clarification = check_clarification(question, schemas_text)
-            if clarification:
-                with create_db_session() as session:
-                    row = QueryRunRow(
-                        dataset_id=candidate_ids[0] if candidate_ids else None,
-                        session_id=session_id,
-                        question=question,
-                        status="clarification",
-                        answer=clarification,
-                        dataset_ids_json=list(candidate_ids),
-                        iteration_count=0,
-                        tokens_input=0,
-                        tokens_output=0,
-                    )
-                    session.add(row)
-                    session.flush()
-                    clar_run_id = row.id
-                logger.info("clarification_returned", run_id=clar_run_id, session_id=session_id)
-                return {
-                    "type": "clarification",
-                    "run_id": clar_run_id,
-                    "clarification_question": clarification,
-                    "session_id": session_id,
-                }
-
-        # 2. C19 selector — pick the minimal dataset subset (fall back to all).
-        resolved_ids, selector_reasoning = select_datasets(question, schemas, candidate_ids)
+    if run_clarification and not skip_clarification:
+        schemas_text = _candidate_schemas_text(candidate_ids)
+        clarification = check_clarification(question, schemas_text)
+        if clarification:
+            with create_db_session() as session:
+                row = QueryRunRow(
+                    # A clarification turn depends on NO specific dataset: an empty id
+                    # set keeps a dataset deletion (C15 cascade) from wiping the whole
+                    # conversation just because it once asked a clarifying question.
+                    dataset_id=None,
+                    session_id=session_id,
+                    question=question,
+                    status="clarification",
+                    answer=clarification,
+                    dataset_ids_json=[],
+                    iteration_count=0,
+                    tokens_input=0,
+                    tokens_output=0,
+                )
+                session.add(row)
+                session.flush()
+                clar_run_id = row.id
+            logger.info("clarification_returned", run_id=clar_run_id, session_id=session_id)
+            return {
+                "type": "clarification",
+                "run_id": clar_run_id,
+                "clarification_question": clarification,
+                "session_id": session_id,
+            }
 
     # ------------------------------------------------------------------ #
-    # Create the query_runs row (status=running) with the FINAL ids.
+    # Create the query_runs row (status=running). `dataset_ids_json` starts
+    # EMPTY — it is set post-run to the datasets the agent actually loaded.
     # ------------------------------------------------------------------ #
     with create_db_session() as session:
         row = QueryRunRow(
-            dataset_id=resolved_ids[0] if resolved_ids else None,
+            dataset_id=None,
             session_id=session_id,
             question=question,
             status="running",
-            dataset_ids_json=list(resolved_ids),
-            selector_reasoning=selector_reasoning,
+            dataset_ids_json=[],
+            selector_reasoning=None,
             iteration_count=0,
             tokens_input=0,
             tokens_output=0,
@@ -247,18 +252,20 @@ def run_agent(
     logger.info(
         "run_start",
         run_id=run_id,
-        datasets=len(resolved_ids),
+        candidates=len(candidate_ids),
         max_iterations=cap,
         session_id=session_id,
-        run_selector=run_selector,
+        run_clarification=run_clarification,
     )
 
     # ------------------------------------------------------------------ #
-    # Build the initial AgentState and invoke the graph.
+    # Build the initial AgentState and invoke the graph. The state carries the
+    # FULL candidate set as `dataset_ids` — `setup` turns it into the catalog the
+    # agent picks from; the agent's actual pick is read back after invoke.
     # ------------------------------------------------------------------ #
     initial: AgentState = {
         "run_id": run_id,
-        "dataset_ids": list(resolved_ids),
+        "dataset_ids": list(candidate_ids),
         "session_id": session_id,
         "question": question,
         "conversation_history": conversation_history,
@@ -270,7 +277,7 @@ def run_agent(
         "status": "running",
         "max_iterations": cap,
         "error": None,
-        "selector_reasoning": selector_reasoning,
+        "selector_reasoning": None,
     }
 
     config = {"recursion_limit": cap * 3 + 10}
@@ -283,8 +290,13 @@ def run_agent(
     tokens_input = final.get("tokens_input", 0)
     tokens_output = final.get("tokens_output", 0)
     error_message = final.get("error_message") or final.get("error")
-    selector_reasoning = final.get("selector_reasoning", selector_reasoning)
+    selector_reasoning = None  # agent-driven selection: no selector reasoning
     charts = final.get("charts") or []
+    # The datasets the agent ACTUALLY loaded this run (used-tracking) — the run's
+    # real dataset set (accurate "Datasets used" + correct C15 cascade scope). Read
+    # the run-scoped registry, then release it.
+    used_ids = get_loaded_ids(run_id)
+    release_loaded_ids(run_id)
     # Derived datasets the agent persisted via save_dataset this run (C25). Read
     # the run-scoped registry, then release it.
     derived_dataset_ids = get_derived_created(run_id)
@@ -330,6 +342,10 @@ def run_agent(
             row.selector_reasoning = selector_reasoning
             row.prompt_breakdown = prompt_breakdown
             row.charts_json = charts or []
+            # Record the agent's dataset pick (used-tracking): the run now "depends
+            # on" exactly the datasets it loaded — nothing when it loaded none.
+            row.dataset_id = used_ids[0] if used_ids else None
+            row.dataset_ids_json = list(used_ids)
 
     # Clear any Stop flag now the run has ended (success, error, or cancelled).
     discard_cancel(run_id)
@@ -355,7 +371,7 @@ def run_agent(
         "action_history": action_history,
         "charts": charts,
         "derived_dataset_ids": derived_dataset_ids,
-        "dataset_ids": list(resolved_ids),
+        "dataset_ids": list(used_ids),
         "is_best_effort": is_best_effort,
         "selector_reasoning": selector_reasoning,
         "suggested_questions": suggested_questions,

@@ -229,9 +229,13 @@ def test_ask_single_dataset_returns_answer(api_client):
     assert breakdown["system_overhead"] > 0
 
 
-def test_ask_404_when_dataset_missing(api_client):
+def test_ask_400_when_no_datasets(api_client):
+    """Dataset selection is agent-driven: the request's `dataset_id` is ignored, so
+    a ghost id is NOT a 404. With no datasets in the workspace, `/ask` returns 400
+    (`no_datasets`) — there is nothing for the agent to analyse."""
     r = api_client.post("/ask", json={"dataset_id": "ghost", "question": "hi"})
-    assert r.status_code == 404
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "no_datasets"
 
 
 def test_runs_current_reflects_last_run(api_client):
@@ -587,8 +591,15 @@ def test_delete_dataset_with_running_run_returns_409(api_client, _isolated_db):
 
 
 def test_delete_dataset_cascades_runs_via_dataset_ids_json(api_client, _isolated_db):
-    """Fix B (D2): deleting a secondary dataset also removes runs in dataset_ids_json."""
-    from sqlalchemy import select
+    """Fix B (D2): deleting a dataset removes runs that list it in `dataset_ids_json`
+    as a SECONDARY participant — a run whose primary `dataset_id` is a DIFFERENT
+    dataset, so the cascade can only reach it via the json list.
+
+    Dataset selection is agent-driven, so a run records only the datasets the agent
+    actually loaded (here the stub touches `df` -> the first dataset, A). We seed the
+    multi-dataset case by appending B to that real run's `dataset_ids_json`; its
+    primary stays A, isolating the json-list cascade path.
+    """
     from sqlalchemy.orm import sessionmaker
     from db.models import QueryRunRow
 
@@ -601,24 +612,31 @@ def test_delete_dataset_cascades_runs_via_dataset_ids_json(api_client, _isolated
     assert up_b.status_code == 200, up_b.text
     b_id = up_b.json()["data"]["dataset_id"]
 
-    # Run /ask with both dataset ids — this run references B as a secondary.
-    ask = api_client.post(
-        "/ask", json={"dataset_ids": [a_id, b_id], "question": "compare them"}
-    )
+    # A real run. `dataset_ids` is ignored (agent-driven); the stub references `df`
+    # -> the FIRST dataset (A), so used-tracking records dataset_id=A, ids_json=[A].
+    ask = api_client.post("/ask", json={"question": "summarise the data"})
     assert ask.status_code == 200, ask.text
     run_id = ask.json()["data"]["run_id"]
 
-    # Confirm the run was written and completed.
     Session = sessionmaker(bind=_isolated_db, autoflush=False, autocommit=False)
     with Session() as db_session:
         run_row = db_session.get(QueryRunRow, run_id)
         assert run_row is not None, "Run row missing after /ask"
+        # Agent-driven used-tracking: only the touched dataset (A) is recorded.
+        assert run_row.dataset_id == a_id
+        assert run_row.dataset_ids_json == [a_id]
+        # Make B a SECONDARY participant (primary stays A). Now a delete of B can
+        # reach this run ONLY through the dataset_ids_json list, not the primary col.
+        run_row.dataset_ids_json = [a_id, b_id]
+        db_session.add(run_row)
+        db_session.commit()
 
     # Delete dataset B (the secondary participant).
     r = api_client.delete(f"/datasets/{b_id}")
     assert r.status_code == 200, r.text
 
-    # The run referencing B must now be gone from the DB.
+    # The run referencing B via dataset_ids_json must now be gone (its primary
+    # dataset_id is A, so ONLY the json-list cascade could have matched it).
     with Session() as db_session:
         orphaned = db_session.get(QueryRunRow, run_id)
         assert orphaned is None, (

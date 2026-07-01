@@ -22,8 +22,10 @@ export interface LastQueryTokens {
  * Analyse tab — the real Phase-3 surface.
  *
  * Owns the shared state the cards coordinate on:
- *  - `selectedDatasetIds` : the explicit multi-dataset selection (empty → the
- *    server's C19 selector picks). The Tables card's checkboxes set it.
+ *  - `selectedDatasetIds` : the Tables card's row selection, used ONLY for bulk
+ *    actions (delete) — it does NOT scope analysis. Dataset selection for a
+ *    question is agent-driven server-side; the agent picks from a catalog of all
+ *    datasets. The Tables card's checkboxes set this.
  *  - `sessionId`          : the active conversation session. New is created
  *    server-side on the next /ask with no session_id; the answer's session_id is
  *    adopted here. Resuming a session loads its turns into the conversation card.
@@ -205,7 +207,6 @@ export function AnalyseTab({
         </div>
         <ConversationCard
           handleRef={conversationRef}
-          selectedDatasetIds={selectedDatasetIds}
           sessionId={sessionId}
           model={model}
           onSessionStarted={handleSessionStarted}

@@ -258,13 +258,12 @@ export interface AskResponse {
   clarification_question?: string
 }
 
-/** Arguments for the `ask` wrapper — datasets are optional (selector picks). */
+/**
+ * Arguments for the `ask` wrapper. There is NO dataset scoping: selection is
+ * agent-driven server-side (the agent picks from a catalog of all datasets).
+ */
 export interface AskArgs {
   question: string
-  /** Explicit multi-dataset selection (C19 selector runs when omitted/empty). */
-  datasetIds?: string[]
-  /** Single-dataset convenience (back-compat with the Phase-2 caller). */
-  datasetId?: string
   /** Continue an existing session; omit to start a new one server-side. */
   sessionId?: string | null
   /** Skip the C26 clarification pre-flight (used on clarification re-submit). */
@@ -450,10 +449,9 @@ export const api = {
   /**
    * POST /ask — the analysis entry point (spec/api.md).
    *
-   * Body: `{dataset_id? | dataset_ids?, question, session_id?, skip_clarification}`.
-   *  - Pass `datasetIds` to pin an explicit set of datasets (C19 selector is
-   *    skipped); pass a single `datasetId` for the simple one-dataset case;
-   *    omit both to let the server's selector pick over all uploaded datasets.
+   * Body: `{question, session_id?, skip_clarification}`. Dataset selection is
+   * agent-driven server-side (the agent picks from a catalog of every dataset),
+   * so the body carries no dataset scoping.
    *  - Pass `sessionId` to continue a session; omit to start a new one.
    *  - Pass `skipClarification` to bypass the C26 pre-flight (used when a user
    *    re-submits after a clarification turn).
@@ -464,11 +462,6 @@ export const api = {
     const body: Record<string, unknown> = {
       question: args.question,
       skip_clarification: args.skipClarification ?? false,
-    }
-    if (args.datasetIds && args.datasetIds.length > 0) {
-      body.dataset_ids = args.datasetIds
-    } else if (args.datasetId) {
-      body.dataset_id = args.datasetId
     }
     if (args.sessionId) body.session_id = args.sessionId
     return postJson<AskResponse>('/ask', body, args.signal)

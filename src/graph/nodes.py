@@ -22,11 +22,10 @@ import pandas as pd
 from db.models import DatasetRow, QueryRunRow
 from db.session import create_db_session
 from graph.cancellation import is_cancelled  # cooperative Stop
-from graph.compress import extract_facts  # C31: distil notes -> compact facts
 from graph.memory import get_memory_block  # owned by slice-3c; 3b only imports it
 from graph.sandbox import (
     _safe_alias,
-    build_namespace,
+    build_lazy_namespace,
     eval_expression,
     make_echart,
     make_save_dataset,
@@ -41,9 +40,12 @@ _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _PLAN_PROMPT_PATH = _PROMPTS_DIR / "plan_action.md"
 _FINALIZE_PROMPT_PATH = _PROMPTS_DIR / "finalize.md"
 
-# Run-scoped DataFrame registry: {run_id: {"frames": [df, ...], "filenames": [...]}}.
-# Phase 2 single-turn loads here and releases on finalize/error. Phase 3 adds the
-# session-keyed cache below (C27) for multi-turn sessions.
+# Run-scoped registry, keyed by `run_id`:
+#   {run_id: {"session_id", "catalog": [{id,filename,alias,columns,notes}, ...],
+#             "frames": {dataset_id: df}, "derived_frames": {alias: df}}}
+# `setup` builds the metadata-only catalog of ALL candidate datasets; `frames` is
+# filled LAZILY as the agent references datasets (see execute_action's loader), so
+# a question never loads a table it doesn't touch. Released on finalize/error.
 _dataframes: dict[str, dict[str, Any]] = {}
 
 # Run-scoped registry of derived dataset ids created by `save_dataset` during a
@@ -51,6 +53,14 @@ _dataframes: dict[str, dict[str, Any]] = {}
 # `get_derived_created(run_id)` to surface `derived_dataset_ids` in the payload,
 # and it is cleared when the run's DataFrames are released.
 _derived_created: dict[str, list[str]] = {}
+
+# Run-scoped registry of the EXISTING dataset ids the agent actually LOADED during
+# a run, keyed by `run_id` — the used-tracking that agent-driven selection needs.
+# Kept SEPARATE from `_dataframes` (like `_derived_created`) so it survives the
+# finalize node's `_release_dataframe`; the runner reads it via `get_loaded_ids`
+# AFTER the graph returns, records it as the run's real `dataset_ids` (what the
+# agent picked), then releases it. Doubles as save_dataset's parent lineage.
+_loaded_ids: dict[str, list[str]] = {}
 
 # Session DataFrame cache (C27): {session_id: {"frames": {dataset_id: df},
 #   "order": [dataset_id, ...]}}. Reused across turns of the same conversation so
@@ -124,58 +134,16 @@ def _load_dataframe(dataset_id: str) -> pd.DataFrame:
     )
 
 
-def _schema_block(df: pd.DataFrame, name: str, notes: str | None = None) -> str:
-    """A compact column-schema description for the prompt's dataset context."""
-    cols = ", ".join(f"{c} ({df[c].dtype})" for c in df.columns)
-    lines = [f"Dataset `{name}`: {df.shape[0]} rows x {df.shape[1]} cols", f"Columns: {cols}"]
-    if notes:
-        lines.append(f"Notes: {notes.strip()}")
-    return "\n".join(lines)
-
-
 def _facts_as_notes(facts: list[str]) -> str:
-    """Render C31 compressed facts as a compact notes string for the prompt."""
-    return "; ".join(f.strip() for f in facts if f and str(f).strip())
+    """Render C31 compressed facts as a compact notes string for the prompt.
 
-
-def _dataset_notes_for_prompt(
-    dataset_id: str, context: str | None, facts: list[str] | None
-) -> str:
-    """C31: inject the COMPRESSED facts into the plan prompt — never the raw notes.
-
-    Raw, uncompressed notes must NEVER be sent to the LLM (they are exactly what
-    C31 exists to shrink). So:
-
-    - If compressed facts already exist -> render and use them.
-    - Else if raw notes exist but no facts yet -> compress SYNCHRONOUSLY on demand
-      via `extract_facts(dataset_id)` (populates `context_facts`, returns the facts)
-      and use those compressed facts.
-    - If synchronous compression still yields nothing (provider failure / stub
-      mode) -> return "" (pass NO notes). We never fall back to the raw notes.
+    C31: the catalog's dataset notes are ALWAYS the pre-compressed `context_facts`
+    (rendered here) — the raw, uncompressed notes are never sent to the LLM. `setup`
+    reads only cached facts and does NOT compress on demand (the catalog spans every
+    dataset, so a synchronous compress-per-dataset would be a first-turn storm); a
+    dataset with no facts cached yet simply shows columns only.
     """
-    clean_facts = [f for f in (facts or []) if f and str(f).strip()]
-    if clean_facts:
-        return _facts_as_notes(clean_facts)
-
-    raw = (context or "").strip()
-    if not raw:
-        return ""
-
-    # Notes exist but no facts yet — compress on demand so the LLM only ever sees
-    # the compact facts, never the raw notes.
-    try:
-        fresh = extract_facts(dataset_id)
-    except Exception as exc:  # noqa: BLE001 — on-demand compression is best-effort
-        logger.warning("facts_on_demand_failed", dataset_id=dataset_id, error=str(exc))
-        fresh = []
-
-    clean_fresh = [f for f in (fresh or []) if f and str(f).strip()]
-    if clean_fresh:
-        return _facts_as_notes(clean_fresh)
-
-    # Compression produced nothing (e.g. stub/offline or provider failure). Pass
-    # NO notes rather than leaking the raw, uncompressed notes to the LLM.
-    return ""
+    return "; ".join(f.strip() for f in facts if f and str(f).strip())
 
 
 def _safe_memory_block() -> str:
@@ -237,14 +205,44 @@ def _session_load_frame(session_id: str, dataset_id: str) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 
 
-def setup(state: AgentState) -> AgentState:
-    """Load DataFrame(s) for the run and build the dataset context.
+def _catalog_block(idx: int, entry: dict[str, Any]) -> str:
+    """One dataset's line in the prompt CATALOG: how to reference it + its columns.
 
-    When `session_id` is set (multi-turn), DataFrames come from the session cache
-    (C27) — hit reuses + LRU-touches, miss loads Parquet/CSV and stores. Without
-    a `session_id` (single-turn), the simple per-run `_dataframes[run_id]` path is
-    used unchanged. The frames list stays ordered by `dataset_ids`. A fatal
-    load/lookup error sets `error` -> handle_error.
+    Names the variable the model loads it with (`df{n}` and, when distinct, the
+    `<alias>`), the source filename, its columns (from the cheap `columns_json`
+    metadata), and any compressed notes. Deliberately metadata-only: no dtypes /
+    row-counts — those need a loaded frame, and the whole point of the catalog is
+    to pick WITHOUT reading files. The model inspects `df{n}.dtypes` / `.head()`
+    itself once it decides a dataset is relevant.
+    """
+    dfn = f"df{idx + 1}"
+    alias = entry.get("alias")
+    names = f"`{dfn}` (alias `{alias}`)" if alias and alias != dfn else f"`{dfn}`"
+    columns = entry.get("columns") or []
+    cols = ", ".join(columns) if columns else "(columns unknown — inspect with .columns)"
+    line = f"- {names} — {entry.get('filename', '')}: {cols}"
+    notes = (entry.get("notes") or "").strip()
+    if notes:
+        line += f"\n  notes: {notes}"
+    return line
+
+
+def setup(state: AgentState) -> AgentState:
+    """Build the dataset CATALOG for the run — the agent picks + loads datasets lazily.
+
+    Instead of eager-loading every dataset (the old pre-selected-subset model), this
+    assembles a lightweight metadata-only catalog of ALL candidate datasets
+    (filename, columns from `columns_json`, compressed notes) WITHOUT reading a
+    single Parquet/CSV. Frames are materialised one at a time, the first time the
+    model's expression references one (see `execute_action`'s loader +
+    `build_lazy_namespace`), so a question that reads one table never loads the
+    other twenty. The run-scoped bundle carries the catalog, a per-id frame cache
+    (filled lazily), and any `save_dataset` outputs.
+
+    C31: catalog notes use ONLY already-compressed `context_facts` — never raw notes,
+    and setup does NOT trigger on-demand compression (it now spans EVERY dataset, so
+    a compress-per-dataset storm on the first turn is exactly what a lazy catalog is
+    meant to avoid). Datasets whose facts aren't cached yet simply show columns only.
     """
     run_id = state.get("run_id", "")
     session_id = state.get("session_id")
@@ -253,45 +251,49 @@ def setup(state: AgentState) -> AgentState:
     if not dataset_ids:
         return {**state, "error": "No datasets supplied to load."}
 
-    frames: list[pd.DataFrame] = []
-    filenames: list[str] = []
-    schema_parts: list[str] = []
-
+    catalog: list[dict[str, Any]] = []
     try:
         with create_db_session() as session:
             for dataset_id in dataset_ids:
                 row = session.get(DatasetRow, dataset_id)
                 if row is None:
-                    return {**state, "error": f"Dataset {dataset_id!r} not found."}
-                if session_id:
-                    frame = _session_load_frame(session_id, dataset_id)
-                else:
-                    frame = _load_dataframe(dataset_id)
-                frames.append(frame)
-                filenames.append(row.filename or f"{dataset_id}.csv")
-                schema_parts.append(
-                    _schema_block(
-                        frame,
-                        row.filename or dataset_id,
-                        _dataset_notes_for_prompt(
-                            dataset_id, row.context, row.context_facts
-                        ),
-                    )
+                    # Deleted between resolution and setup — skip it rather than fail
+                    # the whole run; the remaining datasets stay usable.
+                    continue
+                filename = row.filename or f"{dataset_id}.csv"
+                stem = filename.rsplit(".", 1)[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                catalog.append(
+                    {
+                        "id": dataset_id,
+                        "filename": filename,
+                        "alias": _safe_alias(stem),
+                        "columns": [str(c) for c in (row.columns_json or [])],
+                        # C31: compressed facts only — never raw notes, no on-demand
+                        # compression here (see the docstring).
+                        "notes": _facts_as_notes(row.context_facts or []),
+                    }
                 )
-    except Exception as exc:  # noqa: BLE001 — fatal load error
-        logger.warning("setup_load_failed", run_id=run_id, error=str(exc))
-        return {**state, "error": f"Failed to load dataset(s): {exc}"}
+    except Exception as exc:  # noqa: BLE001 — catalog build is metadata-only
+        logger.warning("setup_catalog_failed", run_id=run_id, error=str(exc))
+        return {**state, "error": f"Failed to read dataset catalog: {exc}"}
 
-    # The run-scoped registry is what execute_action reads each step; populate it
-    # for BOTH paths (the session cache is the source of frames, this is the
-    # per-run handle). The frames list stays ordered by `dataset_ids`.
-    _dataframes[run_id] = {"frames": frames, "filenames": filenames}
-    dataset_context = "\n\n".join(schema_parts)
+    if not catalog:
+        return {**state, "error": "No datasets available to analyse."}
+
+    _dataframes[run_id] = {
+        "session_id": session_id,
+        "catalog": catalog,
+        "frames": {},  # dataset_id -> DataFrame, filled lazily by execute_action
+        "derived_frames": {},  # <alias> -> DataFrame (save_dataset outputs)
+    }
+    dataset_context = "\n\n".join(
+        _catalog_block(idx, entry) for idx, entry in enumerate(catalog)
+    )
     wants_chart = _wants_chart(state.get("question", ""))
     logger.info(
         "setup_ok",
         run_id=run_id,
-        datasets=len(frames),
+        datasets=len(catalog),
         session=bool(session_id),
         wants_chart=wants_chart,
     )
@@ -322,10 +324,11 @@ def _plan_prompt_sections(state: AgentState, wrap_up: bool) -> dict[str, str]:
     `question`, `wrap_up`, and `footer` keys are the fixed scaffolding; `datasets`,
     `memory`, `history`, and `actions` are the variable context blocks.
 
-    NOTE: `dataset_context` already folds dataset notes INTO the schema block (via
-    `_schema_block(..., notes=...)` in `setup`), so the `## Datasets` section is
-    measured wholly into `dataset_schemas` and `dataset_notes` is 0 — measuring
-    them separately would double-count. See spec/capabilities/context-window-display.md.
+    NOTE: `dataset_context` is the metadata-only CATALOG built in `setup`, which
+    folds each dataset's notes INTO its catalog line (via `_catalog_block`), so the
+    `## Datasets` section is measured wholly into `dataset_schemas` and
+    `dataset_notes` is 0 — measuring them separately would double-count. See
+    spec/capabilities/context-window-display.md.
     """
     sections: dict[str, str] = {}
 
@@ -631,41 +634,66 @@ def execute_action(state: AgentState) -> AgentState:
     action_history = list(state.get("action_history") or [])
     charts = list(state.get("charts") or [])
 
-    bundle = _dataframes.get(run_id, {})
-    frames = bundle.get("frames", [])
-    filenames = bundle.get("filenames", [])
-    namespace = build_namespace(frames, filenames)
+    # The agent picks datasets by REFERENCING them: `build_lazy_namespace` maps
+    # `df{n}`/alias names to dataset ids and materialises a frame only when the
+    # model's expression first touches that name (via the `_loader` closure below),
+    # so a question that reads one table never loads the other twenty.
+    bundle = _dataframes.get(run_id) or {
+        "session_id": state.get("session_id"),
+        "catalog": [],
+        "frames": {},
+        "derived_frames": {},
+    }
+    session_id = bundle.get("session_id")
+    frames_cache: dict[str, pd.DataFrame] = bundle["frames"]
+
+    def _loader(dataset_id: str) -> pd.DataFrame:
+        """Materialise (and cache) one dataset the first time the agent references it.
+
+        Records the id in `_loaded_ids[run_id]` — the used-tracking that becomes the
+        run's real `dataset_ids` (accurate "Datasets used", correct C15 cascade) and
+        doubles as save_dataset's parent lineage. Uses the session cache (C27) for a
+        multi-turn conversation, else the simple per-run load.
+        """
+        cached = frames_cache.get(dataset_id)
+        if cached is not None:
+            return cached
+        frame = (
+            _session_load_frame(session_id, dataset_id)
+            if session_id
+            else _load_dataframe(dataset_id)
+        )
+        frames_cache[dataset_id] = frame
+        touched = _loaded_ids.setdefault(run_id, [])
+        if dataset_id not in touched:
+            touched.append(dataset_id)
+        return frame
+
+    namespace = build_lazy_namespace(bundle["catalog"], _loader, bundle["derived_frames"])
 
     # Override the module-level stub with a run-aware `save_dataset` that knows the
     # producing run_id + parent dataset_ids and records each created derived id
     # (C25). The closure captures the current action expression as derivation_code
     # via `eval_expression` (it calls `.set_code` before eval).
-    parent_ids = list(state.get("dataset_ids") or [])
-
     def _on_registered(new_id: str) -> None:
         _derived_created.setdefault(run_id, []).append(new_id)
 
     def _on_saved(name: str, df: pd.DataFrame) -> None:
         # Make a save_dataset'd frame referenceable as `<name>` (v0.5 parity):
-        # append it to THIS run's frames so the NEXT step's build_namespace aliases
-        # it, and inject it into the CURRENT action's namespace so a later
-        # statement in the same action can use it. A re-save of the same name
-        # replaces the prior frame (latest wins).
+        # record it in the run's derived_frames so the NEXT step's lazy namespace
+        # resolves it via `__missing__`, and inject it into the CURRENT action's
+        # namespace so a later statement in the same action can use it. A re-save of
+        # the same name replaces the prior frame (latest wins).
         alias = _safe_alias(name) or name
-        b = _dataframes.get(run_id)
-        if b is not None:
-            fn = f"{name}.csv"
-            try:
-                i = b["filenames"].index(fn)
-                b["frames"][i] = df
-            except ValueError:
-                b["frames"].append(df)
-                b["filenames"].append(fn)
+        bundle["derived_frames"][alias] = df
         namespace[alias] = df
 
     namespace["save_dataset"] = make_save_dataset(
         run_id=run_id,
-        parent_ids=parent_ids,
+        # The LIVE loaded-ids list: `make_save_dataset` snapshots it at CALL time
+        # (`list(parent_ids or [])` inside the closure), so a save records exactly the
+        # datasets loaded up to that point as its parent lineage.
+        parent_ids=_loaded_ids.setdefault(run_id, []),
         on_registered=_on_registered,
         on_saved=_on_saved,
     )
@@ -734,6 +762,23 @@ def get_derived_created(run_id: str) -> list[str]:
 def release_derived_created(run_id: str) -> None:
     """Drop the run's derived-id registry once the runner has read it."""
     _derived_created.pop(run_id, None)
+
+
+def get_loaded_ids(run_id: str) -> list[str]:
+    """The EXISTING dataset ids the agent actually loaded during `run_id`.
+
+    This is the agent's dataset PICK — the runner records it as the run's real
+    `dataset_ids` (accurate "Datasets used", correct C15 cascade-delete scope, and
+    the session's dataset set). Survives `_release_dataframe` (kept in a separate
+    registry), so the runner reads it AFTER the graph returns. Order is load order;
+    empty when the agent loaded nothing (or already released).
+    """
+    return list(_loaded_ids.get(run_id, []))
+
+
+def release_loaded_ids(run_id: str) -> None:
+    """Drop the run's loaded-id registry once the runner has read it."""
+    _loaded_ids.pop(run_id, None)
 
 
 def _release_dataframe(run_id: str) -> None:

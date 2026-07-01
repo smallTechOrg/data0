@@ -23,7 +23,7 @@ Routes every LLM call through one `LLMClient` over Gemini, OpenRouter, or a node
 
 ## Business Rules
 - `AGENT_LLM_PROVIDER` ∈ `auto|gemini|openrouter|stub`; blank → auto-detect (gemini key → gemini; else openrouter key → openrouter; else stub). Existing `anthropic` retained.
-- Stub branches ONLY on injected node tags (`<node:plan>`/`<node:select>`/`<node:finalize>`/…), never on prose. Tag→output table in `spec/agent.md`.
+- Stub branches ONLY on injected node tags (`<node:plan>`/`<node:finalize>`/`<node:clarify>`/…), never on prose. Tag→output table in `spec/agent.md`.
 - No node calls a provider SDK directly — always via `LLMClient`.
 
 ## Success Criteria

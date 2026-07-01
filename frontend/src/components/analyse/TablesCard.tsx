@@ -14,18 +14,20 @@ import { CleanModal } from '@/components/database/CleanModal'
  * Fetches GET /datasets on mount and whenever `datasetsVersion` changes (the
  * parent bumps it after each upload and each completed ask, surfacing new /
  * derived datasets). Each row shows filename + rows×cols + format + origin/stale
- * badges, a checkbox to include the dataset in the next question, a "cols"
+ * badges, a checkbox to select the dataset for bulk actions, a "cols"
  * toggle that lazily fetches GET /datasets/{id} for the column schema, a
  * **Clean** action (uploaded rows → the C24 clean modal) and a **Re-derive**
  * action (stale derived rows → POST /datasets/{id}/re-derive). Deletion is a
  * bulk action in the selection bar: check rows, then **Delete selected** with an
- * inline confirm → DELETE /datasets/{id} for each checked dataset.
+ * inline confirm → DELETE /datasets/{id} for each checked dataset. The selection
+ * does NOT scope analysis — dataset selection for a question is agent-driven
+ * server-side (the agent picks from a catalog of all datasets).
  *
- * The filter tabs (All|Uploaded|Derived|This session) are REAL client-side
+ * The filter tabs (All|Uploaded|Derived|Selected) are REAL client-side
  * filters by `origin` / current selection.
  */
 
-const FILTERS = ['All', 'Uploaded', 'Derived', 'This session'] as const
+const FILTERS = ['All', 'Uploaded', 'Derived', 'Selected'] as const
 type Filter = (typeof FILTERS)[number]
 
 export interface ColsState {
@@ -50,7 +52,7 @@ export interface TablesCardViewProps {
   loading: boolean
   /** Load/action error to surface in the shared banner, or null. */
   error: string | null
-  /** Ids of datasets pinned for the next question. */
+  /** Ids of datasets selected for bulk actions (delete). Does NOT scope analysis. */
   selectedDatasetIds: string[]
   /** Per-row "cols" disclosure state, keyed by dataset id. */
   colsById: Record<string, ColsState>
@@ -60,11 +62,11 @@ export interface TablesCardViewProps {
   rederivingId: string | null
   /** Re-run the dataset load. */
   onRefresh: () => void
-  /** Pin/unpin a single dataset. */
+  /** Select/deselect a single dataset. */
   onToggleSelect: (id: string) => void
-  /** Pin every dataset id. */
+  /** Select every dataset id. */
   onSelectAll: (ids: string[]) => void
-  /** Clear the pinned selection. */
+  /** Clear the selection. */
   onClearSelection: () => void
   /** Delete every currently-selected dataset. */
   onDeleteSelected: () => void
@@ -104,9 +106,9 @@ export function TablesCardView({
         return datasets.filter(d => d.origin !== 'derived')
       case 'Derived':
         return datasets.filter(d => d.origin === 'derived')
-      case 'This session':
-        // No per-session dataset set is plumbed here; approximate by the pinned
-        // selection (the datasets chosen for the next ask). Empty → show all.
+      case 'Selected':
+        // Show only the rows the user has checked (for bulk actions). Empty
+        // selection → nothing to narrow to, so show all.
         return selectedDatasetIds.length > 0
           ? datasets.filter(d => selectedDatasetIds.includes(d.id))
           : datasets
@@ -146,7 +148,7 @@ export function TablesCardView({
         </button>
       </div>
 
-      {/* Selection mode: explicit datasets vs. let the agent pick (C19).
+      {/* Selection bar for BULK ACTIONS (delete) — not analysis scoping.
           Action buttons are left-anchored (Select all is always present —
           disabled when everything is selected — so the cluster never shifts);
           the "N selected" count floats to the far right via ml-auto. */}
@@ -284,7 +286,7 @@ export function TablesCardView({
                       type="checkbox"
                       checked={selected}
                       onChange={() => onToggleSelect(ds.id)}
-                      aria-label={`Include ${ds.filename} in the next question`}
+                      aria-label={`Select ${ds.filename}`}
                       className="h-4 w-4 shrink-0"
                     />
                     <span className="min-w-0 flex-1 truncate text-xs font-medium text-gray-800">
@@ -462,7 +464,7 @@ export function TablesCard({
     [colsById],
   )
 
-  // Bulk-delete every checked dataset (C19). Settles all deletions, drops the
+  // Bulk-delete every checked dataset. Settles all deletions, drops the
   // ones that succeeded from the selection + local list, and surfaces the first
   // failure (if any) via the shared error banner.
   const deleteSelected = useCallback(async () => {

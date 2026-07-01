@@ -2,11 +2,11 @@
 
 Zero env vars, no network, in-memory SQLite (via the autouse `_isolated_db`
 fixture in conftest). The stub LLM provider drives every call: it branches only
-on the injected node tags (`<node:clarify>` -> "proceed", `<node:select>` ->
-first schema id, `<node:suggest>` -> "[]").
+on the injected node tags (`<node:clarify>` -> "proceed",
+`<node:suggest>` -> "[]").
 
 These tests verify the stub-mode contract and the deterministic cache behaviour;
-the REAL-Gemini behaviour (a genuine clarifying question, a correct selection) is
+the REAL-Gemini behaviour (a genuine clarifying question) is
 covered by tests/integration/test_preflight_real.py.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ import pytest
 from db.models import DatasetRow
 from db.session import create_db_session
 from graph import nodes as nodes_module
-from graph.preflight import check_clarification, select_datasets
+from graph.preflight import check_clarification
 from graph.suggestions import generate_suggestions
 
 
@@ -99,61 +99,6 @@ def test_check_clarification_fails_open(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# select_datasets (C19) — stub returns the first schema id
-# --------------------------------------------------------------------------- #
-
-
-def test_select_datasets_stub_returns_first_id():
-    """Stub `<node:select>` echoes the first `id:` in the schema block."""
-    schemas = [
-        {"id": "ds-one", "filename": "sales.csv", "columns": ["product", "price"]},
-        {"id": "ds-two", "filename": "employees.csv", "columns": ["name", "salary"]},
-    ]
-    selected, reasoning = select_datasets("revenue?", schemas, ["ds-one", "ds-two"])
-    assert selected == ["ds-one"]
-    assert isinstance(reasoning, str) and reasoning
-
-
-def test_select_datasets_falls_back_to_all_on_empty():
-    """An empty/unusable selection falls back to ALL candidate ids."""
-    # No candidates intersect the (empty schema) selection -> fall back to all.
-    schemas: list[dict] = []
-    candidates = ["ds-one", "ds-two"]
-    selected, reasoning = select_datasets("anything", schemas, candidates)
-    assert selected == candidates
-    assert "all candidate" in reasoning.lower()
-
-
-def test_select_datasets_drops_hallucinated_ids(monkeypatch):
-    """Ids returned by the model that are not candidates are dropped; if none
-    remain, fall back to all."""
-    import graph.preflight as preflight_module
-
-    class _Hallucinate:
-        def call_model(self, *a, **k):
-            return '["not-a-real-id"]'
-
-    monkeypatch.setattr(preflight_module, "LLMClient", _Hallucinate)
-    candidates = ["real-1", "real-2"]
-    selected, _ = select_datasets("q", [{"id": "real-1"}], candidates)
-    assert selected == candidates  # hallucinated id dropped -> fall back to all
-
-
-def test_select_datasets_fails_open(monkeypatch):
-    """An LLM error falls back to ALL candidate ids (fail-open)."""
-    import graph.preflight as preflight_module
-
-    class _Boom:
-        def call_model(self, *a, **k):
-            raise RuntimeError("network down")
-
-    monkeypatch.setattr(preflight_module, "LLMClient", _Boom)
-    candidates = ["a", "b"]
-    selected, reasoning = select_datasets("q", [{"id": "a"}], candidates)
-    assert selected == candidates
-
-
-# --------------------------------------------------------------------------- #
 # generate_suggestions — stub returns [] for <node:suggest>
 # --------------------------------------------------------------------------- #
 
@@ -183,40 +128,28 @@ def test_generate_suggestions_never_raises(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# C27 session DataFrame cache — reuse on a second setup with the same session_id
+# C27 session DataFrame cache — reuse on a second lazy load in the same session
+#
+# Under agent-driven selection, `setup` is metadata-only (it reads NO frames), so
+# the session cache is populated by the LAZY LOADER (`_session_load_frame`) the
+# first time the agent references a dataset — not by `setup`. These tests exercise
+# the loader directly (the exact function the eval namespace's loader delegates to).
 # --------------------------------------------------------------------------- #
 
 
-def test_session_cache_reuses_frame_on_second_setup(uploads_dir):
-    """A second `setup` for the same (session_id, dataset_id) returns the SAME
+def test_session_cache_reuses_frame_on_second_load(uploads_dir):
+    """A second lazy load for the same (session_id, dataset_id) returns the SAME
     DataFrame object (cache hit), proving no re-read from disk."""
     dataset_id = _make_dataset(uploads_dir)
     session_id = "session-xyz"
 
-    state1 = {
-        "run_id": "run-1",
-        "dataset_ids": [dataset_id],
-        "session_id": session_id,
-    }
-    out1 = nodes_module.setup(state1)
-    assert out1.get("error") is None
-    frame1 = nodes_module._dataframes["run-1"]["frames"][0]
-
-    # The cache now holds the frame for this session.
+    # First reference: cache MISS -> loads from disk and stores under the session.
+    frame1 = nodes_module._session_load_frame(session_id, dataset_id)
     assert session_id in nodes_module._session_cache
-    cached = nodes_module._session_cache[session_id]["frames"][dataset_id]
-    assert cached is frame1
+    assert nodes_module._session_cache[session_id]["frames"][dataset_id] is frame1
 
-    state2 = {
-        "run_id": "run-2",
-        "dataset_ids": [dataset_id],
-        "session_id": session_id,
-    }
-    out2 = nodes_module.setup(state2)
-    assert out2.get("error") is None
-    frame2 = nodes_module._dataframes["run-2"]["frames"][0]
-
-    # Same object reused across runs of the same session (cache hit, no re-read).
+    # Second reference (e.g. a later run of the same session): cache HIT, same object.
+    frame2 = nodes_module._session_load_frame(session_id, dataset_id)
     assert frame2 is frame1
 
 
@@ -224,16 +157,17 @@ def test_session_cache_separate_sessions_do_not_share(uploads_dir):
     """Different session_ids get independent cache entries (different df objects)."""
     dataset_id = _make_dataset(uploads_dir)
 
-    nodes_module.setup({"run_id": "r1", "dataset_ids": [dataset_id], "session_id": "s1"})
-    nodes_module.setup({"run_id": "r2", "dataset_ids": [dataset_id], "session_id": "s2"})
+    f1 = nodes_module._session_load_frame("s1", dataset_id)
+    f2 = nodes_module._session_load_frame("s2", dataset_id)
 
-    f1 = nodes_module._session_cache["s1"]["frames"][dataset_id]
-    f2 = nodes_module._session_cache["s2"]["frames"][dataset_id]
+    assert nodes_module._session_cache["s1"]["frames"][dataset_id] is f1
+    assert nodes_module._session_cache["s2"]["frames"][dataset_id] is f2
     assert f1 is not f2
 
 
 def test_single_turn_does_not_populate_session_cache(uploads_dir):
-    """No session_id -> the per-run path is used; the session cache stays empty."""
+    """No session_id -> setup runs the per-run (metadata-only) path and never
+    touches the session cache, which stays empty."""
     dataset_id = _make_dataset(uploads_dir)
     nodes_module.setup({"run_id": "r-single", "dataset_ids": [dataset_id], "session_id": None})
     assert nodes_module._session_cache == {}
@@ -246,9 +180,7 @@ def test_session_cache_lru_evicts_oldest(uploads_dir):
     cap = nodes_module._SESSION_CACHE_MAX
 
     for i in range(cap + 2):
-        nodes_module.setup(
-            {"run_id": f"r{i}", "dataset_ids": [dataset_id], "session_id": f"s{i}"}
-        )
+        nodes_module._session_load_frame(f"s{i}", dataset_id)
 
     assert len(nodes_module._session_cache) <= cap
     # The two oldest sessions were evicted.

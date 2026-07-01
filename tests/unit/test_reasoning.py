@@ -84,11 +84,28 @@ def test_split_reasoning_empty_and_no_marker():
 def seeded_run(monkeypatch):
     """Seed the run-scoped `_dataframes` registry with a tiny frame.
 
-    Yields the `run_id`; cleans the registry afterwards so tests stay isolated.
+    Uses the lazy-namespace bundle shape: a metadata-only `catalog` plus a
+    pre-cached `frames` dict, so the lazy loader returns the frame WITHOUT any
+    disk access (no DatasetRow needed). Yields the `run_id`; cleans the registry
+    afterwards so tests stay isolated.
     """
     run_id = "r-reasoning-test"
+    dataset_id = "ds-reasoning-test"
     df = pd.DataFrame({"price": [10.0, 20.0, 30.0, 40.0], "qty": [1, 2, 3, 4]})
-    nodes_module._dataframes[run_id] = {"frames": [df], "filenames": ["sales.csv"]}
+    nodes_module._dataframes[run_id] = {
+        "session_id": None,
+        "catalog": [
+            {
+                "id": dataset_id,
+                "alias": "sales",
+                "filename": "sales.csv",
+                "columns": ["price", "qty"],
+                "notes": "",
+            }
+        ],
+        "frames": {dataset_id: df},  # pre-cached -> loader returns it, no disk read
+        "derived_frames": {},
+    }
     yield run_id
     nodes_module._dataframes.pop(run_id, None)
 

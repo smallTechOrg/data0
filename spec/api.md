@@ -65,20 +65,22 @@ C24 NL cleaning PREVIEW: LLM generates pandas code, run on a copy, return `{code
 C24 apply code in place; rewrite CSV + Parquet, update counts. **422** exec error / **404** missing.
 
 ### `POST /ask`
-Body `{dataset_id? | dataset_ids?, question, session_id?, skip_clarification:false}`.
-Pre-flight C26 (unless `skip_clarification`) → may return `{type:"clarification", clarification_question, run_id, session_id}` (thin run, status `clarification`). Else resolve datasets (explicit or C19 selector), create the run (`status=running`), run the agent, return:
+Body `{question, session_id?, skip_clarification:false}`. Legacy `dataset_id?`/`dataset_ids?` are still accepted (API compat) but IGNORED — dataset selection is agent-driven, never client-scoped.
+Dataset selection is AGENT-DRIVEN: every `/ask` hands the agent a metadata-only *catalog* of ALL workspace datasets and it picks (and lazily loads) whichever it needs. A `no_datasets` **400** is returned when the workspace is empty. Pre-flight C26 runs on the FIRST turn only (no `session_id`, unless `skip_clarification`) → may return `{type:"clarification", clarification_question, run_id, session_id}` (thin run, status `clarification`). Otherwise create the run (`status=running`), run the agent, return:
 ```json
 {"type":"answer","run_id":"...","session_id":"...","dataset_ids":[...],
- "derived_dataset_ids":[...],"datasets_used":[...],"selector_reasoning":"...",
+ "derived_dataset_ids":[...],"datasets_used":[...],"selector_reasoning":null,
  "answer_markdown":"...","answer_html":"...","charts":[...],
  "iteration_count":3,"tokens_input":1234,"tokens_output":567,"status":"completed",
  "is_best_effort":false,"steps":[...],"suggested_questions":[...],
  "prompt_breakdown":{...},"duration_ms":4210}
 ```
 
-> **`dataset_ids` vs `datasets_used`:** `dataset_ids` carries the raw resolved/selected dataset **ids** (used for session continuity and follow-up turns). `datasets_used` carries the human-readable list of dataset **filenames** for display — each id in the resolved set is mapped to its `DatasetRow.filename` (falling back to the id itself only if the row is missing). The UI renders `datasets_used` directly, so it must be names, never raw UUIDs. The two lists are positionally aligned.
+> **`dataset_ids` vs `datasets_used`:** `dataset_ids` carries the raw **ids the agent actually LOADED** this run (used for session continuity and follow-up turns; empty if it loaded nothing). `datasets_used` carries the human-readable list of dataset **filenames** for display — each loaded id is mapped to its `DatasetRow.filename` (falling back to the id itself only if the row is missing). The UI renders `datasets_used` directly, so it must be names, never raw UUIDs. The two lists are positionally aligned.
 
-> **`duration_ms`:** an integer — the wall-clock time of the whole agent run in milliseconds, measured in the `/ask` handler around `run_agent` (selector + iterations + finalize). The UI shows it as the answer's response time ("took Xs"). Present on the answer payload only (a `clarification` short-circuit carries no `duration_ms`).
+> **`selector_reasoning`:** always `null` under agent-driven selection (there is no pre-flight selector). The key is retained on the payload for backward compatibility only.
+
+> **`duration_ms`:** an integer — the wall-clock time of the whole agent run in milliseconds, measured in the `/ask` handler around `run_agent` (clarification + iterations + finalize). The UI shows it as the answer's response time ("took Xs"). Present on the answer payload only (a `clarification` short-circuit carries no `duration_ms`).
 
 > **`charts` field:** a list of ECharts `option` JSON strings (`list[str]`). Each element is a `json.dumps`-serialised ECharts `option` dict produced by the sandbox `echart(kind, df, *, x, y, title, option)` helper — self-contained and passed directly to `echarts.init(...).setOption(JSON.parse(...))` by `ChartRender`. The list is empty (`[]`) when the agent produced no charts during the run. Charts are also persisted to `query_runs.charts_json` and surfaced via `GET /sessions/{id}` on each turn.
 

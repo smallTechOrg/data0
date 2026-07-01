@@ -456,16 +456,22 @@ def make_echart(on_chart=None):
     return echart
 
 
-def build_namespace(
-    dataframes: list[pd.DataFrame],
-    filenames: list[str] | None = None,
-) -> dict[str, Any]:
-    """Assemble the eval namespace for a run.
+# The fixed library + helper names every eval namespace seeds. A dataset whose
+# filename-alias collides with one of these is NOT aliased (the library wins), so
+# the model reaches it via `df{n}` instead — mirrors `build_namespace`'s
+# `alias not in ns` guard for the lazy path.
+_LIBRARY_NAMES = frozenset(
+    {"pd", "np", "plt", "sns", "scipy", "stats", "sklearn", "sm", "save_dataset", "echart"}
+)
 
-    `dataframes` are ordered by `dataset_ids`. `filenames` (same order, optional)
-    provide the `<filename_stem>` aliases.
+
+def _library_namespace() -> dict[str, Any]:
+    """The fixed library + helper seed shared by every eval namespace.
+
+    `save_dataset`/`echart` here are the lineage-less defaults; `nodes.execute_action`
+    overrides both in the per-run namespace with run-aware closures.
     """
-    ns: dict[str, Any] = {
+    return {
         "pd": pd,
         "np": np,
         "plt": plt,
@@ -479,6 +485,20 @@ def build_namespace(
         # overrides this with a run-aware closure that collects the built options.
         "echart": make_echart(),
     }
+
+
+def build_namespace(
+    dataframes: list[pd.DataFrame],
+    filenames: list[str] | None = None,
+) -> dict[str, Any]:
+    """Assemble an EAGER eval namespace over already-loaded frames.
+
+    `dataframes` are ordered by `dataset_ids`. `filenames` (same order, optional)
+    provide the `<filename_stem>` aliases. Used by `/re-derive` (which has the
+    parent frames in hand) and the unit tests; the agent loop uses the lazy
+    `build_lazy_namespace` instead (loads only referenced datasets).
+    """
+    ns: dict[str, Any] = _library_namespace()
 
     filenames = filenames or []
     for idx, frame in enumerate(dataframes):
@@ -496,6 +516,82 @@ def build_namespace(
     if dataframes:
         ns["df"] = dataframes[0]
 
+    return ns
+
+
+class _LazyNamespace(dict):
+    """Eval namespace that materialises a dataset's DataFrame on FIRST reference.
+
+    The agent references datasets by name — `df`, `df1`..`dfN`, or a
+    `<filename_stem>` alias — exactly as with the eager `build_namespace`. Here
+    those names are NOT pre-seeded: the first time the model's expression touches
+    one, `__missing__` loads that dataset (and only that dataset) via the injected
+    `loader`, so a question that reads one table never loads the other twenty.
+
+    `__missing__` fires for a bare-name `LOAD_GLOBAL` because CPython takes the
+    dict-subclass slow path (`PyObject_GetItem`) for `eval`/`exec` globals when the
+    mapping is a dict SUBCLASS rather than an exact dict. Library names (`pd`, …)
+    and `save_dataset`/`echart` ARE seeded, so they resolve normally and never hit
+    `__missing__`. An unknown name raises `KeyError` -> the interpreter reports the
+    usual `NameError: name 'x' is not defined`, which the eval loop feeds back.
+    """
+
+    def __init__(self, *, name_map: dict[str, str], loader, derived_frames: dict[str, Any]):
+        super().__init__()
+        self._name_map = name_map  # df / df1.. / <alias> -> dataset_id
+        self._loader = loader  # dataset_id -> DataFrame (caches + records the load)
+        self._derived_frames = derived_frames  # <alias> -> DataFrame (save_dataset outputs)
+
+    def __missing__(self, key: str) -> Any:
+        # A save_dataset'd frame referenceable by name takes precedence — it is the
+        # freshest thing the model created this run.
+        derived = self._derived_frames.get(key)
+        if derived is not None:
+            self[key] = derived
+            return derived
+        dataset_id = self._name_map.get(key)
+        if dataset_id is None:
+            raise KeyError(key)
+        frame = self._loader(dataset_id)
+        # Cache under the accessed name so the rest of THIS eval reuses it without
+        # re-entering __missing__ (the loader also caches by id across steps).
+        self[key] = frame
+        return frame
+
+
+def build_lazy_namespace(
+    catalog: list[dict[str, Any]],
+    loader,
+    derived_frames: dict[str, Any] | None = None,
+) -> _LazyNamespace:
+    """Assemble the LAZY eval namespace the agent loop runs each step in.
+
+    `catalog` is the ordered list of ALL candidate datasets (`{"id", "alias", ...}`)
+    — the agent picks from it by referencing a name. This builds the name→id map
+    (`df`, `df1`..`dfN`, and each `<alias>` that doesn't shadow a library name) and
+    returns a `_LazyNamespace` seeded with the libraries + `save_dataset`/`echart`.
+    `loader(dataset_id) -> DataFrame` does the actual on-demand load (and is where
+    the caller records which datasets were touched). `derived_frames` holds any
+    `save_dataset` outputs, referenceable by their `<alias>`.
+    """
+    derived_frames = derived_frames if derived_frames is not None else {}
+
+    name_map: dict[str, str] = {}
+    for idx, entry in enumerate(catalog):
+        dataset_id = entry.get("id")
+        if not dataset_id:
+            continue
+        name_map[f"df{idx + 1}"] = dataset_id
+        alias = entry.get("alias")
+        if alias and alias not in _LIBRARY_NAMES and alias not in name_map:
+            name_map[alias] = dataset_id
+    if catalog:
+        first_id = catalog[0].get("id")
+        if first_id:
+            name_map.setdefault("df", first_id)
+
+    ns = _LazyNamespace(name_map=name_map, loader=loader, derived_frames=derived_frames)
+    ns.update(_library_namespace())
     return ns
 
 

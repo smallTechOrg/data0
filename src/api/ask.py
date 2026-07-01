@@ -3,20 +3,22 @@
 Phase-3 scope (the full `spec/api.md` `/ask` contract):
 
 - Every `/ask` belongs to a *session*. An explicit `session_id` resumes a
-  conversation (enforcing the 20-turn cap and inheriting / matching its
-  datasets); without one, a fresh `ConversationSessionRow` is created scoped to
-  the resolved datasets.
-- Dataset resolution: explicit `dataset_id`/`dataset_ids` (each validated),
-  else inherit from the session, else hand ALL uploaded dataset ids to the
-  runner and let the C19 selector choose (the `run_selector` path).
+  conversation (enforcing the 20-turn cap); without one, a fresh
+  `ConversationSessionRow` is created.
+- Dataset selection is AGENT-DRIVEN: there is no manual scoping. Every `/ask`
+  hands the runner ALL of the workspace's datasets and the agent picks (and
+  lazily loads) whichever it needs. The request's `dataset_id`/`dataset_ids`
+  fields are retained for API compatibility but no longer scope the run.
 - Multi-turn: prior completed turns of the session are assembled into
   `conversation_history` and passed to the runner.
-- Pre-flight clarification (C26): unless `skip_clarification`, the runner may
-  short-circuit and return `type:"clarification"` — we relay that payload and
-  the runner owns the thin `query_runs` row it created.
+- Pre-flight clarification (C26): on the FIRST turn (no `session_id`), unless
+  `skip_clarification`, the runner may short-circuit and return
+  `type:"clarification"` — we relay that payload and the runner owns the thin
+  `query_runs` row it created.
 - Answer path: the full answer payload, with `answer_html` rendered from the
-  Markdown, the real `session_id`, suggestions, selector reasoning, and prompt
-  breakdown.
+  Markdown, the real `session_id`, suggestions, and prompt breakdown. The
+  session's dataset set accumulates the datasets the agent actually USED plus any
+  it DERIVED, so the sidebar/continuity reflect real dependencies.
 
 Run-row creation is owned by `run_agent` (it has been since Phase 2) — this
 route never duplicates it.
@@ -68,23 +70,6 @@ def _resolve_dataset_filenames(dataset_ids: list[str]) -> list[str]:
     return names
 
 
-def _resolve_explicit_dataset_ids(req: AskRequest) -> list[str]:
-    """Dataset ids the caller explicitly named, from `dataset_ids` or `dataset_id`."""
-    if req.dataset_ids:
-        return [d for d in req.dataset_ids if d]
-    if req.dataset_id:
-        return [req.dataset_id]
-    return []
-
-
-def _session_datasets(row: ConversationSessionRow) -> list[str]:
-    if row.dataset_ids_json:
-        return [d for d in row.dataset_ids_json if d]
-    if row.dataset_id:
-        return [row.dataset_id]
-    return []
-
-
 def _count_turns(session: Session, session_id: str) -> int:
     return session.execute(
         select(func.count())
@@ -115,16 +100,20 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
     if not question:
         raise api_error("empty_question", "Question must not be empty.", 400)
 
-    explicit_ids = _resolve_explicit_dataset_ids(req)
-
-    # An explicit dataset that does not exist is a 404 (more specific than the
-    # global "no datasets" guard) — validate every named id.
-    for dataset_id in explicit_ids:
-        if session.get(DatasetRow, dataset_id) is None:
-            raise api_error("not_found", f"Dataset {dataset_id} not found", 404)
+    # Dataset selection is agent-driven: hand the runner EVERY dataset in the
+    # workspace and let the agent pick (and lazily load) whichever it needs. The
+    # request's dataset fields no longer scope the run (see module docstring).
+    candidate_ids = list(session.execute(select(DatasetRow.id)).scalars().all())
+    if not candidate_ids:
+        raise api_error(
+            "no_datasets", "No datasets uploaded yet. Upload a file first.", 400
+        )
 
     # --- Session resolution ------------------------------------------------
+    # Clarification (C26) is a first-turn concern: run it only when starting a new
+    # conversation, skip it on follow-ups (the history disambiguates).
     session_row: ConversationSessionRow | None = None
+    run_clarification = True
     if req.session_id:
         session_row = session.get(ConversationSessionRow, req.session_id)
         if session_row is None:
@@ -135,57 +124,16 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
             raise api_error(
                 "turn_limit", "Session has reached the 20-turn limit.", 400
             )
-
-        session_datasets = _session_datasets(session_row)
-        if explicit_ids:
-            # Explicit datasets must be a subset of the session's datasets.
-            if session_datasets and set(explicit_ids) - set(session_datasets):
-                raise api_error(
-                    "session_mismatch",
-                    "The requested datasets do not match this session.",
-                    400,
-                )
-            resolved_ids = explicit_ids
-        else:
-            # Inherit the session's datasets when none are passed.
-            resolved_ids = session_datasets
-        run_selector = False
-    else:
-        if explicit_ids:
-            resolved_ids = explicit_ids
-            run_selector = False
-        else:
-            # No explicit datasets and no session -> the C19 selector path: hand
-            # ALL uploaded dataset ids to the runner and let pre-flight choose.
-            all_ids = (
-                session.execute(select(DatasetRow.id)).scalars().all()
-            )
-            if not all_ids:
-                raise api_error(
-                    "no_datasets",
-                    "No datasets uploaded yet. Upload a file first.",
-                    400,
-                )
-            resolved_ids = list(all_ids)
-            run_selector = True
-
-    # Guard: a session that ended up with no datasets (and no explicit / selector
-    # candidates) cannot proceed.
-    if not resolved_ids:
-        all_count = session.execute(
-            select(func.count()).select_from(DatasetRow)
-        ).scalar_one()
-        if all_count == 0:
-            raise api_error(
-                "no_datasets", "No datasets uploaded yet. Upload a file first.", 400
-            )
-        raise api_error("no_datasets", "Specify a dataset to ask about.", 400)
+        run_clarification = False
 
     # --- Ensure a session exists for this turn ----------------------------
+    # A new session starts with NO datasets — its set accumulates the datasets the
+    # agent actually uses (and derives) as turns run, so deleting a dataset only
+    # cascades to conversations that truly depend on it (C15).
     if session_row is None:
         session_row = ConversationSessionRow(
-            dataset_id=resolved_ids[0] if resolved_ids else None,
-            dataset_ids_json=list(resolved_ids),
+            dataset_id=None,
+            dataset_ids_json=[],
             name=None,
         )
         session.add(session_row)
@@ -204,16 +152,16 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
 
     # --- Run the agent (run-row creation lives in run_agent) --------------
     # Wall-clock the run so the UI can show the answer's response time. This
-    # spans the whole agent loop (selector + iterations + finalize), which is
+    # spans the whole agent loop (clarification + iterations + finalize), which is
     # the "how long did my answer take" the user cares about.
     _t0 = time.monotonic()
     result = run_agent(
         question,
-        resolved_ids,
+        candidate_ids,
         session_id=session_id,
         conversation_history=history,
         skip_clarification=req.skip_clarification,
-        run_selector=run_selector,
+        run_clarification=run_clarification,
         max_iterations=None,
     )
     duration_ms = int((time.monotonic() - _t0) * 1000)
@@ -223,16 +171,23 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
     session_row = session.get(ConversationSessionRow, session_id)
     if session_row is not None:
         session_row.updated_at = _now()
-        # Carry datasets the agent CREATED this turn (save_dataset) into the
-        # session's dataset set, so a follow-up turn loads them and can reference
-        # them by name — e.g. "save customer_clusters_base" then "now cluster it".
-        new_derived = result.get("derived_dataset_ids") or []
-        if new_derived:
+        # Accumulate the datasets this turn actually touched into the session's set:
+        # the ones the agent USED (its pick) plus any it DERIVED via save_dataset.
+        # This keeps continuity (a follow-up can reference a saved frame by name)
+        # and scopes the C15 cascade to real dependencies. A clarification turn
+        # contributes nothing (no used/derived ids), leaving the set unchanged.
+        touched = [
+            *(result.get("dataset_ids") or []),
+            *(result.get("derived_dataset_ids") or []),
+        ]
+        if touched:
             current = list(session_row.dataset_ids_json or [])
-            for did in new_derived:
+            for did in touched:
                 if did and did not in current:
                     current.append(did)
             session_row.dataset_ids_json = current
+            if session_row.dataset_id is None and current:
+                session_row.dataset_id = current[0]
 
     # --- Clarification short-circuit (C26) --------------------------------
     if result.get("type") == "clarification":
@@ -249,8 +204,9 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
     # --- Answer path ------------------------------------------------------
     answer_markdown = result.get("answer") or ""
     answer_html = _md.render(answer_markdown) if answer_markdown else ""
-    # The runner returns the FINAL resolved/selected ids — prefer them.
-    used_ids = result.get("dataset_ids") or resolved_ids
+    # The runner returns the ids the agent ACTUALLY loaded (its pick) — that is the
+    # run's real dataset set. Empty when the agent loaded nothing.
+    used_ids = result.get("dataset_ids") or []
     # `dataset_ids` carries the raw ids (session/continuity); `datasets_used` is
     # the human-readable list of filenames the UI renders. Resolve ids -> names
     # in one session/loop, falling back to the id itself if a row is missing.

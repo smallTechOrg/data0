@@ -19,7 +19,7 @@ Accumulates input/output token counts across every LLM call in a run and persist
 | LLM provider | report usage | if unavailable, estimate or 0; never crash |
 
 ## Business Rules
-- Token counts accumulate across `plan_action`, `force_finalize`, and graph-adjacent calls (selector/clarify/suggest) for the same run.
+- Token counts accumulate across `plan_action`, `force_finalize`, and graph-adjacent calls (clarify/suggest) for the same run.
 - Stub mode reports plausible/zero counts without error.
 
 ## Success Criteria

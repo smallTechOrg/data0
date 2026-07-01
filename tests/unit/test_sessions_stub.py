@@ -286,13 +286,6 @@ def test_ask_404_when_session_missing(api_client):
     assert r.status_code == 404
 
 
-def test_ask_404_when_dataset_missing(api_client):
-    r = api_client.post(
-        "/ask", json={"dataset_id": "ghost", "question": "hi", "skip_clarification": True}
-    )
-    assert r.status_code == 404
-
-
 def test_ask_no_datasets_uploaded(api_client):
     r = api_client.post("/ask", json={"question": "hi", "skip_clarification": True})
     assert r.status_code == 400

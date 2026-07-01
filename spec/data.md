@@ -54,8 +54,8 @@ One analysis run (one question → one answer), with its full step history.
 | tokens_output | Integer | yes | Accumulated completion tokens (C7) |
 | prompt_breakdown | JSON | no | C29 token breakdown: six components scaled to sum to `total_prompt` (= cumulative `tokens_input`), plus `tokens_output` |
 | charts_json | JSON | no | Persisted chart array from the run; reloaded as `charts[]` in `GET /sessions/{id}` turns so charts survive server restarts |
-| dataset_ids_json | JSON | no | All datasets loaded for this run (C14) |
-| selector_reasoning | Text | no | C19 selector rationale |
+| dataset_ids_json | JSON | no | The datasets the agent actually LOADED this run (C14); scopes the C15 cascade |
+| selector_reasoning | Text | no | Legacy C19 selector rationale; always NULL under agent-driven selection (column retained for compat) |
 | created_at | TIMESTAMP(tz) | yes | `_now` default |
 | updated_at | TIMESTAMP(tz) | yes | `_now` default + onupdate |
 

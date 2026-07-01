@@ -22,8 +22,9 @@ import {
  * Conversation card — REAL multi-turn in Phase 3.
  *
  * Renders the whole session as a list of TURNS (not just the latest):
- *  - On Ask → POST /ask. The body's datasets come from the explicit selection
- *    (if any) or are omitted so the server's C19 selector picks. The returned
+ *  - On Ask → POST /ask with just the question (no dataset scoping). Selection is
+ *    AGENT-DRIVEN: the server hands the agent a catalog of every dataset and it
+ *    picks (and lazily loads) whichever the question needs. The returned
  *    `session_id` is adopted (via `onSessionStarted`) so follow-ups continue the
  *    same session.
  *  - A `type:"clarification"` response (C26) renders an AMBER clarification turn
@@ -130,15 +131,12 @@ function turnFromView(v: TurnView): Turn {
 
 export function ConversationCard({
   handleRef,
-  selectedDatasetIds,
   sessionId,
   onSessionStarted,
   onAnswered,
   model,
 }: {
   handleRef?: Ref<ConversationHandle>
-  /** Explicit dataset selection; empty → let the server's selector pick. */
-  selectedDatasetIds: string[]
   sessionId: string | null
   onSessionStarted: (id: string) => void
   onAnswered: (tokens: LastQueryTokens) => void
@@ -236,7 +234,6 @@ export function ConversationCard({
       try {
         const res = await api.ask({
           question: q,
-          datasetIds: selectedDatasetIds.length > 0 ? selectedDatasetIds : undefined,
           sessionId,
           skipClarification,
           signal: controller.signal,
@@ -281,7 +278,7 @@ export function ConversationCard({
         setRunning(false)
       }
     },
-    [selectedDatasetIds, sessionId, onSessionStarted, onAnswered, updateTurn, stopPolling],
+    [sessionId, onSessionStarted, onAnswered, updateTurn, stopPolling],
   )
 
   // Stop the in-flight ask: cancel the run server-side (best-effort, so the agent
@@ -428,8 +425,8 @@ export function ConversationCard({
         {turns.length === 0 ? (
           <div className="flex flex-1 items-center justify-center text-center">
             <p className="text-xs text-gray-400">
-              Ask a question about your data to get started. You can pick datasets
-              above or let the agent choose.
+              Ask a question about your data to get started. The agent picks the
+              datasets it needs to answer.
             </p>
           </div>
         ) : (
@@ -488,10 +485,7 @@ export function ConversationCard({
         />
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs text-gray-400">
-            Enter to send · Shift+Enter for a new line
-            {selectedDatasetIds.length === 0
-              ? ' · the agent will pick datasets'
-              : ` · ${selectedDatasetIds.length} dataset${selectedDatasetIds.length === 1 ? '' : 's'} selected`}
+            Enter to send · Shift+Enter for a new line · the agent picks datasets
           </span>
           <div className="flex items-center gap-2">
             {running && (

@@ -24,18 +24,18 @@
 |-------------|----------|----------|-----------|
 | `plan_action` (per-iteration reasoning) | Gemini | `gemini-3.1-flash-lite` (**verified at Phase 2/3 gate**) | Cheapest fast model that follows the ReAct format; called every iteration, so latency/cost dominate. |
 | `force_finalize` (synthesis) | Gemini | same | One synthesis call; quality-over-cost but the same model is sufficient. |
-| `check_clarification` (C26), `select_datasets` (C19), `generate_suggestions`, `generate_dataset_notes` (C30), `extract_facts` (C31) | Gemini | same | Single-shot helpers outside the graph; same model via `LLMClient`. |
+| `check_clarification` (C26), `generate_suggestions`, `generate_dataset_notes` (C30), `extract_facts` (C31) | Gemini | same | Single-shot helpers outside the graph; same model via `LLMClient`. |
 
 All calls go through `LLMClient` — **never the provider SDK directly**. The client exposes two methods (both implemented by every provider, contract in `src/llm/providers/base.py`):
 
 - `complete(prompt, *, system=None) -> LLMResponse` — returns the text plus REAL provider-reported token usage (`tokens_input`/`tokens_output` from the provider's usage metadata; `0` when a provider reports none, so the caller falls back to a `chars/4` estimate). The per-iteration `plan_action` and `force_finalize` use `complete()` so the run's token totals are accurate.
-- `call_model(prompt, *, system=None) -> str` — the text-only convenience wrapper over `complete()`. The graph-adjacent single-shot helpers (`select_datasets`, `check_clarification`, `generate_suggestions`, `generate_dataset_notes`/describe, `extract_facts`/compress, clean) use `call_model`.
+- `call_model(prompt, *, system=None) -> str` — the text-only convenience wrapper over `complete()`. The graph-adjacent single-shot helpers (`check_clarification`, `generate_suggestions`, `generate_dataset_notes`/describe, `extract_facts`/compress, clean) use `call_model`.
 
 `LLMResponse` is a `NamedTuple(text, tokens_input=0, tokens_output=0)`. Provider is auto-detected (Anthropic key → anthropic; else Gemini → gemini; else OpenRouter; else stub). Model override via `AGENT_LLM_MODEL`.
 
 **Fallback behaviour:** No key → stub provider auto-engages (yellow UI banner). A Gemini API/network error inside `execute_action`'s recoverable path or a `plan_action` transient error routes back to `plan_action` to retry the reasoning; a fatal load/setup error routes to `handle_error` (run `failed`, clear message). `force_finalize` falls back to a static best-effort message if its single LLM call fails. This is production resilience — tests call the real Gemini with keys from `.env`.
 
-**Prompt strategy:** System/user split. `plan_action` prompt is assembled from question + `action_history` (Action/Result/Error transcript) + `conversation_history` + `dataset_context` + persistent memory + column schema, with an injected `<node:plan>` tag. The model must reply either `FINAL ANSWER: <markdown>` or a bare pandas expression to execute. Helpers (`select`, `clarify`, `suggest`, `describe`, `compress`) request structured output (JSON arrays / a single question / plain text) and carry their own `<node:...>` tags where the stub must branch.
+**Prompt strategy:** System/user split. `plan_action` prompt is assembled from question + `action_history` (Action/Result/Error transcript) + `conversation_history` + `dataset_context` (the metadata-only catalog of ALL datasets — see Pre-flight / setup) + persistent memory, with an injected `<node:plan>` tag. The model must reply either `FINAL ANSWER: <markdown>` or a bare pandas expression to execute; it references datasets by variable name and they load on demand. Helpers (`clarify`, `suggest`, `describe`, `compress`) request structured output (JSON arrays / a single question / plain text) and carry their own `<node:...>` tags where the stub must branch.
 
 ---
 
@@ -48,7 +48,7 @@ The agent does not use the LLM-native tool-calling API; its single "tool" is **e
 | pandas eval (`execute_action`) | Eval/exec the model's expression against the loaded DataFrame(s) | expression string | stringified result (+ captured ECharts `option` JSON from `echart(...)`) | none on the DataFrame in place (read-mostly); captures charts |
 | `save_dataset(df, name, desc)` | Materialise a DataFrame as a registered DERIVED dataset | DataFrame, name, description | confirmation string | writes `uploads/{id}.csv` + `.parquet`; inserts a `datasets` row (origin=derived) with `derivation_code` + parents + producing run (C25); ALSO injects the frame into the run namespace as a `<name>` variable for later steps, and appends the new id to the session so later turns load it |
 
-**Sandbox namespace** (provided to `execute_action`): `df` (first DataFrame), `df1`/`df2`/… (per-dataset, ordered by `dataset_ids`), a `<filename_stem>` alias per dataset, and the libraries `pd, np, plt, sns, scipy, stats, sklearn, sm`, plus `save_dataset` and `echart` (charts). There is no Plotly in the namespace. No filesystem/network builtins beyond these are exposed. **State across steps:** the namespace is rebuilt each step, so ordinary assigned variables do NOT persist — the way to carry a result forward is `save_dataset`, which appends the saved frame to the run's `_dataframes[run_id]` so the next step's namespace exposes it as `<name>` (and `POST /ask` appends the new id to the session's `dataset_ids_json`, so a later TURN loads it too). This lets a model "save a base table, then reference it by name in a later step/turn".
+**Sandbox namespace** (provided to `execute_action`): a **lazy** namespace over the dataset *catalog* (`build_lazy_namespace`). `df` (first catalog dataset), `df1`/`df2`/… (per-dataset, ordered as listed in the catalog), and a `<filename_stem>` alias per dataset each resolve to their DataFrame **the first time the model references one** — loaded on demand (`_loader`), then cached for the run and recorded in the run's used-set (`_loaded_ids[run_id]`). Also present: the libraries `pd, np, plt, sns, scipy, stats, sklearn, sm`, plus `save_dataset` and `echart` (charts). There is no Plotly in the namespace. No filesystem/network builtins beyond these are exposed. **State across steps:** the namespace is rebuilt each step, so ordinary assigned variables do NOT persist — the way to carry a result forward is `save_dataset`, which adds the saved frame to the run's derived frames so the next step's namespace exposes it as `<name>` (and `POST /ask` appends the new id to the session's `dataset_ids_json`, so a later TURN loads it too). This lets a model "save a base table, then reference it by name in a later step/turn".
 
 **Eval semantics (`sandbox.eval_expression`):** the action is tried as a single `eval` first (the common case). On a `SyntaxError` (multi-statement actions) the block is `ast`-parsed: everything BEFORE the trailing expression is `exec`'d, and that trailing expression is `eval`'d **EXACTLY ONCE**. This is what makes a side-effecting tail like `save_dataset(df, …)` run a single time — the earlier "exec the whole block, then eval the last line" approach double-ran the tail and registered a derived dataset twice. `save_dataset(df, name, desc)` is documented to the model in `plan_action.md` (call it to create/persist a derived table); the sandbox extracts the df-producing first-argument expression (not the wrapping `save_dataset(...)` call) as the derived dataset's `derivation_code` for `/re-derive` (C25).
 
@@ -66,8 +66,8 @@ class AgentState(TypedDict, total=False):
     run_id: str                          # set at initialisation (query_runs.id)
 
     # Input
-    dataset_ids: list[str]               # resolved datasets to load (explicit or C19 selector)
-    dataset_context: str | None          # concatenated dataset notes injected into the prompt
+    dataset_ids: list[str]               # ALL workspace datasets as the agent's catalog (it picks + lazily loads)
+    dataset_context: str | None          # metadata-only catalog of all datasets, injected into the prompt
     session_id: str | None               # set when the run belongs to a conversation session
     question: str                        # the user's plain-English question
     conversation_history: list[dict]     # prior turns {question, answer} for the session
@@ -83,7 +83,7 @@ class AgentState(TypedDict, total=False):
 
     # Output
     answer: str | None                   # final markdown answer (FINAL ANSWER stripped)
-    selector_reasoning: str | None       # C19 selector rationale (persisted on the run)
+    selector_reasoning: str | None       # retained for API/DB compat; always None under agent-driven selection
 
     # Control
     error: str | None                    # set by any node on fatal failure → handle_error
@@ -193,12 +193,13 @@ plan_action   (loop)
 
 ---
 
-## Pre-flight (before the graph — two one-shot `LLMClient` calls)
+## Pre-flight (before the graph — one one-shot `LLMClient` call)
 
-Runs in the `/ask` handler / runner, BEFORE the graph, and is SKIPPED when explicit `dataset_ids` are supplied. Lives in `src/graph/preflight.py`.
+Runs in the runner, BEFORE the graph, on the FIRST turn of a conversation only (`run_clarification=True`); skipped on follow-ups (the history disambiguates) and when `skip_clarification=true`. Lives in `src/graph/preflight.py`.
 
-1. **C26 clarification** — `check_clarification(question, schemas)` (tag `<node:clarify>` style): returns either a clarifying question (the run returns early `type:"clarification"`, status `clarification`, no graph run) or "proceed". Skipped when `skip_clarification=true`.
-2. **C19 selector** — `select_datasets(question, all_schemas)` (tag `<node:select>`): returns the subset of dataset IDs to load; falls back to ALL datasets on failure. `selector_reasoning` persisted on the run.
+1. **C26 clarification** — `check_clarification(question, schemas)` (tag `<node:clarify>`): returns either a clarifying question (the run returns early `type:"clarification"`, status `clarification`, no graph run) or "proceed".
+
+**Dataset selection is NOT a pre-flight step.** It is agent-driven inside the graph: `setup` builds a metadata-only *catalog* of ALL datasets (`{id, filename, alias, columns, notes}`, no frames read) into `dataset_context`, and the ReAct loop picks + lazily loads whichever the question needs (see Tools & Tool Calling → Sandbox namespace). There is no `select_datasets` call and no `<node:select>` tag.
 
 ---
 
@@ -217,8 +218,7 @@ The stub provider (offline fallback) branches **only on the injected node tag**,
 | Injected tag | Stub output |
 |--------------|-------------|
 | `<node:finalize>` | canned best-effort summary string |
-| `<node:select>` | first dataset id from the schema block as a 1-element JSON array |
-| `<node:plan>` (1st call) | `df.describe().to_string()` |
+| `<node:plan>` (1st call) | `df.describe().to_string()` (relies on `df` → first catalog dataset, loaded on reference) |
 | `<node:plan>` (later call) | a `FINAL ANSWER:` markdown summary (iteration inferred from count of `Result:`/`Error:` markers so repeated calls differ) |
 | `<node:plan>` missing | `FINAL ANSWER: [stub] Unable to process` |
 | `<node:clarify>` | "proceed" (no clarification in stub mode) |
@@ -312,4 +312,4 @@ def _build_graph():
 agentic_ai = _build_graph()
 ```
 
-`src/graph/runner.py` `run_agent(question, dataset_ids, session_id, ...)` creates the `query_runs` row (`status=running`), runs pre-flight (selector/clarification) unless explicit `dataset_ids`, invokes `agentic_ai`, persists the result, calls `generate_suggestions`, and returns the `/ask` payload.
+`src/graph/runner.py` `run_agent(question, dataset_ids, session_id, ..., run_clarification=False)` creates the `query_runs` row (`status=running`), runs the pre-flight C26 clarification when `run_clarification=True` (first turn only), invokes `agentic_ai` with `dataset_ids` = ALL candidate datasets (the agent's catalog), persists the result — recording on the run ONLY the datasets the agent actually loaded (`get_loaded_ids`) so the C15 cascade tracks real dependencies — calls `generate_suggestions`, and returns the `/ask` payload.
