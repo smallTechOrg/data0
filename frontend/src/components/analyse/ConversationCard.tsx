@@ -445,6 +445,7 @@ export function ConversationCard({
                   turn.originalQuestion && submitQuestion(turn.originalQuestion, true)
                 }
                 busy={running}
+                isLatest={isLast}
               />
             )
           })

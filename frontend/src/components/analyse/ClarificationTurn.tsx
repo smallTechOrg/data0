@@ -14,10 +14,16 @@ export function ClarificationTurn({
   clarificationQuestion,
   onResubmit,
   busy = false,
+  resolved = false,
 }: {
   clarificationQuestion: string
   onResubmit: () => void
   busy?: boolean
+  /** A resolved clarification is one the user has already moved past (it is no
+   *  longer the latest turn): render it as an inert historical note with NO action
+   *  button, so an old card can neither linger as a live prompt nor re-fire the
+   *  original question when clicked later (C26). */
+  resolved?: boolean
 }) {
   return (
     <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5">
@@ -30,6 +36,10 @@ export function ClarificationTurn({
         </span>
       </div>
       <p className="text-sm text-amber-900">{clarificationQuestion}</p>
+      {resolved && (
+        <p className="mt-2 text-[11px] font-medium text-amber-700">✓ Resolved — you continued below.</p>
+      )}
+      {!resolved && (
       <div className="mt-2.5 flex flex-wrap items-center gap-2">
         <button
           type="button"
@@ -49,6 +59,7 @@ export function ClarificationTurn({
           …or rephrase your question in the box below.
         </span>
       </div>
+      )}
     </div>
   )
 }

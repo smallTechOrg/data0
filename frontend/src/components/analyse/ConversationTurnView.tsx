@@ -50,6 +50,13 @@ export interface ConversationTurnViewProps {
   onResubmitClarification: () => void
   /** Whether an ask is in flight (disables the clarification re-submit). */
   busy: boolean
+  /**
+   * Whether this is the LATEST turn in the thread. A clarification card is a live,
+   * actionable prompt ONLY while it is the latest turn; once the user has moved on
+   * (asked, rephrased, or skipped) it renders as an inert historical note — this is
+   * what stops an old clarification from lingering or re-firing its trigger (C26).
+   */
+  isLatest: boolean
 }
 
 /** A single conversation turn: question, then pending/answer/clarification/error. */
@@ -60,6 +67,7 @@ export function ConversationTurnView({
   onToggle,
   onResubmitClarification,
   busy,
+  isLatest,
 }: ConversationTurnViewProps) {
   return (
     <div className="space-y-2">
@@ -85,6 +93,7 @@ export function ConversationTurnView({
             clarificationQuestion={turn.clarificationQuestion}
             onResubmit={onResubmitClarification}
             busy={busy}
+            resolved={!isLatest}
           />
         ) : turn.answer ? (
           collapsible && !expanded ? (
