@@ -14,7 +14,7 @@ import { CleanModal } from '@/components/database/CleanModal'
  * Fetches GET /datasets on mount and whenever `datasetsVersion` changes (the
  * parent bumps it after each upload and each completed ask, surfacing new /
  * derived datasets). Each row shows filename + rows×cols + format, with the
- * dataset's **origin/state conveyed by the whole-pill tint** (uploaded = blue,
+ * dataset's **origin/state conveyed by the whole-pill tint** (uploaded = neutral,
  * derived = green, stale = amber — no text badge), a checkbox to select the
  * dataset for bulk actions, a **columns** icon toggle that lazily fetches
  * GET /datasets/{id} for the column schema, a **Clean** (broom) icon action
