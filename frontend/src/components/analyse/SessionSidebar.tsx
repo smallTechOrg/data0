@@ -71,7 +71,7 @@ export interface SessionSidebarViewProps {
 /**
  * Format an ISO timestamp as a compact local date-time (e.g. "Jun 30 3:05 PM"),
  * or null if absent/invalid. Omits the year and the date/time comma to keep the
- * "Started … · upd …" line short enough to fit on one row.
+ * "Started … · Updated …" line short enough to fit on one row.
  */
 function fmtTime(iso?: string | null): string | null {
   if (!iso) return null
@@ -438,7 +438,7 @@ export function SessionSidebarView({
                       <div className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap pl-[1.375rem] text-[10px] text-gray-400">
                         {fmtTime(s.created_at) && <span>Started {fmtTime(s.created_at)}</span>}
                         {fmtTime(s.created_at) && fmtTime(s.updated_at) && (
-                          <span aria-hidden="true"> · upd </span>
+                          <span aria-hidden="true"> · Updated </span>
                         )}
                         {fmtTime(s.updated_at) &&
                           (fmtTime(s.created_at) ? (
