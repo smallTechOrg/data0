@@ -333,23 +333,30 @@ export function ConversationCard({
     setExpandedOverride(prev => ({ ...prev, [id]: value }))
   }, [])
 
-  // C32 bulk controls: set an explicit override for every collapsible (answer)
-  // turn so the whole thread expands/collapses at once. Pending/error/
-  // clarification turns aren't collapsible and are left untouched.
+  // C32 bulk controls: set an explicit override for every collapsible turn so
+  // the whole thread expands/collapses at once — answer turns AND resolved
+  // clarifications (any clarification that is no longer the latest turn).
+  // Pending/error turns and the LIVE clarification aren't collapsible and are
+  // left untouched.
   const setAllExpanded = useCallback(
     (value: boolean) => {
       setExpandedOverride(prev => {
         const next = { ...prev }
-        for (const t of turns) {
-          if (t.status === 'answer') next[t.id] = value
-        }
+        turns.forEach((t, i) => {
+          const isLast = i === turns.length - 1
+          if (t.status === 'answer' || (t.status === 'clarification' && !isLast)) {
+            next[t.id] = value
+          }
+        })
         return next
       })
     },
     [turns],
   )
 
-  const collapsibleCount = turns.filter(t => t.status === 'answer').length
+  const collapsibleCount = turns.filter(
+    (t, i) => t.status === 'answer' || (t.status === 'clarification' && i !== turns.length - 1),
+  ).length
 
   // Export the WHOLE session as a Markdown log (prompts, clarifications, times,
   // answers, tokens, steps/backend code, prompt breakdown).
@@ -455,7 +462,7 @@ export function ConversationCard({
                 key={turn.id}
                 turn={turn}
                 expanded={expanded}
-                collapsible={turn.status === 'answer'}
+                collapsible={turn.status === 'answer' || (turn.status === 'clarification' && !isLast)}
                 onToggle={() => setExpanded(turn.id, !expanded)}
                 onResubmitClarification={() =>
                   turn.originalQuestion && submitQuestion(turn.originalQuestion, true)

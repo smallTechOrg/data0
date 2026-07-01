@@ -224,27 +224,15 @@ export function DatabaseTab() {
         }`}
       >
         {leftOpen && (
-          <div className="min-w-0 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
+          <div className="min-w-0 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:self-start lg:overflow-y-auto">
             {/* left-column-stack: merges UploadCard + TablesCard's own
                 bordered/shadowed <section>s into one continuous card (see the
                 `.left-column-stack > section` rules in globals.css) — matching
-                the single-card look of the Table description panel. UploadCard
-                has no collapse affordance of its own (unlike TableDescription-
-                Panel's built-in "Hide ›"), so instead of adding a second header
-                row above it, the Hide button is absolutely positioned into the
-                empty right-hand space of UploadCard's OWN heading row (that
-                row is `justify-between` with only the "Upload data" h2 in it —
-                nothing to overlap). No edit to UploadCard's synced source. */}
-            <div className="left-column-stack relative flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
-              <button
-                type="button"
-                onClick={() => setLeftOpen(false)}
-                aria-label="Hide upload and tables"
-                title="Hide — give the diagram more width"
-                className="absolute right-4 top-4 z-10 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50"
-              >
-                ‹ Hide
-              </button>
+                the single-card look of the Table description panel. Collapsing
+                this column is handled by the accent edge-tab on the diagram's
+                left border (see the middle column), so there's no in-card Hide
+                button and no edit to UploadCard's synced source. */}
+            <div className="left-column-stack flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
               <UploadCard onUploaded={refresh} />
               <TablesCard
                 datasetsVersion={refreshToken}
@@ -258,32 +246,34 @@ export function DatabaseTab() {
           </div>
         )}
 
-        <div className="relative min-w-0">
-          {/* Edge tabs — re-expand a collapsed side column. Docked to this
-              (always-mounted) middle column's own corner, half-overlapping its
-              border, vertically centered along the panel's full height (clear
-              of the ERD's own "Schema" header row above). Solid accent color
+        {/* lg:self-start so this wrapper hugs the Schema pane's height instead
+            of stretching to the full (taller) grid-row height — otherwise the
+            edge tabs' top-1/2 would center on the row (≈ the side panels) rather
+            than on the Schema pane itself. */}
+        <div className="relative min-w-0 lg:self-start">
+          {/* Edge toggle tabs — one per collapsible side column, docked to this
+              (always-mounted, non-scrolling) middle column's corners, vertically
+              centered on the Schema pane and half-overlapping its border. Solid accent color
               (bg-blue-600 → var(--accent-solid), same remap the rest of the
-              app's primary actions use) so they read as an inviting, clickable
-              affordance rather than blending into the chrome. Only rendered
-              while that side is actually collapsed. */}
-          {!leftOpen && (
+              app's primary actions use) so they read as an inviting handle. Each
+              toggles its side open/closed and the chevron points toward that
+              side's panel; these are the SINGLE collapse+expand control for each
+              side, replacing the old in-card / in-panel gray "Hide" buttons. */}
+          <button
+            type="button"
+            onClick={() => setLeftOpen(o => !o)}
+            aria-label={leftOpen ? 'Hide upload and tables' : 'Show upload and tables'}
+            title={leftOpen ? 'Hide upload and tables' : 'Show upload and tables'}
+            className="absolute -left-3 top-1/2 z-10 flex h-20 w-7 -translate-y-1/2 items-center justify-center rounded-md bg-blue-600 text-lg text-white shadow-md hover:bg-blue-700"
+          >
+            ‹
+          </button>
+          {!isEmpty && (
             <button
               type="button"
-              onClick={() => setLeftOpen(true)}
-              aria-label="Show upload and tables"
-              title="Show upload and tables"
-              className="absolute -left-3 top-1/2 z-10 flex h-20 w-7 -translate-y-1/2 items-center justify-center rounded-md bg-blue-600 text-lg text-white shadow-md hover:bg-blue-700"
-            >
-              ‹
-            </button>
-          )}
-          {!descOpen && !isEmpty && (
-            <button
-              type="button"
-              onClick={() => setDescOpen(true)}
-              aria-label="Show table description"
-              title="Show table description"
+              onClick={() => setDescOpen(o => !o)}
+              aria-label={descOpen ? 'Hide table description' : 'Show table description'}
+              title={descOpen ? 'Hide table description' : 'Show table description'}
               className="absolute -right-3 top-1/2 z-10 flex h-20 w-7 -translate-y-1/2 items-center justify-center rounded-md bg-blue-600 text-lg text-white shadow-md hover:bg-blue-700"
             >
               ›
@@ -308,11 +298,13 @@ export function DatabaseTab() {
 
         {descOpen && !isEmpty && (
           <div className="min-w-0">
+            {/* No onCollapse — collapsing is handled by the accent edge-tab on
+                the diagram's right border, so the panel's own built-in "Hide ›"
+                (gated on onCollapse) stays hidden and the two sides match. */}
             <TableDescriptionPanel
               datasetId={selectedId}
               allDatasets={erDatasets}
               onChanged={refresh}
-              onCollapse={() => setDescOpen(false)}
               onDeleted={handleDatasetDeleted}
             />
           </div>

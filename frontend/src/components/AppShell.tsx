@@ -81,8 +81,11 @@ export function AppShell() {
       <StubBanner provider={provider} />
 
       {/* Header — solid indigo bar: title (left), pill tabs (inline), and the
-          Live badge + Project notes button (right). */}
-      <header className="bg-indigo-900 text-white shadow-lg">
+          Live badge + Project notes button (right). Sticky so it stays pinned
+          to the top while the page scrolls (z-30 keeps it above the sticky
+          side columns, which are offset via lg:top-20 to clear it; below the
+          z-50 modals). */}
+      <header className="sticky top-0 z-30 bg-indigo-900 text-white shadow-lg">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-x-8 gap-y-2 px-6 py-3">
           {/* Left: title + thin tagline + inline pill tabs */}
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2">

@@ -40,9 +40,10 @@ export interface Turn {
 export interface ConversationTurnViewProps {
   /** The turn to render (question + pending/answer/clarification/error state). */
   turn: Turn
-  /** Whether an answer turn is currently expanded (vs the C32 collapsed preview). */
+  /** Whether a collapsible turn is currently expanded (vs the C32 collapsed preview). */
   expanded: boolean
-  /** Whether this turn supports collapse/expand (true only for answer turns). */
+  /** Whether this turn supports collapse/expand: answer turns, and RESOLVED
+   *  clarification turns (a live/latest clarification is never collapsible). */
   collapsible: boolean
   /** Toggle this turn's expand/collapse state. */
   onToggle: () => void
@@ -89,12 +90,38 @@ export function ConversationTurnView({
             {turn.error}
           </p>
         ) : turn.status === 'clarification' && turn.clarificationQuestion ? (
-          <ClarificationTurn
-            clarificationQuestion={turn.clarificationQuestion}
-            onResubmit={onResubmitClarification}
-            busy={busy}
-            resolved={!isLatest}
-          />
+          // A RESOLVED clarification is collapsible (C26/C32): once it's no
+          // longer the latest turn it collapses to a one-line note by default,
+          // and joins Collapse all / Expand all — so it stops lingering as a
+          // full amber box. The LIVE clarification (collapsible === false) always
+          // renders in full since it's an actionable prompt awaiting an answer.
+          collapsible && !expanded ? (
+            <CollapsedClarification
+              clarificationQuestion={turn.clarificationQuestion}
+              onExpand={onToggle}
+            />
+          ) : (
+            <div className="space-y-1.5">
+              {collapsible && (
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={onToggle}
+                    aria-expanded="true"
+                    className="shrink-0 text-[11px] font-medium text-gray-400 hover:text-gray-700"
+                  >
+                    collapse
+                  </button>
+                </div>
+              )}
+              <ClarificationTurn
+                clarificationQuestion={turn.clarificationQuestion}
+                onResubmit={onResubmitClarification}
+                busy={busy}
+                resolved={!isLatest}
+              />
+            </div>
+          )
         ) : turn.answer ? (
           collapsible && !expanded ? (
             <CollapsedAnswer answer={turn.answer} onExpand={onToggle} />
@@ -128,6 +155,34 @@ function CollapsedAnswer({ answer, onExpand }: { answer: AskResponse; onExpand: 
       </span>
       <span className="min-w-0 flex-1 truncate text-xs text-gray-500">
         {preview || '(answer)'}
+      </span>
+      <span className="shrink-0 text-[10px] text-blue-600">expand</span>
+    </button>
+  )
+}
+
+/** Collapsed view for a RESOLVED clarification: a one-line amber note that
+ *  expands on click (mirrors CollapsedAnswer). Only used once the clarification
+ *  is no longer the latest turn, so it never hides a live, actionable prompt. */
+function CollapsedClarification({
+  clarificationQuestion,
+  onExpand,
+}: {
+  clarificationQuestion: string
+  onExpand: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onExpand}
+      aria-expanded="false"
+      className="flex w-full items-center gap-2 text-left"
+    >
+      <span aria-hidden="true" className="text-amber-500">
+        ▸
+      </span>
+      <span className="min-w-0 flex-1 truncate text-xs text-amber-700">
+        ✓ Clarification resolved — {clarificationQuestion}
       </span>
       <span className="shrink-0 text-[10px] text-blue-600">expand</span>
     </button>
