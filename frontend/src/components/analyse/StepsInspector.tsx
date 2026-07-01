@@ -104,7 +104,7 @@ export function StepsInspector({ steps }: { steps: AskStep[] }) {
                     <CopyButton text={step.action} />
                   </div>
                 </div>
-                <pre className="overflow-x-auto px-3 py-2 font-mono text-[11px] leading-relaxed text-gray-100">
+                <pre className="whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-gray-100">
                   <code>{step.action}</code>
                 </pre>
               </div>
