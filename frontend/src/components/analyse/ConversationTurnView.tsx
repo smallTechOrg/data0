@@ -210,10 +210,6 @@ function AnswerView({
           {answer.iteration_count ?? 0} iteration
           {(answer.iteration_count ?? 0) === 1 ? '' : 's'}
         </span>
-        <span aria-hidden="true">·</span>
-        <span className="tabular-nums">
-          Tokens: {answer.tokens_input ?? 0} in / {answer.tokens_output ?? 0} out
-        </span>
         {answer.status && (
           <>
             <span aria-hidden="true">·</span>
