@@ -40,7 +40,7 @@ export interface ColsState {
 
 /**
  * Row "tone" — the dataset's origin/state, conveyed by the whole pill's colour
- * instead of a text badge: uploaded = blue, derived = green, stale = amber.
+ * instead of a text badge: uploaded = neutral (no tint), derived = green, stale = amber.
  * `stale` is the most specific state and wins over plain `derived`.
  */
 type RowTone = 'uploaded' | 'derived' | 'stale'
@@ -53,8 +53,8 @@ function rowTone(ds: DatasetSummary): RowTone {
 /** Whole-pill tint per tone — resting vs selected (selected = deeper + ring). */
 const TONE_PILL: Record<RowTone, { rest: string; selected: string }> = {
   uploaded: {
-    rest: 'border-blue-200 bg-blue-50 hover:bg-blue-100/60',
-    selected: 'border-blue-400 bg-blue-100 ring-1 ring-inset ring-blue-400',
+    rest: 'border-gray-200 bg-white hover:bg-gray-50',
+    selected: 'border-blue-300 bg-blue-50 ring-1 ring-inset ring-blue-300',
   },
   derived: {
     rest: 'border-green-200 bg-green-50 hover:bg-green-100/60',
