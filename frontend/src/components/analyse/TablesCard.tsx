@@ -13,11 +13,13 @@ import { CleanModal } from '@/components/database/CleanModal'
  *
  * Fetches GET /datasets on mount and whenever `datasetsVersion` changes (the
  * parent bumps it after each upload and each completed ask, surfacing new /
- * derived datasets). Each row shows filename + rows×cols + format + origin/stale
- * badges, a checkbox to select the dataset for bulk actions, a "cols"
- * toggle that lazily fetches GET /datasets/{id} for the column schema, a
- * **Clean** action (uploaded rows → the C24 clean modal) and a **Re-derive**
- * action (stale derived rows → POST /datasets/{id}/re-derive). Deletion is a
+ * derived datasets). Each row shows filename + rows×cols + format, with the
+ * dataset's **origin/state conveyed by the whole-pill tint** (uploaded = blue,
+ * derived = green, stale = amber — no text badge), a checkbox to select the
+ * dataset for bulk actions, a **columns** icon toggle that lazily fetches
+ * GET /datasets/{id} for the column schema, a **Clean** (broom) icon action
+ * (uploaded rows → the C24 clean modal) and a **Re-derive** action (stale
+ * derived rows → POST /datasets/{id}/re-derive). Deletion is a
  * bulk action in the selection bar: check rows, then **Delete selected** with an
  * inline confirm → DELETE /datasets/{id} for each checked dataset. The selection
  * does NOT scope analysis — dataset selection for a question is agent-driven
@@ -34,6 +36,92 @@ export interface ColsState {
   loading: boolean
   error: string | null
   columns: ColumnSchema[] | null
+}
+
+/**
+ * Row "tone" — the dataset's origin/state, conveyed by the whole pill's colour
+ * instead of a text badge: uploaded = blue, derived = green, stale = amber.
+ * `stale` is the most specific state and wins over plain `derived`.
+ */
+type RowTone = 'uploaded' | 'derived' | 'stale'
+
+function rowTone(ds: DatasetSummary): RowTone {
+  if (ds.origin === 'derived') return ds.stale === true ? 'stale' : 'derived'
+  return 'uploaded'
+}
+
+/** Whole-pill tint per tone — resting vs selected (selected = deeper + ring). */
+const TONE_PILL: Record<RowTone, { rest: string; selected: string }> = {
+  uploaded: {
+    rest: 'border-blue-200 bg-blue-50 hover:bg-blue-100/60',
+    selected: 'border-blue-400 bg-blue-100 ring-1 ring-inset ring-blue-400',
+  },
+  derived: {
+    rest: 'border-green-200 bg-green-50 hover:bg-green-100/60',
+    selected: 'border-green-400 bg-green-100 ring-1 ring-inset ring-green-400',
+  },
+  stale: {
+    rest: 'border-amber-200 bg-amber-50 hover:bg-amber-100/60',
+    selected: 'border-amber-400 bg-amber-100 ring-1 ring-inset ring-amber-400',
+  },
+}
+
+/** Checkbox accent per tone, so a checked row echoes its pill colour. */
+const TONE_ACCENT: Record<RowTone, string> = {
+  uploaded: 'accent-blue-600',
+  derived: 'accent-green-600',
+  stale: 'accent-amber-600',
+}
+
+/** Screen-reader origin/state label (replaces the removed visible badge). */
+const TONE_LABEL: Record<RowTone, string> = {
+  uploaded: 'Uploaded dataset',
+  derived: 'Derived dataset',
+  stale: 'Stale derived dataset — a parent changed after it was derived',
+}
+
+/** Framed 3-column grid glyph for the "cols" toggle. */
+function ColumnsIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="1.5" />
+      <line x1="9" y1="4" x2="9" y2="20" />
+      <line x1="15" y1="4" x2="15" y2="20" />
+    </svg>
+  )
+}
+
+/** Broom glyph for the "Clean" action (handle + bristle head). */
+function BroomIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M20 4 11 13" />
+      <path d="M7 17 11 13 15 17 11 21 Z" />
+      <path d="M9 19 8 22" />
+      <path d="M11 19.5 11 22.5" />
+      <path d="M13 19 14 22" />
+    </svg>
+  )
 }
 
 /**
@@ -267,46 +355,38 @@ export function TablesCardView({
           No {filter.toLowerCase()} datasets.
         </div>
       ) : (
-        <ul role="list" className="max-h-[24rem] space-y-1.5 overflow-y-auto pr-1">
+        <ul role="list" className="max-h-[24rem] space-y-1 overflow-y-auto pr-1">
           {visibleDatasets.map(ds => {
             const cols = colsById[ds.id]
             const selected = selectedDatasetIds.includes(ds.id)
             const derived = ds.origin === 'derived'
             const stale = derived && ds.stale === true
+            const tone = rowTone(ds)
+            const pill = TONE_PILL[tone]
             return (
               <li
                 key={ds.id}
-                className={`rounded-md border px-3 py-1.5 ${
-                  selected ? 'border-blue-300 bg-blue-50' : 'border-gray-200'
+                title={TONE_LABEL[tone]}
+                className={`rounded-md border px-3 py-1 transition-colors ${
+                  selected ? pill.selected : pill.rest
                 }`}
               >
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <label className="flex min-w-0 flex-1 items-center gap-2">
                     <input
                       type="checkbox"
                       checked={selected}
                       onChange={() => onToggleSelect(ds.id)}
                       aria-label={`Select ${ds.filename}`}
-                      className="h-4 w-4 shrink-0"
+                      className={`h-4 w-4 shrink-0 ${TONE_ACCENT[tone]}`}
                     />
                     <span className="min-w-0 flex-1 truncate text-xs font-medium text-gray-800">
                       {ds.filename}
                     </span>
                   </label>
-
-                  {derived && (
-                    <span className="shrink-0 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
-                      Derived
-                    </span>
-                  )}
-                  {stale && (
-                    <span
-                      title="A parent changed after this dataset was derived"
-                      className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800"
-                    >
-                      Stale
-                    </span>
-                  )}
+                  {/* Origin/state is conveyed by the pill tint; this sr-only text
+                      keeps that information available to screen readers (C-a11y). */}
+                  <span className="sr-only">{TONE_LABEL[tone]}</span>
 
                   <span className="shrink-0 text-xs tabular-nums text-gray-500">
                     {ds.row_count} × {ds.col_count}
@@ -320,9 +400,12 @@ export function TablesCardView({
                     onClick={() => onToggleCols(ds.id)}
                     aria-expanded={Boolean(cols)}
                     aria-label={`Toggle columns for ${ds.filename}`}
-                    className="shrink-0 rounded border border-gray-200 bg-white px-2 py-0.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    title="Columns"
+                    className={`inline-flex shrink-0 items-center justify-center rounded p-1 text-gray-500 hover:bg-white/70 hover:text-gray-800 ${
+                      cols ? 'bg-white/80 text-gray-800' : ''
+                    }`}
                   >
-                    cols
+                    <ColumnsIcon />
                   </button>
 
                   {/* Clean — uploaded datasets only (C24). */}
@@ -331,9 +414,10 @@ export function TablesCardView({
                       type="button"
                       onClick={() => onClean(ds)}
                       aria-label={`Clean ${ds.filename}`}
-                      className="shrink-0 rounded border border-gray-200 bg-white px-2 py-0.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                      title="Clean"
+                      className="inline-flex shrink-0 items-center justify-center rounded p-1 text-gray-500 hover:bg-white/70 hover:text-gray-800"
                     >
-                      Clean
+                      <BroomIcon />
                     </button>
                   )}
 
@@ -344,7 +428,8 @@ export function TablesCardView({
                       onClick={() => onReDerive(ds.id)}
                       disabled={rederivingId === ds.id}
                       aria-label={`Re-derive ${ds.filename}`}
-                      className="shrink-0 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+                      title="Re-derive"
+                      className="shrink-0 rounded border border-amber-400 bg-white/70 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-white disabled:opacity-60"
                     >
                       {rederivingId === ds.id ? 'Re-deriving…' : 'Re-derive'}
                     </button>
