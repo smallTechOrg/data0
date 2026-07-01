@@ -205,22 +205,57 @@ def _session_load_frame(session_id: str, dataset_id: str) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 
 
+# C33 token economics: how many column names to PREVIEW per dataset in the
+# catalog. The catalog is a lean MENU the agent picks from — it pays for only these
+# few names per dataset on every ReAct iteration, then pulls the FULL column list on
+# demand (`df{n}.columns.tolist()`) for the datasets it actually drills into.
+# Sending every column of every dataset on every iteration is exactly the bloat this
+# avoids (see spec/capabilities/auto-dataset-selection.md).
+_CATALOG_COLUMN_PREVIEW = 6
+
+
 def _catalog_block(idx: int, entry: dict[str, Any]) -> str:
-    """One dataset's line in the prompt CATALOG: how to reference it + its columns.
+    """One dataset's line in the prompt CATALOG: how to reference it + a LEAN schema.
 
     Names the variable the model loads it with (`df{n}` and, when distinct, the
-    `<alias>`), the source filename, its columns (from the cheap `columns_json`
-    metadata), and any compressed notes. Deliberately metadata-only: no dtypes /
-    row-counts — those need a loaded frame, and the whole point of the catalog is
-    to pick WITHOUT reading files. The model inspects `df{n}.dtypes` / `.head()`
-    itself once it decides a dataset is relevant.
+    `<alias>`), the source filename, and its schema. By DEFAULT it lists every column
+    (exactly the pre-C33 line). For a wide table it can instead show the total column
+    COUNT + a PREVIEW of the first `_CATALOG_COLUMN_PREVIEW` names + a
+    `(+K more — df{n}.columns)` pointer — but it adopts that compressed form ONLY when
+    it is actually SHORTER than the full listing. So a catalog line is NEVER larger
+    than a plain schema, yet collapses hard for the wide tables that dominate a big
+    workspace's per-iteration prompt cost (the compression pays off exactly when it
+    hides enough columns to beat the `(+K more)` pointer's fixed overhead).
+
+    Metadata-only either way: dtypes and row-counts come from on-demand inspection
+    the model runs once a dataset looks relevant (`df{n}.columns.tolist()` / `.head()`)
+    — the whole point is to pick WITHOUT paying for every column of every dataset on
+    every ReAct iteration (C33 token economics).
     """
     dfn = f"df{idx + 1}"
     alias = entry.get("alias")
     names = f"`{dfn}` (alias `{alias}`)" if alias and alias != dfn else f"`{dfn}`"
-    columns = entry.get("columns") or []
-    cols = ", ".join(columns) if columns else "(columns unknown — inspect with .columns)"
-    line = f"- {names} — {entry.get('filename', '')}: {cols}"
+    columns = [str(c) for c in (entry.get("columns") or [])]
+    filename = entry.get("filename", "")
+    if not columns:
+        line = f"- {names} — {filename} — columns unknown (inspect with `{dfn}.columns`)"
+    else:
+        # Default: list every column — identical to the pre-C33 line.
+        line = full = f"- {names} — {filename}: {', '.join(columns)}"
+        if len(columns) > _CATALOG_COLUMN_PREVIEW:
+            # Wide enough to consider compressing: COUNT + a preview of the first few
+            # names + a pointer to the on-demand pull. Adopt it ONLY when it is
+            # genuinely shorter than the full listing, so the line is never larger
+            # than a plain schema — the saving is real precisely for the wide tables
+            # that dominate a big workspace's prompt (C33 token economics).
+            preview = ", ".join(columns[:_CATALOG_COLUMN_PREVIEW])
+            hidden = len(columns) - _CATALOG_COLUMN_PREVIEW
+            lean = (
+                f"- {names} — {filename} — {len(columns)} cols: "
+                f"{preview}, … (+{hidden} more — `{dfn}.columns` for all)"
+            )
+            if len(lean) < len(full):
+                line = lean
     notes = (entry.get("notes") or "").strip()
     if notes:
         line += f"\n  notes: {notes}"

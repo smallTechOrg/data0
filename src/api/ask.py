@@ -103,7 +103,16 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
     # Dataset selection is agent-driven: hand the runner EVERY dataset in the
     # workspace and let the agent pick (and lazily load) whichever it needs. The
     # request's dataset fields no longer scope the run (see module docstring).
-    candidate_ids = list(session.execute(select(DatasetRow.id)).scalars().all())
+    # Order by upload time (oldest first) so the catalog's `df1`/`df2`/... numbering
+    # is deterministic and stable across turns — it mirrors the order the user added
+    # the tables. Without an explicit ORDER BY, `select(id)` is served from the id
+    # primary-key index and comes back in random UUID order, so `df1` would point at
+    # an arbitrary table each run.
+    candidate_ids = list(
+        session.execute(
+            select(DatasetRow.id).order_by(DatasetRow.created_at.asc())
+        ).scalars().all()
+    )
     if not candidate_ids:
         raise api_error(
             "no_datasets", "No datasets uploaded yet. Upload a file first.", 400

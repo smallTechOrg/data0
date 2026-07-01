@@ -405,6 +405,53 @@ def test_setup_injects_compressed_facts_not_raw_notes(uploads_dir):
     assert raw not in ctx  # raw notes NOT injected
 
 
+def test_catalog_block_lean_counts_and_previews():
+    """C33 token economics: a WIDE table is compressed to its column COUNT + a preview
+    of only the first `_CATALOG_COLUMN_PREVIEW` names + a `(+K more)` pointer, NOT the
+    full column list — the agent pulls the rest on demand (`df{n}.columns`). The
+    compressed form is adopted precisely because it is SHORTER than listing every
+    column (Pareto: never worse than a plain schema). Compressed notes still append."""
+    n = nodes_module._CATALOG_COLUMN_PREVIEW
+    # Realistically-named wide table: enough columns that the count+preview form is
+    # decisively shorter than the full listing (so compression is adopted).
+    wide_cols = [f"feature_{i:02d}_value" for i in range(n + 18)]
+    entry = {
+        "id": "d1",
+        "filename": "wide.csv",
+        "alias": "wide",
+        "columns": wide_cols,
+        "notes": "one compact fact",
+    }
+    line = nodes_module._catalog_block(0, entry)
+    schema_line = line.splitlines()[0]  # the schema line, before the appended notes
+
+    assert "`df1` (alias `wide`)" in line  # how to reference it
+    assert "wide.csv" in line
+    assert f"{len(wide_cols)} cols:" in line  # the COUNT, not just the names
+    # Only the first `n` names are previewed; the tail is summarised, not listed.
+    assert wide_cols[0] in line and wide_cols[n - 1] in line
+    assert wide_cols[n] not in line  # the (n+1)th column is NOT spelled out
+    assert "(+18 more" in line and "`df1.columns`" in line  # on-demand pointer
+    # Pareto guarantee: the compressed schema line is strictly shorter than listing
+    # every column would have been.
+    full_listing = f"- `df1` (alias `wide`) — wide.csv: {', '.join(wide_cols)}"
+    assert len(schema_line) < len(full_listing)
+    assert "notes: one compact fact" in line
+
+
+def test_catalog_block_narrow_table_lists_all_columns_no_more():
+    """C33: a table no wider than the preview lists ALL its columns with NO count/
+    preview overhead — byte-for-byte the pre-C33 line — so the lean catalog is NEVER
+    larger than a plain column listing (the compression only kicks in on wide tables).
+    """
+    entry = {"filename": "sales.csv", "alias": "sales", "columns": ["product", "price", "qty"]}
+    line = nodes_module._catalog_block(0, entry)
+
+    assert "sales.csv: product, price, qty" in line  # all columns, plain listing
+    assert "more" not in line  # no (+K more) tail
+    assert "cols:" not in line  # no "N cols:" prefix — zero overhead vs pre-C33
+
+
 # --------------------------------------------------------------------------- #
 # D2 — invalidate_dataset_cache removes dataset from ALL session entries (C27)
 # --------------------------------------------------------------------------- #

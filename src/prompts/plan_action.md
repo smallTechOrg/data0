@@ -13,7 +13,7 @@ You are given a **catalog** of every dataset in the workspace (under `## Dataset
 
 - `df1`, `df2`, ... — the datasets in the order listed in the catalog (`df` is the same as `df1`).
 - Each dataset also has a `<filename_stem>` alias variable — shown next to it in the catalog, e.g. ``df1` (alias `sales`)``.
-- The catalog lists each dataset's **columns** but not its dtypes or row count. Once you pick a dataset, inspect it as usual (`df1.dtypes`, `df1.head()`, `df1.shape`) before computing.
+- For each dataset the catalog shows its columns — in full for a narrow table, or (for a wide one) a **column count plus a preview of the first few names** with a `(+K more)` tail (never dtypes or row counts). That is enough to pick. Once you pick a dataset, inspect it for the full schema when the catalog previewed only some columns (`df1.columns.tolist()`, then `df1.dtypes`, `df1.head()`, `df1.shape`) before computing.
 - Load only what you need: a question about one table should not touch the others.
 
 ## Available libraries (already imported)
