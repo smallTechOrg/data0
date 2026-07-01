@@ -405,6 +405,36 @@ def test_setup_injects_compressed_facts_not_raw_notes(uploads_dir):
     assert raw not in ctx  # raw notes NOT injected
 
 
+def test_setup_reads_no_frames(uploads_dir, monkeypatch):
+    """C19 criterion #2: `setup` builds the catalog from metadata ONLY — it must
+    never call `_load_dataframe` (no Parquet/CSV reads during setup).
+
+    The metadata (filename, columns_json) comes exclusively from the DB rows that
+    `_make_dataset` populates. The returned `dataset_context` must be non-empty to
+    confirm the catalog was built successfully without touching any data files.
+    """
+    first = _make_dataset(uploads_dir, filename="alpha.csv")
+    second = _make_dataset(uploads_dir, filename="beta.csv")
+
+    load_calls: list[str] = []
+
+    def _fake_load(dataset_id: str) -> pd.DataFrame:
+        load_calls.append(dataset_id)
+        return pd.DataFrame()  # never reached in a correct setup
+
+    monkeypatch.setattr(nodes_module, "_load_dataframe", _fake_load)
+
+    result = nodes_module.setup({"run_id": "r-no-frames", "dataset_ids": [first, second]})
+
+    # setup must NEVER read a frame — the catalog is metadata-only.
+    assert load_calls == [], (
+        f"setup called _load_dataframe for: {load_calls}; expected zero frame reads"
+    )
+    # The catalog itself must be non-empty (metadata was read from DB, not frames).
+    ctx = result.get("dataset_context", "")
+    assert ctx, "setup returned an empty dataset_context — catalog build failed"
+
+
 def test_catalog_block_lean_counts_and_previews():
     """C33 token economics: a WIDE table is compressed to its column COUNT + a preview
     of only the first `_CATALOG_COLUMN_PREVIEW` names + a `(+K more)` pointer, NOT the

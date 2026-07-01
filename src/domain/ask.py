@@ -4,9 +4,13 @@ from pydantic import BaseModel
 class AskRequest(BaseModel):
     """Request body for `POST /ask`.
 
-    Phase 2: single-dataset Q&A. Either `dataset_id` (one) or `dataset_ids`
-    (explicit list) selects the dataset(s); `session_id` and `skip_clarification`
-    are accepted for forward-compat but are not acted on until Phase 3.
+    - `dataset_id` / `dataset_ids` — accepted for API compatibility but IGNORED;
+      dataset selection is agent-driven since Phase 6 (the agent picks from the
+      full catalog autonomously).
+    - `session_id` — resumes an existing conversation session (20-turn cap);
+      omit to start a new session.
+    - `skip_clarification` — suppresses the C26 pre-flight clarification check
+      (first turn only).
     """
 
     question: str

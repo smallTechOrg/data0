@@ -7,7 +7,7 @@ Answers a plain-English question about a dataset by running a LangGraph ReAct lo
 | Input | Type | Source | Required |
 |-------|------|--------|----------|
 | question | string | `/ask` body | yes |
-| dataset_id / dataset_ids | string / list | `/ask` body | yes (one of) |
+| dataset catalog | metadata list | DB (all workspace datasets, agent-driven — see C19) | yes |
 | session_id | string | `/ask` body | no |
 
 ## Outputs
