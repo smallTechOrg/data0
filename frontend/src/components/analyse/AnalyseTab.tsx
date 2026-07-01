@@ -4,8 +4,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { SessionSidebar } from '@/components/analyse/SessionSidebar'
 import { TokenWidget } from '@/components/analyse/TokenWidget'
-import { TablesCard } from '@/components/analyse/TablesCard'
-import { UploadCard } from '@/components/analyse/UploadCard'
 import {
   ConversationCard,
   type ConversationHandle,
@@ -22,14 +20,13 @@ export interface LastQueryTokens {
  * Analyse tab — the real Phase-3 surface.
  *
  * Owns the shared state the cards coordinate on:
- *  - `selectedDatasetIds` : the Tables card's row selection, used ONLY for bulk
- *    actions (delete) — it does NOT scope analysis. Dataset selection for a
- *    question is agent-driven server-side; the agent picks from a catalog of all
- *    datasets. The Tables card's checkboxes set this.
  *  - `sessionId`          : the active conversation session. New is created
  *    server-side on the next /ask with no session_id; the answer's session_id is
  *    adopted here. Resuming a session loads its turns into the conversation card.
- *  - `datasetsVersion`    : a bump token telling the Tables card to re-fetch.
+ *  - `datasetsVersion`    : a bump token that keeps the Token widget's dataset
+ *    aggregate (Datasets/Rows) fresh — data itself is managed on the Database
+ *    tab (Upload + Tables live there now), but this tab still needs to know
+ *    when the universe changes.
  *  - `sessionsVersion`    : a bump token telling the sidebar to re-fetch (after
  *    each ask, so turn counts / ordering update).
  *  - `lastTokens`         : in/out tokens from the latest answer (Token widget).
@@ -37,8 +34,9 @@ export interface LastQueryTokens {
  * The global-memory ("Project notes") modal is hoisted to AppShell so the header
  * button and the sidebar button open the same modal; `onOpenMemory` opens it.
  *
- * Layout: a left sidebar (sessions + token usage) and a main column (tables,
- * upload, conversation). Stacks on narrow viewports.
+ * Layout: a left sidebar (sessions + token usage) and a main column (the
+ * conversation). Stacks on narrow viewports. Data management (upload, tables,
+ * schema) lives on the Database tab, which is now the app's default/landing tab.
  */
 export function AnalyseTab({
   provider,
@@ -56,7 +54,6 @@ export function AnalyseTab({
   /** Notify the shell after a settings save so the header re-fetches /health. */
   onSettingsSaved?: () => void
 }) {
-  const [selectedDatasetIds, setSelectedDatasetIds] = useState<string[]>([])
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [datasetsVersion, setDatasetsVersion] = useState(0)
   const [sessionsVersion, setSessionsVersion] = useState(0)
@@ -70,39 +67,17 @@ export function AnalyseTab({
   const refreshSessions = useCallback(() => setSessionsVersion(v => v + 1), [])
 
   // The tab stays mounted when hidden, so its state (active session,
-  // conversation) survives a switch to the Database tab. When the user RETURNS,
-  // refresh the dataset + session lists (they may have changed in the Database
-  // tab) — but never the active session id or the conversation thread. Skip the
-  // initial mount, which already fetches.
-  const didMount = useRef(false)
+  // conversation) survives a switch to the Database tab. Database is the app's
+  // landing tab now, so the user's FIRST visit here typically happens after
+  // they've already uploaded data there — every activation (including the
+  // first) must refresh so the Token widget's dataset aggregate isn't stale.
+  // This never double-fetches at load time: `active` is false until the user
+  // actually switches to this tab (Database is the default).
   useEffect(() => {
     if (!active) return
-    if (!didMount.current) {
-      didMount.current = true
-      return
-    }
     refreshDatasets()
     refreshSessions()
   }, [active, refreshDatasets, refreshSessions])
-
-  const toggleSelect = useCallback((id: string) => {
-    setSelectedDatasetIds(prev =>
-      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id],
-    )
-  }, [])
-
-  const selectAll = useCallback((ids: string[]) => setSelectedDatasetIds(ids), [])
-
-  const clearSelection = useCallback(() => setSelectedDatasetIds([]), [])
-
-  // When a dataset is deleted, drop it from the selection.
-  const handleDatasetDeleted = useCallback(
-    (deletedId: string) => {
-      setSelectedDatasetIds(prev => prev.filter(x => x !== deletedId))
-      refreshDatasets()
-    },
-    [refreshDatasets],
-  )
 
   // --- Session lifecycle ----------------------------------------------------
 
@@ -192,31 +167,19 @@ export function AnalyseTab({
         </button>
       </aside>
 
-      {/* Main column — Tables and Upload side by side, conversation below. */}
-      <div className="flex flex-col gap-4">
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <TablesCard
-            datasetsVersion={datasetsVersion}
-            selectedDatasetIds={selectedDatasetIds}
-            onToggleSelect={toggleSelect}
-            onSelectAll={selectAll}
-            onClearSelection={clearSelection}
-            onDeleted={handleDatasetDeleted}
-          />
-          <UploadCard onUploaded={refreshDatasets} />
-        </div>
-        <ConversationCard
-          handleRef={conversationRef}
-          sessionId={sessionId}
-          model={model}
-          onSessionStarted={handleSessionStarted}
-          onAnswered={tokens => {
-            setLastTokens(tokens)
-            refreshDatasets()
-            refreshSessions()
-          }}
-        />
-      </div>
+      {/* Main column — the conversation. Data management (upload, tables,
+          schema) lives on the Database tab. */}
+      <ConversationCard
+        handleRef={conversationRef}
+        sessionId={sessionId}
+        model={model}
+        onSessionStarted={handleSessionStarted}
+        onAnswered={tokens => {
+          setLastTokens(tokens)
+          refreshDatasets()
+          refreshSessions()
+        }}
+      />
     </div>
   )
 }

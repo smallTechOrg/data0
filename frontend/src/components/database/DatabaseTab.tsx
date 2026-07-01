@@ -4,29 +4,40 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type DatasetSummary } from '@/lib/api'
 import { ERDiagramPanel, type ErDataset } from '@/components/database/ERDiagramPanel'
 import { TableDescriptionPanel } from '@/components/database/TableDescriptionPanel'
+import { TablesCard } from '@/components/analyse/TablesCard'
+import { UploadCard } from '@/components/analyse/UploadCard'
 
 /**
- * Database tab — REAL (Phase 4).
+ * Database tab — REAL (Phase 4), 3-column layout (v0.6 follow-up).
  *
- * Fetches the data universe (`GET /datasets`) and renders the schema ER diagram
- * (the single-source-of-truth `<ERDiagramPanel>`) beside the per-dataset
- * `<TableDescriptionPanel>`. The diagram and the description panel share one
- * `selectedId` so clicking a table card drives the right-hand detail view.
+ * Fetches the data universe (`GET /datasets`) and renders three columns:
+ * Upload + Tables (left, collapsible) · the schema ER diagram (middle, always
+ * visible) · the per-dataset `<TableDescriptionPanel>` (right, collapsible).
+ * The diagram and the description panel share one `selectedId` so clicking a
+ * table card drives the right-hand detail view; the left column's Tables list
+ * shares the same dataset universe and a separate `selectedDatasetIds` used
+ * only for its own bulk-delete action.
  *
  * The list is fetched on mount (the tab re-mounts when shown, so this is also
  * the "re-fetch when the tab is shown" hook) and re-fetched after any mutation
- * (clean / re-derive / delete / clear-database) via a bumped refresh token. The
- * header shows the uploaded/derived counts and a REAL danger "Clear database"
- * action behind an inline confirm that calls `DELETE /datasets`.
+ * (upload / clean / re-derive / delete / clear-database) via a bumped refresh
+ * token — also passed to `<TablesCard>` as its own `datasetsVersion`. The
+ * header shows the uploaded/derived counts, the two column-visibility toggle
+ * chips, and a REAL danger "Clear database" action behind an inline confirm
+ * that calls `DELETE /datasets`.
  */
 export function DatabaseTab() {
   const [datasets, setDatasets] = useState<DatasetSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  // Right-hand description panel can be collapsed to give the diagram the full
-  // width; the toggle lives in the diagram's header (passed to ERDiagramPanel).
-  const [descOpen, setDescOpen] = useState(true)
+  // Left column (Upload + Tables) and right column (description) each
+  // collapse independently to give the diagram more width. Left defaults
+  // open (this is where data enters); the description defaults collapsed.
+  const [leftOpen, setLeftOpen] = useState(true)
+  const [descOpen, setDescOpen] = useState(false)
+  // Tables list's own row-selection, for its bulk-delete action only.
+  const [selectedDatasetIds, setSelectedDatasetIds] = useState<string[]>([])
 
   const [confirmClear, setConfirmClear] = useState(false)
   const [clearing, setClearing] = useState(false)
@@ -34,6 +45,27 @@ export function DatabaseTab() {
   // Bumped after a child mutation so the list (and counts) re-fetch.
   const [refreshToken, setRefreshToken] = useState(0)
   const refresh = useCallback(() => setRefreshToken(t => t + 1), [])
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedDatasetIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id],
+    )
+  }, [])
+  const selectAll = useCallback((ids: string[]) => setSelectedDatasetIds(ids), [])
+  const clearSelection = useCallback(() => setSelectedDatasetIds([]), [])
+
+  // Shared by both TablesCard and TableDescriptionPanel — either can delete
+  // the currently-selected dataset, so both drop it from every piece of
+  // local state (the list, the row-selection, and the ERD/description focus).
+  const handleDatasetDeleted = useCallback(
+    (id: string) => {
+      setDatasets(prev => prev.filter(d => d.id !== id))
+      setSelectedDatasetIds(prev => prev.filter(x => x !== id))
+      setSelectedId(prev => (prev === id ? null : prev))
+      refresh()
+    },
+    [refresh],
+  )
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -97,53 +129,58 @@ export function DatabaseTab() {
     <div className="flex flex-col gap-3">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
-        <div>
+        <div className="flex flex-wrap items-baseline gap-x-2">
           <h2 className="text-sm font-semibold text-gray-800">Database</h2>
-          <p className="mt-0.5 text-xs text-gray-500 tabular-nums">
+          <p className="text-xs text-gray-500 tabular-nums">
             {loading && datasets.length === 0
               ? 'Loading…'
               : `${datasets.length} dataset${datasets.length === 1 ? '' : 's'} · ${uploadedCount} uploaded · ${derivedCount} derived`}
           </p>
         </div>
 
-        {confirmClear ? (
-          <span className="inline-flex items-center gap-2">
-            <span className="text-xs text-gray-600">
-              Delete ALL datasets and sessions?
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Column-visibility is now toggled via each panel's own inline
+              "Hide"/edge tab (see the middle column below) — no header
+              chips needed. */}
+          {confirmClear ? (
+            <span className="inline-flex items-center gap-2">
+              <span className="text-xs text-gray-600">
+                Delete ALL datasets and sessions?
+              </span>
+              <button
+                type="button"
+                onClick={() => void doClear()}
+                disabled={clearing}
+                className="inline-flex items-center gap-1.5 rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {clearing && <Spinner />}
+                {clearing ? 'Clearing…' : 'Yes, clear'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmClear(false)}
+                disabled={clearing}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
             </span>
+          ) : (
             <button
               type="button"
-              onClick={() => void doClear()}
-              disabled={clearing}
-              className="inline-flex items-center gap-1.5 rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => setConfirmClear(true)}
+              disabled={datasets.length === 0}
+              title={
+                datasets.length === 0
+                  ? 'No datasets to clear'
+                  : 'Delete every dataset, derived set, query, and session'
+              }
+              className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-50 disabled:text-gray-300"
             >
-              {clearing && <Spinner />}
-              {clearing ? 'Clearing…' : 'Yes, clear'}
+              Clear database
             </button>
-            <button
-              type="button"
-              onClick={() => setConfirmClear(false)}
-              disabled={clearing}
-              className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60"
-            >
-              Cancel
-            </button>
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setConfirmClear(true)}
-            disabled={datasets.length === 0}
-            title={
-              datasets.length === 0
-                ? 'No datasets to clear'
-                : 'Delete every dataset, derived set, query, and session'
-            }
-            className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-50 disabled:text-gray-300"
-          >
-            Clear database
-          </button>
-        )}
+          )}
+        </div>
       </div>
 
       {error && (
@@ -162,54 +199,125 @@ export function DatabaseTab() {
         </div>
       )}
 
-      {isEmpty ? (
-        <div className="flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-gray-200 bg-white px-4 py-16 text-center">
-          <span aria-hidden="true" className="mb-1 text-3xl text-gray-300">
-            ⬚
-          </span>
-          <p className="text-sm font-medium text-gray-500">No datasets yet</p>
-          <p className="text-xs text-gray-400">
-            Upload a CSV on the Analyse tab — its schema and details appear here.
-          </p>
-        </div>
-      ) : (
-        // Schema pane flexes to fill; the description panel is a FIXED width so
-        // the diagram's width never changes when a different table is selected.
-        // Collapsing the description (the "Details" toggle in the diagram header)
-        // drops the second track so the diagram spans the full row. `min-w-0`
-        // lets each column's overflow (the SVG diagram, the wide data preview)
-        // scroll inside its track instead of stretching it.
-        <div
-          className={`grid grid-cols-1 gap-4 ${
-            descOpen ? 'lg:grid-cols-[minmax(0,1fr)_24rem]' : 'lg:grid-cols-1'
-          }`}
-        >
-          <div className="min-w-0">
-            <ERDiagramPanel
-              datasets={erDatasets}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-              detailsOpen={descOpen}
-              onToggleDetails={() => setDescOpen(o => !o)}
-            />
-          </div>
-          {descOpen && (
-            <div className="min-w-0">
-              <TableDescriptionPanel
-                datasetId={selectedId}
-                allDatasets={erDatasets}
-                onChanged={refresh}
-                onCollapse={() => setDescOpen(false)}
-                onDeleted={id => {
-                  setDatasets(prev => prev.filter(d => d.id !== id))
-                  if (selectedId === id) setSelectedId(null)
-                  refresh()
-                }}
+      {/* 3-column layout: Upload+Tables (left, collapsible) · the ER diagram
+          (middle, always mounted — its own empty state replaces just this
+          column when there's no data) · the description panel (right,
+          collapsible, never shown while empty). Side tracks are a FIXED width
+          so neither the diagram nor a re-selected table shifts the layout;
+          `min-w-0` lets each column's overflow (staged uploads, the wide SVG,
+          the data preview) scroll inside its own track instead of stretching
+          it. Column templates are enumerated as literal strings — Tailwind's
+          JIT can't see a runtime-built arbitrary value. */}
+      <div
+        className={`grid grid-cols-1 gap-4 ${
+          isEmpty
+            ? leftOpen
+              ? 'lg:grid-cols-[24rem_minmax(0,1fr)]'
+              : 'lg:grid-cols-1'
+            : leftOpen && descOpen
+              ? 'lg:grid-cols-[24rem_minmax(0,1fr)_24rem]'
+              : leftOpen
+                ? 'lg:grid-cols-[24rem_minmax(0,1fr)]'
+                : descOpen
+                  ? 'lg:grid-cols-[minmax(0,1fr)_24rem]'
+                  : 'lg:grid-cols-1'
+        }`}
+      >
+        {leftOpen && (
+          <div className="min-w-0 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
+            {/* left-column-stack: merges UploadCard + TablesCard's own
+                bordered/shadowed <section>s into one continuous card (see the
+                `.left-column-stack > section` rules in globals.css) — matching
+                the single-card look of the Table description panel. UploadCard
+                has no collapse affordance of its own (unlike TableDescription-
+                Panel's built-in "Hide ›"), so instead of adding a second header
+                row above it, the Hide button is absolutely positioned into the
+                empty right-hand space of UploadCard's OWN heading row (that
+                row is `justify-between` with only the "Upload data" h2 in it —
+                nothing to overlap). No edit to UploadCard's synced source. */}
+            <div className="left-column-stack relative flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+              <button
+                type="button"
+                onClick={() => setLeftOpen(false)}
+                aria-label="Hide upload and tables"
+                title="Hide — give the diagram more width"
+                className="absolute right-4 top-4 z-10 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50"
+              >
+                ‹ Hide
+              </button>
+              <UploadCard onUploaded={refresh} />
+              <TablesCard
+                datasetsVersion={refreshToken}
+                selectedDatasetIds={selectedDatasetIds}
+                onToggleSelect={toggleSelect}
+                onSelectAll={selectAll}
+                onClearSelection={clearSelection}
+                onDeleted={handleDatasetDeleted}
               />
             </div>
+          </div>
+        )}
+
+        <div className="relative min-w-0">
+          {/* Edge tabs — re-expand a collapsed side column. Docked to this
+              (always-mounted) middle column's own corner, half-overlapping its
+              border, vertically centered along the panel's full height (clear
+              of the ERD's own "Schema" header row above). Solid accent color
+              (bg-blue-600 → var(--accent-solid), same remap the rest of the
+              app's primary actions use) so they read as an inviting, clickable
+              affordance rather than blending into the chrome. Only rendered
+              while that side is actually collapsed. */}
+          {!leftOpen && (
+            <button
+              type="button"
+              onClick={() => setLeftOpen(true)}
+              aria-label="Show upload and tables"
+              title="Show upload and tables"
+              className="absolute -left-3 top-1/2 z-10 flex h-20 w-7 -translate-y-1/2 items-center justify-center rounded-md bg-blue-600 text-lg text-white shadow-md hover:bg-blue-700"
+            >
+              ‹
+            </button>
+          )}
+          {!descOpen && !isEmpty && (
+            <button
+              type="button"
+              onClick={() => setDescOpen(true)}
+              aria-label="Show table description"
+              title="Show table description"
+              className="absolute -right-3 top-1/2 z-10 flex h-20 w-7 -translate-y-1/2 items-center justify-center rounded-md bg-blue-600 text-lg text-white shadow-md hover:bg-blue-700"
+            >
+              ›
+            </button>
+          )}
+
+          {isEmpty ? (
+            <div className="flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-gray-200 bg-white px-4 py-16 text-center">
+              <span aria-hidden="true" className="mb-1 text-3xl text-gray-300">
+                ⬚
+              </span>
+              <p className="text-sm font-medium text-gray-500">No datasets yet</p>
+              <p className="text-xs text-gray-400">
+                Upload a CSV using the panel on the left — its schema and details
+                appear here.
+              </p>
+            </div>
+          ) : (
+            <ERDiagramPanel datasets={erDatasets} selectedId={selectedId} onSelect={setSelectedId} />
           )}
         </div>
-      )}
+
+        {descOpen && !isEmpty && (
+          <div className="min-w-0">
+            <TableDescriptionPanel
+              datasetId={selectedId}
+              allDatasets={erDatasets}
+              onChanged={refresh}
+              onCollapse={() => setDescOpen(false)}
+              onDeleted={handleDatasetDeleted}
+            />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

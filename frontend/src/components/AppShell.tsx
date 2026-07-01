@@ -14,18 +14,21 @@ type Tab = 'analyse' | 'database'
 /**
  * AppShell — the shell for the Data Analysis Agent.
  *
- * A single blue header bar holds the app name + thin tagline, the Analyse
- * (default) / Database tabs as inline pill buttons (active = filled white,
+ * A single blue header bar holds the app name + thin tagline, the Database
+ * (default) / Analyse tabs as inline pill buttons (active = filled white,
  * inactive = translucent), and the Live badge + "Project notes" button on the
  * right; the conditional yellow stub-mode banner sits above it. Below the bar is
  * the responsive panel layout for the active tab.
+ *
+ * Database is the landing tab because data management (upload, tables, schema)
+ * lives there — a fresh load should put the user where they add data first.
  *
  * Health is fetched once on mount: its `provider` drives the stub banner (shown
  * only in stub mode) and a subtle "live" indicator when a real provider is set.
  * The Database tab and the Project-notes button remain labelled stubs in Phase 2.
  */
 export function AppShell() {
-  const [tab, setTab] = useState<Tab>('analyse')
+  const [tab, setTab] = useState<Tab>('database')
   // undefined = still loading health; string = resolved provider.
   const [provider, setProvider] = useState<string | undefined>(undefined)
   // The model the provider will actually call (drives the header badge).
@@ -98,16 +101,16 @@ export function AppShell() {
             {/* Tab switcher (local UI state — allowed in Phase 1) */}
             <div role="tablist" aria-label="Views" className="flex gap-3">
               <TabButton
-                id="tab-analyse"
-                label="Analyse"
-                active={tab === 'analyse'}
-                onClick={() => setTab('analyse')}
-              />
-              <TabButton
                 id="tab-database"
                 label="Database"
                 active={tab === 'database'}
                 onClick={() => setTab('database')}
+              />
+              <TabButton
+                id="tab-analyse"
+                label="Analyse"
+                active={tab === 'analyse'}
+                onClick={() => setTab('analyse')}
               />
             </div>
           </div>
