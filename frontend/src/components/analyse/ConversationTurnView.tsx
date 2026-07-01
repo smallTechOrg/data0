@@ -154,7 +154,6 @@ function AnswerView({
   // Local clock time for the "Asked at" prefix; omitted when no timestamp.
   const askedAt =
     answeredAt !== undefined ? new Date(answeredAt).toLocaleTimeString() : null
-  const stepCount = steps.length
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -225,16 +224,7 @@ function AnswerView({
 
       <StepsInspector steps={steps} />
 
-      {/* Provenance: how many pandas execution steps backed this answer (C4).
-          Zero steps ⇒ the agent answered from schema/metadata without running
-          code; ≥1 ⇒ that many code steps ran. */}
-      <p className="mt-2 text-[11px] text-gray-400">
-        {stepCount === 0
-          ? '0 code steps — answered from schema'
-          : `${stepCount} code step${stepCount === 1 ? '' : 's'}`}
-      </p>
-
-      {answer.prompt_breakdown && Object.keys(answer.prompt_breakdown).length > 0 && (
+{answer.prompt_breakdown && Object.keys(answer.prompt_breakdown).length > 0 && (
         <PromptBreakdown
           breakdown={
             Object.fromEntries(
