@@ -14,9 +14,9 @@ Next.js 15 + React 19 + TypeScript (existing `frontend/`), static-exported to `f
 
 ## Shell & Global Chrome
 
-- **Header:** app name + tagline; a **Project notes** button opens the global-memory modal (memory/C29); a **yellow stub-mode banner** is shown when `GET /health` reports `provider == "stub"` (so demo output is never mistaken for real output); a **theme control cluster** (C34, Phase 7) — a light/dark toggle, a 4-swatch accent picker (blue/purple/green/orange), and a 3-step density picker (Compact/Comfortable/Spacious) — sits in the header's right-hand utility area alongside the Live badge and Project-notes button.
+- **Header:** app name + tagline; a **Project notes** button opens the global-memory modal (memory/C29); a **yellow stub-mode banner** is shown when `GET /health` reports `provider == "stub"` (so demo output is never mistaken for real output); a **theme toggle** (C34, Phase 7) — a single light/dark icon button — sits in the header's right-hand utility area alongside the Live badge and Project-notes button. Accent (indigo) and density (compact) are fixed product decisions with no picker UI — see [capabilities/theming.md](capabilities/theming.md).
 - **Layout:** two-panel responsive shell; ≤960px stacks panels, ≤640px stacks cards.
-- **Tabs:** `[Analyse]` (default) and `[Database]`.
+- **Tabs:** `[Database]` (default) and `[Analyse]`.
 
 ## Views / Screens
 
@@ -25,7 +25,7 @@ Next.js 15 + React 19 + TypeScript (existing `frontend/`), static-exported to `f
 **Purpose:** upload data, ask questions, read answers, manage sessions.
 
 **Key elements:**
-- **Sidebar — Sessions panel** (C9): list with name / first-question, turn count, absolute timestamps ("Started {date·time} · upd {date·time}"); checkbox bulk-select; click to resume; inline rename/delete icon buttons; **+New**; **Delete selected**; **Clear all** (modal). Data from `GET /sessions`; mutations via `PATCH /sessions/{id}/name`, `DELETE /sessions/{id}`, `DELETE /sessions`.
+- **Sidebar — Sessions panel** (C9): list with name / first-question, turn count, absolute timestamps ("Started {date·time} · Updated {date·time}"); checkbox bulk-select; click to resume; inline rename/delete icon buttons; **+New**; **Delete selected**; **Clear all** (modal). Data from `GET /sessions`; mutations via `PATCH /sessions/{id}/name`, `DELETE /sessions/{id}`, `DELETE /sessions`.
 - **Sidebar — Token usage widget** (C18): model name; Last query In/Out/Cost and Today In/Out/Queries/Cost from `GET /stats/daily`; storage row = dataset count + total rows; client-side pricing table ("N/A" unknown). Plus the **C29 token-budget bar at rest**.
 - **Datasets card — "Tables":** filter tabs All | Uploaded | Derived | Selected; per row checkbox (drives **bulk actions only** — the selection does NOT scope analysis; dataset selection is agent-driven, C19) + filename + rows×cols + format + a **columns** icon toggle + a **Clean** (broom) icon (uploaded only); **origin/stale is shown by the whole-row tint** — uploaded = neutral (no tint), derived = green, stale = amber (no text badge); **Re-derive** on stale rows. The **Selected** tab narrows the list to the checked rows. **Deletion is a bulk action** in the selection bar (no per-row delete): an always-present **Select all** (disabled when everything is selected) + **Clear** (when any selected), then **Delete selected (N)** with an inline confirm → `DELETE /datasets/{id}` for each checked dataset; a right-aligned "N dataset(s) selected" count. Re-fetch `GET /datasets` after each completed query to surface new derived sets (C25).
 - **Upload card** (C1, C11, C13, C16, C17): drag-drop files AND folders (reads `_notes`/`context`/`readme` as folder notes, `<stem>.notes.txt` per file); **Choose files**; staged file map (rename, typed notes, attach notes file, remove); **Upload N file(s)** ≤3 concurrent with per-file states; **409 → "Use existing / Upload anyway"** inline resolver (`force=true`). Calls `POST /upload`.
@@ -76,6 +76,6 @@ All `.modal-overlay`, backdrop + Escape close, focus first element: `memory-moda
 | Inline charts | labelled stub | labelled stub | labelled stub | **real** |
 | Database tab (ER diagram, description) | labelled stub | labelled stub | labelled stub | **real** |
 | Clean / Re-derive / Generate notes | labelled stub | labelled stub | labelled stub | **real** |
-| Theme/accent/density controls (C34) | n/a (not built yet) | n/a | n/a | n/a — ships fully real in **Phase 7**, no stub stage |
+| Theme toggle (C34; accent/density are fixed, not live controls) | n/a (not built yet) | n/a | n/a | n/a — ships fully real in **Phase 7**, no stub stage |
 
 A labelled stub renders the intended layout with a visible "coming in a later phase" tag so it is never mistaken for a bug. Phase 7 (theming, C34) is the one exception to the phased stub-to-real pattern above: it has no earlier phases to appear in, and ships fully functional the moment it lands — see [capabilities/theming.md](capabilities/theming.md) and `spec/roadmap.md` → Phase 7.
