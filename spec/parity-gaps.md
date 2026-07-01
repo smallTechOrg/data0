@@ -4,7 +4,7 @@
 > **This repo (B):** the gen-3-harness rebuild of A. Source for capability IDs: `spec/capabilities/index.md` (C1–C32; C5/C28 don't exist → 30 capabilities).
 >
 > Audit date: **2026-06-29**, verified against actual code + tests (not commit messages).
-> **Scoreboard: 23 / 30 at parity or ahead · 7 gaps remaining** (0 correctness/overclaim · 3 cheap functional · 4 ingestion-UX).
+> **Scoreboard: 24 / 30 at parity or ahead · 6 gaps remaining** (0 correctness/overclaim · 2 cheap functional · 4 ingestion-UX).
 >
 > Drive each item with `/zero-shot-fix` from this repo. Every fix must pass the phase gate against the **real Gemini key** in `.env` before it counts — a stubbed pass does not.
 
@@ -31,8 +31,8 @@ This branch is fully pushed to its upstream (`fork/feature/data-analysis-agent-v
 
 ## Tier 2 — Cheap functional gaps
 
-- [ ] **C8 — No column cap on result stringify.** Rows + total chars are capped, but very wide DataFrames fed back to the LLM aren't column-bounded (A caps 20 cols with a "showing X of N columns" note). Add a column cap.
-  - Files: `src/graph/sandbox.py` (`_stringify`)
+- [x] **C8 — Column cap already implemented (re-verified 2026-07-01).** `_stringify` in `src/graph/sandbox.py` already caps at 20 columns with a "[showing 20 of N columns]" note (explicitly commented `# Cap columns (C8: up to ~20 cols per spec)`), applied before the total-char cap so it isn't defeated by truncation. Landed in `32f2cb2` alongside `tests/unit/test_sandbox.py`'s "D4: column cap" test block (5 green tests) — just never cross-referenced back to this doc.
+  - Files: `src/graph/sandbox.py` (`_stringify`), `tests/unit/test_sandbox.py`
 
 - [ ] **C11 — Multi-format parsing is shallow + untested.** TXT is parsed tab-only (no delimiter sniff); JSON uses bare `pd.read_json` (fails on column-keyed / dict-of-lists shapes A handles). No non-CSV format has a test. Deepen parsing and add format tests (TSV / TXT-sniff / JSON-variants / Excel).
   - Files: `src/api/upload.py` (`_parse_dataframe`), `tests/unit/` + `tests/integration/`
