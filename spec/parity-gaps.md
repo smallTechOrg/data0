@@ -4,7 +4,7 @@
 > **This repo (B):** the gen-3-harness rebuild of A. Source for capability IDs: `spec/capabilities/index.md` (C1–C32; C5/C28 don't exist → 30 capabilities).
 >
 > Audit date: **2026-06-29**, verified against actual code + tests (not commit messages).
-> **Scoreboard: 20 / 30 at parity or ahead · 10 gaps remaining** (3 correctness/overclaim · 3 cheap functional · 4 ingestion-UX).
+> **Scoreboard: 21 / 30 at parity or ahead · 9 gaps remaining** (2 correctness/overclaim · 3 cheap functional · 4 ingestion-UX).
 >
 > Drive each item with `/zero-shot-fix` from this repo. Every fix must pass the phase gate against the **real Gemini key** in `.env` before it counts — a stubbed pass does not.
 
@@ -24,8 +24,8 @@ This branch is fully pushed to its upstream (`fork/feature/data-analysis-agent-v
 - [ ] **C27 — Session DataFrame cache can serve stale frames.** Count-based LRU only; missing `_invalidate_dataset` on clean / re-derive / delete (and A's byte-bounded eviction via `memory_usage` / `cache_limit_mb`). A cleaned or re-derived dataset can return cached pre-change rows within a session. Add invalidation (and ideally the byte bound).
   - Files: `src/graph/nodes.py` (cache block), call sites in `src/api/datasets_ops.py`, `src/graph/derived.py`
 
-- [ ] **C29 — Live context-window display computed but not rendered.** The per-component prompt breakdown is built (`runner.py`) and shipped to the browser but no UI renders it. Add the "Prompt breakdown" panel (A shows it in the steps inspector). Consider `last_prompt` accumulation across iterations to match A.
-  - Files: `frontend/src/components/analyse/StepsInspector.tsx` (add panel), `frontend/src/components/analyse/ConversationCard.tsx`
+- [x] **C29 — Prompt breakdown panel already shipped (re-verified 2026-07-01).** This entry predates the fix: `PromptBreakdown.tsx` renders the per-component breakdown (collapsible bars, ARIA `progressbar`, total/output summary), wired into `ConversationTurnView.tsx` (gated on `answer.prompt_breakdown`), fed by `runner.py`'s `_build_prompt_breakdown` via `query_runs.prompt_breakdown` → `/ask` + session/turn payloads. Confirmed live by `503e5b2`, `d846cb4`, `e28a37a`. **Remaining cosmetic-only question:** A puts the panel inside the Steps inspector; this build renders it at the conversation-turn level instead — not re-verified against A's exact placement, not treated as a functional gap.
+  - Files: `frontend/src/components/analyse/PromptBreakdown.tsx`, `frontend/src/components/analyse/ConversationTurnView.tsx`, `src/graph/runner.py`
 
 ---
 
