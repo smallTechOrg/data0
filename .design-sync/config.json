@@ -6,8 +6,11 @@
   "entry": "./frontend/.ds-entry.tsx",
   "srcDir": "src/components",
   "tsconfig": "tsconfig.json",
-  "cssEntry": "out/_next/static/css/e218add133eca8e4.css",
+  "cssEntry": "out/_next/static/css/cbefbef90cc26728.css",
   "readmeHeader": ".design-sync/conventions.md",
+  "libOverrides": {
+    "css.mjs": "strip/annotate Tailwind v4 internals (--tw-space-y-reverse, --animate-spin/pulse, --default-transition-*) flagged by the claude.ai/design token classifier — see .design-sync/overrides/css.mjs"
+  },
   "componentSrcMap": {
     "StubBanner": "src/components/StubBanner.tsx",
     "ProgressBar": "src/components/analyse/ProgressBar.tsx",

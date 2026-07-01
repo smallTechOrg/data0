@@ -41,7 +41,7 @@ Repo-specific gotchas for future syncs.
   `ConversationTurnView` ship **real, working charts** in the design tool — no stub.
 - The earlier plotly/jspdf stub (`.ds-bundle-tsconfig.json` + `.ds-stubs/`) was
   **removed**; `cfg.tsconfig` points back at the app `tsconfig.json`.
-- `cssEntry` hash is `out/_next/static/css/e218add133eca8e4.css` (confirmed 2026-07-01 re-sync; refresh on rebuild).
+- `cssEntry` hash is `out/_next/static/css/cbefbef90cc26728.css` (rebuilt 2026-07-01 after adding the `dark:` variant + theming pass below; refresh on next rebuild).
 
 ## Known render warns
 
@@ -66,3 +66,35 @@ Repo-specific gotchas for future syncs.
   `[FONT_MISSING]` until someone wires `cfg.extraFonts`.
 - The 18-component scope is deliberate (7 original + 9 View-split + ERDiagramPanel + UploadCard). Re-adding the 3 excluded page-shell components requires rethinking the sync surface.
 - **globals.css**: `@theme` custom-var block was removed (2026-07-01); CSS output hash is stable (`e218add1...`). Standard Tailwind v4 palette applies via `@import "tailwindcss"`.
+
+## Dark mode (2026-07-01)
+
+- `globals.css` now declares `@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));`
+  — `dark:` classes activate when any ancestor (or the element itself) carries
+  `data-theme="dark"`, not via `prefers-color-scheme`. No theme provider/wrapper
+  needed; this is purely attribute-driven, consistent with the "no provider
+  required" promise in `conventions.md`.
+- All 18 synced components got a `dark:` pass (light surfaces → dark grays,
+  pastel accent backgrounds → deep-shade equivalents; solid ≥400 accent
+  fills/badges, focus rings, and intentionally-fixed-dark surfaces like code
+  blocks were left unchanged — they already read fine on a dark page).
+- **Known gap:** `ChartRender`'s ECharts canvas paints its own background
+  (white) regardless of `data-theme` — only the surrounding wrapper got
+  `dark:` classes. Theming the chart itself needs an ECharts `theme`/`option`
+  switch keyed off `data-theme`, not just CSS — out of scope for this pass.
+- This is a component **capability**, not a wired-up app feature — nothing in
+  the real app currently sets `data-theme="dark"` on `<html>`/a parent (no
+  toggle exists yet in `SettingsPanel`).
+
+## Build-step override (2026-07-01)
+
+- `.design-sync/overrides/css.mjs` forks `.ds-sync/lib/css.mjs` (see
+  `cfg.libOverrides` in `config.json`) to post-process `_ds_bundle.css` after
+  every build: strips the redundant `--tw-space-y-reverse:0` redeclaration
+  Tailwind v4 puts inside every `:where(.space-y-*)` rule (registers it once
+  under `:root` instead) and appends `/* @kind other */` after
+  `--tw-border-style`, `--animate-spin`, `--animate-pulse`,
+  `--default-transition-duration`, `--default-transition-timing-function` —
+  Tailwind v4 internals the claude.ai/design token classifier flagged as
+  unclassifiable. Needed every re-sync since `cfg.cssEntry` appends the
+  *whole* compiled app CSS verbatim, so these always reappear after a rebuild.
