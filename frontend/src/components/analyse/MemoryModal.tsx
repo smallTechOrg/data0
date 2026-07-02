@@ -10,7 +10,11 @@ import { api, type MemoryResponse } from '@/lib/api'
  * GET /memory, lets the user edit the free-text `global_memory`, and saves via
  * PATCH /memory (which triggers C31 compression server-side). The response's
  * compressed `global_memory_facts` are shown read-only so the user sees what the
- * agent will treat as authoritative on every plan_action.
+ * agent will treat as authoritative on every plan_action — note that once facts
+ * exist, the INJECTED prompt block uses facts only (raw text is a fallback for
+ * when there are no facts yet); the raw text shown here is still what's stored
+ * and edited. Capped at `MAX_MEMORY_CHARS` (mirrors `_MAX_MEMORY_CHARS` in
+ * `src/api/memory.py`) — Save disables over the cap; a live counter shows usage.
  *
  * Covers all four states: loading, error (with retry), saving, and the ideal
  * edit view. Backdrop + Escape close; focus moves to the textarea on open.
@@ -18,6 +22,9 @@ import { api, type MemoryResponse } from '@/lib/api'
  * Split into a thin container (`MemoryModal`, owns fetch/save/state) and a pure
  * presentational view (`MemoryModalView`, renders markup from props only).
  */
+
+/** Global memory char cap — mirrors `_MAX_MEMORY_CHARS` in `src/api/memory.py`. */
+const MAX_MEMORY_CHARS = 4000
 
 export interface MemoryModalViewProps {
   /** Whether the modal is open. When false the view renders nothing. */
@@ -136,6 +143,14 @@ export function MemoryModalView({
                 className="w-full resize-y rounded-md border border-gray-200 p-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
               />
 
+              <p
+                className={`mt-1 text-right text-[11px] ${
+                  text.length > MAX_MEMORY_CHARS ? 'text-red-600' : 'text-gray-400'
+                }`}
+              >
+                {text.length.toLocaleString()} / {MAX_MEMORY_CHARS.toLocaleString()}
+              </p>
+
               {saveError && (
                 <p role="alert" className="mt-2 text-xs text-red-600">
                   {saveError}
@@ -182,7 +197,7 @@ export function MemoryModalView({
             <button
               type="button"
               onClick={onSave}
-              disabled={loading || !!error || saving}
+              disabled={loading || !!error || saving || text.length > MAX_MEMORY_CHARS}
               className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500"
             >
               {saving && (

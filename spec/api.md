@@ -139,7 +139,7 @@ Cooperatively cancel an in-flight run — the UI **Stop** button. Flags the run 
 > **`last_tokens_input` / `last_tokens_output`:** integers — the latest completed run's input and output tokens. `last_tokens_input` is an explicit alias of `last_prompt_tokens`; `last_tokens_output` is the latest run's output tokens. The TokenWidget uses both to repopulate the "Last query (In / Out)" row after a reload/resume (when the live in-memory counts are gone). Each `0` when there are no completed runs today.
 
 ### `GET /memory` and `PATCH /memory`
-Read / replace the global persistent memory text; PATCH triggers C31 compression. Memory is injected into every `plan_action` prompt as authoritative. Always 200 on read; PATCH **400** if body invalid.
+Read / replace the global persistent memory text; PATCH triggers C31 compression. Memory is injected into every `plan_action` prompt as authoritative — `get_memory_block()` injects the compressed facts ONLY once they exist, falling back to the raw text only when there are no facts yet (never both, to avoid resending raw text plus a summary of it on every ReAct iteration). Always 200 on read; PATCH **400** if the body is invalid, or if `global_memory` exceeds 4000 characters (mirrors the dataset context-note cap).
 
 ### `GET /settings`
 Returns the current runtime settings as key/value pairs. Always 200.

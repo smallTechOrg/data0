@@ -233,7 +233,7 @@ The stub provider (offline fallback) branches **only on the injected node tag**,
 | Scope | Mechanism | What is stored |
 |-------|-----------|----------------|
 | **Within a run** | LangGraph `AgentState` | question, action_history, charts, tokens, iteration_count |
-| **Across runs** | SQLite `settings` (`global_memory`, `global_memory_facts`) | user-authoritative global memory text + compressed facts, injected into every `plan_action` prompt |
+| **Across runs** | SQLite `settings` (`global_memory`, `global_memory_facts`) | user-authoritative global memory text (≤ 4000 chars, enforced at `PATCH /memory`) + compressed facts; `get_memory_block()` injects FACTS-ONLY into every `plan_action` prompt once facts exist, falling back to the raw text only when there are no facts yet (never both — sending raw text plus a summary of it is pure per-iteration token waste) |
 | **Conversation** | `conversation_sessions` + `query_runs` (`session_id`) | prior turns; loaded into `conversation_history` for multi-turn |
 | **Dataset notes** | `datasets.context` / `context_facts` | per-dataset notes injected into `dataset_context` |
 

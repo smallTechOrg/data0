@@ -84,7 +84,7 @@ Key/value app settings and persistent memory.
 | value | Text | no | Stored value (text or JSON-as-text) |
 | updated_at | TIMESTAMP(tz) | yes | `_now` default + onupdate |
 
-**Reserved keys:** `global_memory` (authoritative memory text, injected into every `plan_action` prompt), `global_memory_facts` (C31 compressed facts JSON), `llm_model`, `max_iterations`.
+**Reserved keys:** `global_memory` (authoritative memory text, ≤ 4000 chars enforced at `PATCH /memory`; injected into every `plan_action` prompt via `get_memory_block()` — facts-only once `global_memory_facts` exist, raw-text fallback otherwise, never both), `global_memory_facts` (C31 compressed facts JSON, ≤ 20), `llm_model`, `max_iterations`.
 
 ### Relationships
 

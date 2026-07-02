@@ -105,9 +105,14 @@ def set_memory_facts(facts: list[str]) -> None:
 def get_memory_block() -> str:
     """The persistent-memory block injected into every `plan_action` prompt.
 
-    Combines the authoritative memory text and the compressed facts into one
-    block. Returns "" (empty) when there is no memory and no facts, so the
-    injection adds nothing. NEVER raises — returns "" on any error.
+    Facts-first, raw-text-fallback: when compressed facts exist, they are
+    injected ALONE (never alongside the raw text) since sending both is a pure
+    per-iteration token cost with no benefit — the facts already distil the
+    text. The raw text is the fallback ONLY for when there are no facts yet
+    (not yet compressed / a compression failure / the offline stub, which has
+    no `<node:compress>` branch and always returns `[]`), so the user's
+    authoritative memory is never silently dropped. Returns "" (empty) when
+    there is neither text nor facts. NEVER raises — returns "" on any error.
     """
     try:
         text = get_memory_text().strip()
@@ -118,11 +123,11 @@ def get_memory_block() -> str:
         parts: list[str] = [
             "The user has provided this authoritative context — treat it as ground truth:"
         ]
-        if text:
-            parts.append(text)
         if facts:
             parts.append("Key facts:")
             parts.extend(f"- {fact}" for fact in facts)
+        elif text:
+            parts.append(text)
         return "\n".join(parts)
     except Exception as exc:  # noqa: BLE001 — injection must never break a run
         logger.warning("get_memory_block_failed", error=str(exc))

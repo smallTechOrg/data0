@@ -78,13 +78,37 @@ def test_patch_invalid_body_400(memory_client):
 
 
 @pytest.mark.usefixtures("_require_llm_key")
-def test_memory_block_after_patch_contains_text(memory_client):
-    """`get_memory_block()` (imported by slice-3b's plan_action) renders the text."""
+def test_memory_block_after_patch_is_non_empty_and_authoritative(memory_client):
+    """`get_memory_block()` (imported by slice-3b's plan_action) renders SOMETHING
+    after a PATCH. It does NOT assert the raw text verbatim: a real PATCH
+    reliably produces compressed facts, and facts-first design means the block
+    then carries the facts, not the raw text — see
+    `test_memory_block_is_facts_only_after_real_compression` for that contract.
+    """
     from graph.memory import get_memory_block
 
     memory_client.patch("/memory", json={"global_memory": _MEMORY_TEXT})
 
     block = get_memory_block()
     assert block, "memory block must be non-empty after a PATCH"
-    assert _MEMORY_TEXT in block
     assert "authoritative" in block.lower()
+
+
+@pytest.mark.usefixtures("_require_llm_key")
+def test_memory_block_is_facts_only_after_real_compression(memory_client):
+    """End-to-end proof of the facts-first design against REAL Gemini output:
+    once a PATCH produces real compressed facts, the INJECTED block drops the
+    raw text entirely (facts-only) — it is not appended alongside it.
+    """
+    from graph.memory import get_memory_block
+
+    patched = memory_client.patch("/memory", json={"global_memory": _MEMORY_TEXT})
+    facts = patched.json()["data"]["global_memory_facts"]
+    assert facts, "real Gemini must have produced at least one compressed fact"
+
+    block = get_memory_block()
+    assert "Key facts:" in block
+    assert _MEMORY_TEXT not in block, (
+        "raw memory text must be dropped from the injected block once real "
+        f"facts exist; got block: {block!r}"
+    )

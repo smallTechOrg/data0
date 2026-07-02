@@ -108,6 +108,27 @@ def test_patch_memory_non_json_body_400(memory_client):
     assert r.json()["detail"]["code"] == "invalid_body"
 
 
+# --- PATCH /memory (char cap) --------------------------------------------
+
+
+def test_patch_memory_at_cap_succeeds(memory_client):
+    text = "x" * 4000
+    r = memory_client.patch("/memory", json={"global_memory": text})
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["global_memory"] == text
+
+
+def test_patch_memory_over_cap_400(memory_client):
+    text = "x" * 4001
+    r = memory_client.patch("/memory", json={"global_memory": text})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "invalid_body"
+    # The over-cap text must NOT have been stored (GET still reflects the
+    # last successfully-saved value, not the rejected one).
+    g = memory_client.get("/memory").json()["data"]
+    assert g["global_memory"] != text
+
+
 # --- get_memory_block() (imported directly by slice-3b's plan_action) ----
 
 
@@ -128,7 +149,13 @@ def test_memory_block_contains_text_when_set(_isolated_db):
     assert "authoritative" in block.lower()
 
 
-def test_memory_block_renders_facts_when_set(_isolated_db):
+def test_memory_block_renders_facts_only_when_facts_present(_isolated_db):
+    """Facts-first: once facts exist, the raw text is DROPPED, not appended.
+
+    Sending raw text + a summary of the same text on every ReAct iteration is
+    pure token waste with no benefit — see the "Bounded + compressed memory
+    injection" backlog item / spec/capabilities/context-window-display.md.
+    """
     from graph.memory import get_memory_block, set_memory_facts, set_memory_text
 
     set_memory_text("Sales context.")
@@ -137,6 +164,21 @@ def test_memory_block_renders_facts_when_set(_isolated_db):
     assert "Key facts:" in block
     assert "- Revenue is in GBP" in block
     assert "- FY starts in April" in block
+    assert "Sales context." not in block
+
+
+def test_memory_block_falls_back_to_raw_text_when_facts_empty(_isolated_db):
+    """Raw text is the fallback ONLY when there are no facts yet (not yet
+    compressed / a compression failure / the offline stub's `[]`) — memory is
+    never silently dropped.
+    """
+    from graph.memory import get_memory_block, set_memory_facts, set_memory_text
+
+    set_memory_text("Sales context.")
+    set_memory_facts([])
+    block = get_memory_block()
+    assert "Sales context." in block
+    assert "Key facts:" not in block
 
 
 def test_memory_block_never_raises_on_db_error(monkeypatch):
