@@ -250,10 +250,5 @@ def connections_resync(dataset_id: str, session: Session = Depends(get_session))
     invalidate_dataset_cache(dataset_id)
 
     item = _list_item(row, session)
-    # Provenance fields (not yet part of `_list_item`'s shape — see slice-9a
-    # handoff notes for the follow-up to surface these on GET /datasets too).
-    item["source_type"] = row.source_type
-    item["source_uri_display"] = row.source_uri_display
-    item["source_table_name"] = row.source_table_name
     logger.info("dataset_resynced", dataset_id=dataset_id, rows=row.row_count)
     return ok(item)
