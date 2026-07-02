@@ -25,13 +25,17 @@ A registered data file (uploaded or derived) the agent can query.
 | content_hash | Text | yes | sha256 of file bytes (duplicate detection, C10) |
 | format | Text | yes | `csv` \| `tsv` \| `txt` \| `json` \| `excel` |
 | context | Text | no | User/auto notes, ≤ 4000 chars (C12) |
-| origin | Text | yes | `uploaded` \| `derived` |
+| origin | Text | yes | `uploaded` \| `derived` \| `connected` (C36 — pulled from an external database, Phase 9) |
 | derived_from_run_id | Text | no | The `query_runs.id` that produced this derived dataset |
 | derived_from_dataset_ids | JSON | no | Parent dataset IDs (lineage, C25) |
 | derivation_code | Text | no | The pandas code that produced it (re-derive, C25) |
 | parquet_path | Text | no | On-disk Parquet path (`uploads/{id}.parquet`) |
 | auto_notes_status | Text | no | `pending` \| `done` \| `failed` \| null (C30) |
 | context_facts | JSON | no | Compressed ≤20 facts (C31) |
+| source_type | Text | no | C36 — the external connector type this dataset was pulled from, e.g. `postgresql`; `null` for `uploaded`/`derived` origins |
+| source_uri_display | Text | no | C36 — credential-free `DatasetURI.display()` rendering of the source connection (e.g. `postgresql://host:5432/mydb`), shown in the Tables/Database tabs as provenance; `null` unless `origin="connected"` |
+| source_table_name | Text | no | C36 — the external table this dataset was pulled from; `null` unless `origin="connected"` |
+| source_uri_raw | Text | no | C36 — **secret-bearing**: the RAW connection URI including credentials, stored ONLY so a manual re-sync (`POST /connections/{id}/resync`) can reconnect. NEVER returned by any API response (every route builds its response dict field-by-field and omits this column), NEVER logged. `null` unless `origin="connected"`. See `spec/capabilities/external-db-connectors.md` → "Credential Hygiene". |
 | created_at | TIMESTAMP(tz) | yes | `_now` default |
 | updated_at | TIMESTAMP(tz) | yes | `_now` default + onupdate |
 
@@ -118,4 +122,4 @@ Enforced in code only (no FK constraints):
 
 ## Sensitive Data
 
-No auth, no PII handling by design — single local user. Uploaded data may contain anything the user uploads; it stays on local disk and SQLite and is sent to the configured LLM provider (Gemini/OpenRouter) only as needed for analysis (or never, in stub mode). API keys live in `.env` (git-ignored), never in the DB or logs. The `settings` table stores app config + user memory text, not secrets.
+No auth, no PII handling by design — single local user. Uploaded data may contain anything the user uploads; it stays on local disk and SQLite and is sent to the configured LLM provider (Gemini/OpenRouter) only as needed for analysis (or never, in stub mode). API keys live in `.env` (git-ignored), never in the DB or logs. The `settings` table stores app config + user memory text, not secrets. **`datasets.source_uri_raw`** (C36, Phase 9) is the one exception to "the DB stores no secrets": it holds a database connection string with credentials, needed to support manual re-sync. It is never returned by any API response and never logged — see `spec/capabilities/external-db-connectors.md` → "Credential Hygiene".

@@ -184,6 +184,53 @@ Updates one or more settings fields. Only fields present in the request body are
 
 **Response:** same envelope as `GET /settings`, reflecting the post-update state.
 
+### External Database Connectors (C36, Phase 9, BETA)
+
+> Routes live in a NEW `src/api/connections.py` (not `datasets.py`) — a deliberate split: this surface deals with connector lifecycle + credential handling, a distinct concern from the existing dataset CRUD in `datasets.py`. All routes gated by `AGENT_ENABLE_DB_CONNECTORS` (default `false`) except `GET /connections/status`. A pulled table registers as an ordinary `datasets` row (`origin="connected"`) — see `spec/data.md` and `spec/capabilities/external-db-connectors.md` for the full mechanism and credential-hygiene rules.
+
+### `GET /connections/status`
+Returns `ok({enabled: <bool>})` — the current value of `AGENT_ENABLE_DB_CONNECTORS`. Always 200, never gated (the frontend needs this to decide whether to show the BETA affordance at all).
+
+### `POST /connections/check`
+Body `{type: "postgresql", uri: "postgresql://user:pass@host:5432/db"}`. Opens ONE connection, runs `connection_check()` (real connect + `SELECT 1`, 8s hard timeout) then `discover_tables()` + best-effort `discover_relationships()`, then closes the connection. **Nothing is persisted by this call.** Returns:
+```json
+{"tables": [{"table_name": "orders", "column_names": ["id","total"],
+  "schema": [{"name":"id","dtype":"integer","nullable":false}, ...], "row_count": null}],
+ "relationships": [{"from_table":"orders","from_column":"customer_id","to_table":"customers","to_column":"id"}]}
+```
+`row_count` is always `null` (introspection does not count rows). The response NEVER echoes the URI, raw or otherwise.
+
+| Status | Condition |
+|--------|-----------|
+| 403 | `connectors_disabled` — `AGENT_ENABLE_DB_CONNECTORS` is `false` |
+| 400 | `connection_failed` (credential-free message, e.g. `Could not connect to postgresql://host:5432/db: ...`) |
+| 400 | `unsupported_type` — `type` is not `postgresql` |
+
+### `POST /connections/import`
+Body `{type: "postgresql", uri: "...", tables: [{table_name: "orders", alias?: "orders_snapshot", filter?: "created_at > '2026-01-01'"}, ...]}`. Re-validates via its own `connection_check()` → opens one connection → for EACH requested table independently: `pull_table(table_name, filter)` (bounded by a row cap, `LIMIT`-based — see the capability doc), writes `uploads/{new_id}.csv` + `.parquet`, creates a `datasets` row (`origin="connected"`, `source_type="postgresql"`, `source_uri_display=<credential-free>`, `source_table_name`, `source_uri_raw=<the raw URI, stored ONLY here>`). One table's failure does not abort the others. Returns:
+```json
+{"results": [
+  {"table_name": "orders", "status": "ok", "dataset_id": "..."},
+  {"table_name": "bad_view", "status": "error", "message": "permission denied for view bad_view"}
+]}
+```
+
+| Status | Condition |
+|--------|-----------|
+| 403 | `connectors_disabled` |
+| 400 | `connection_failed` (the initial re-validation connect itself failed — no tables attempted) |
+| 400 | `unsupported_type` / empty `tables` list |
+
+### `POST /connections/{dataset_id}/resync`
+Manual re-sync (mirrors the Phase 4 `/datasets/{id}/re-derive` pattern — see `spec/capabilities/external-db-connectors.md`): re-opens a connection using the dataset's stored `source_uri_raw` + `source_type`, re-runs `pull_table(source_table_name)`, rewrites the CSV + Parquet files, recomputes `row_count`/`col_count`/`columns_json`/`content_hash`, and bumps `updated_at`. No automatic staleness flag exists for `origin="connected"` datasets — this is purely user-triggered. Returns the updated dataset item (same shape as `GET /datasets/{id}`, `source_uri_raw` never included).
+
+| Status | Condition |
+|--------|-----------|
+| 403 | `connectors_disabled` |
+| 404 | dataset not found |
+| 400 | `not_connected` — dataset's `origin` is not `connected` |
+| 400 | `resync_error` — the pull failed (credential-free message) |
+
 ## Authentication
 
-None — single local user. No API keys, sessions, or tokens for callers. Provider keys live in `.env` and never leave the server.
+None — single local user. No API keys, sessions, or tokens for callers. Provider keys live in `.env` and never leave the server. Database connection URIs (C36) follow the same never-returned-by-any-API discipline as provider keys — see `spec/capabilities/external-db-connectors.md` → "Credential Hygiene".

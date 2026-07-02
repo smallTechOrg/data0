@@ -102,6 +102,11 @@ def _list_item(row: DatasetRow, session: Session) -> dict:
         "derived_from_run_id": row.derived_from_run_id,
         "derived_from_dataset_ids": row.derived_from_dataset_ids or [],
         "derivation_description": derivation_description(row),
+        # C36 (Phase 9) — external connector provenance, credential-free.
+        # source_uri_raw (secret-bearing) is intentionally NEVER included here.
+        "source_type": row.source_type,
+        "source_uri_display": row.source_uri_display,
+        "source_table_name": row.source_table_name,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }

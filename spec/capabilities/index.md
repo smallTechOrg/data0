@@ -41,10 +41,12 @@
 | C33 | Per-step reasoning | 5 | [per-step-reasoning.md](per-step-reasoning.md) |
 | C34 | Theming — dark/light + accent + density | 7 | [theming.md](theming.md) |
 | C35 | Fast Mode — a single latency toggle | 8 | [fast-mode.md](fast-mode.md) |
+| C36 | External database connectors (PostgreSQL, BETA) | 9 | [external-db-connectors.md](external-db-connectors.md) |
 
 > **C28:** intentionally absent in the source numbering — no capability, no file.
 > **C34** is a new addition (post-source-spec), numbered after the source's C1–C33 range — a pure-frontend capability with no LLM/backend involvement, added via the "add a capability" path.
 > **C35** is a new addition (post-source-spec), numbered after C34 — a per-query latency toggle (backend + frontend), added via the "add a capability" path. See `spec/roadmap.md` → "Future / Backlog" for its origin and the resolved open questions.
+> **C36** is a new addition (post-source-spec), numbered after C35 — a pluggable snapshot-import connector seam (PostgreSQL only, BETA/flag-gated), added via the "add a capability" path. See `spec/roadmap.md` → "Future / Backlog" → "External database connectors" for its origin and design rationale.
 
 ## How to Add a New Capability
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type DatasetSummary } from '@/lib/api'
 import { ERDiagramPanel, type ErDataset } from '@/components/database/ERDiagramPanel'
 import { TableDescriptionPanel } from '@/components/database/TableDescriptionPanel'
+import { ConnectDatabaseCard } from '@/components/database/ConnectDatabaseCard'
 import { TablesCard } from '@/components/analyse/TablesCard'
 import { UploadCard } from '@/components/analyse/UploadCard'
 
@@ -41,6 +42,12 @@ export function DatabaseTab() {
 
   const [confirmClear, setConfirmClear] = useState(false)
   const [clearing, setClearing] = useState(false)
+
+  // C36 (Phase 9, BETA) — the "Connect a database" affordance is fully absent
+  // (not collapsed/disabled) unless the backend reports the flag on. Fetched
+  // once on mount; a flag flip requires a page reload to take effect, which
+  // matches the flag's own env-var-at-startup semantics.
+  const [connectorsEnabled, setConnectorsEnabled] = useState(false)
 
   // Bumped after a child mutation so the list (and counts) re-fetch.
   const [refreshToken, setRefreshToken] = useState(0)
@@ -83,6 +90,24 @@ export function DatabaseTab() {
   useEffect(() => {
     void load()
   }, [load, refreshToken])
+
+  // C36 — fetch the BETA flag once on mount. Always 200 (never gated), so a
+  // failure here is swallowed and the affordance simply stays hidden — this
+  // is a hidden-by-default BETA feature, not a user-facing error surface.
+  useEffect(() => {
+    let cancelled = false
+    api
+      .connections.status()
+      .then(res => {
+        if (!cancelled) setConnectorsEnabled(res.enabled === true)
+      })
+      .catch(() => {
+        if (!cancelled) setConnectorsEnabled(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Keep the selection valid as the universe changes: default to the first
   // dataset, and drop a selection whose dataset was deleted.
@@ -242,6 +267,11 @@ export function DatabaseTab() {
                 onClearSelection={clearSelection}
                 onDeleted={handleDatasetDeleted}
               />
+              {/* C36 (Phase 9, BETA) — fully absent unless the backend flag
+                  is on; never rendered collapsed/disabled. Imported tables
+                  become ordinary datasets, so the same `refresh()` used after
+                  an upload picks them up in the Tables list above. */}
+              {connectorsEnabled && <ConnectDatabaseCard onImported={refresh} />}
             </div>
           </div>
         )}

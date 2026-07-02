@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # Tunable per-instance via Settings (the `max_iterations` DB override).
     max_iterations: int = Field(default=12)
 
+    # C36 (Phase 9) — External database connectors (PostgreSQL, BETA). When
+    # false (default), every `/connections/*` route except `GET
+    # /connections/status` returns 403 `connectors_disabled`.
+    enable_db_connectors: bool = Field(default=False)
+
 
 _settings: Settings | None = None
 

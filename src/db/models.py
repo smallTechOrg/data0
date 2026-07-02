@@ -53,6 +53,14 @@ class DatasetRow(Base):
     parquet_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     auto_notes_status: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_facts: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    # C36 (Phase 9) — external database connector provenance. All nullable;
+    # only set when origin="connected". source_uri_raw is secret-bearing (see
+    # spec/data.md + spec/capabilities/external-db-connectors.md -> "Credential
+    # Hygiene") and MUST NEVER be included in any API response.
+    source_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_uri_display: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_table_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_uri_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, default=_now
     )

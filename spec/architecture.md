@@ -41,10 +41,11 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 | **Storage** (`src/db/`) | SQLAlchemy 2.0 models extending `Base`; lazy engine/session singletons; `init_db()`. Alembic in `alembic/`. Files on disk in `uploads/`. |
 | **Config** (`src/config/`) | Pydantic `BaseSettings`, `env_prefix="AGENT_"`, singleton `get_settings()`. |
 | **Observability** (`src/observability/`) | structlog config + `get_logger()`. |
+| **Connectors** (`src/connectors/`) | Pluggable `DatasetConnector` registry (C36, Phase 9) — a one-time snapshot-pull data-LOADING seam, not a new agent action. `parquet` (internal, wraps the existing upload store) and `postgresql` (external, BETA/flag-gated) are wired; the ReAct loop and sandbox are completely untouched by this layer. See `spec/capabilities/external-db-connectors.md`. |
 
 ## Data Flow
 
-1. **Trigger:** the user uploads a file (`POST /upload`) → parsed by pandas, sha256-hashed, duplicate-checked, saved as CSV + Parquet, a `datasets` row created.
+1. **Trigger:** the user uploads a file (`POST /upload`) → parsed by pandas, sha256-hashed, duplicate-checked, saved as CSV + Parquet, a `datasets` row created. **Alternate trigger (C36, Phase 9, BETA):** the user connects an external PostgreSQL database (`POST /connections/check` then `POST /connections/import`) → a chosen table is pulled ONCE via `psycopg2` + `pd.read_sql` into a DataFrame and registered through the SAME `datasets` row shape (`origin="connected"`), saved as CSV + Parquet exactly like an upload. From step 2 onward a connected dataset is indistinguishable from an uploaded one.
 2. The user asks a question (`POST /ask`) → pre-flight clarification (C26, first turn only) may short-circuit with a clarifying question; otherwise the agent is handed a metadata-only catalog of ALL datasets and picks + lazily loads which it needs inside the graph.
 3. A `query_runs` row is created (`status=running`), then `graph.runner.run_agent()` invokes the compiled `StateGraph`.
 4. `setup` loads DataFrame(s) (Parquet preferred, CSV fallback; session-cached). `plan_action` calls the LLM (real Gemini or stub) for the next pandas action or a `FINAL ANSWER:`. `execute_action` evals it in the sandbox, captures charts, appends to `action_history`, writes `iteration_count` to the DB for live polling, and loops. `finalize` / `force_finalize` produces the answer.
@@ -58,6 +59,7 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 | OpenRouter API | Alternate LLM provider | Same envelope as Gemini via `LLMClient`. |
 | SQLite (local file) | Persist datasets/runs/sessions/settings | Connection/migration error surfaces at startup / request; never silently ignored. |
 | Local disk (`uploads/`) | Store uploaded CSV + Parquet | Write failure on upload → `500` write fail; load failure in `setup` → `handle_error`. |
+| PostgreSQL (`psycopg2`, C36, BETA, `AGENT_ENABLE_DB_CONNECTORS`) | One-time bounded snapshot pull of an external table into a dataset (`src/connectors/postgres.py`) | Connect/introspect/pull failure → `DatasetConnectionError` (credential-free) → API `400 connection_failed`; hard 8s wall-clock timeout on connect/introspect. Never a live query path — no runtime dependency once a table is imported. |
 
 ## Stack
 
@@ -95,19 +97,21 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 | **markdown-it-py** | ≥3.0 | Markdown → HTML for `answer_html` (ADD) |
 | **tabulate** | ≥0.9 | Table rendering in answers (ADD) |
 | **python-multipart** | ≥0.0.9 | FastAPI multipart upload parsing (ADD) |
+| **psycopg2-binary** | ≥2.9 | PostgreSQL connector (C36) — introspection + snapshot pull only, no live query path (ADD, Phase 9) |
 
-**New settings / env vars (prefix `AGENT_`):** ADD `AGENT_OPENROUTER_API_KEY` (default `""`), `AGENT_MAX_ITERATIONS` (int, default `12`). EXTEND `AGENT_LLM_PROVIDER` valid values to `auto | gemini | openrouter | stub` (blank ⇒ auto-detect from whichever key is set; explicit `stub` when none). `AGENT_LLM_MODEL` overrides the model. `AGENT_GEMINI_API_KEY` is the live key. (`.env.example` is updated to document these; `anthropic` provider stays supported as-is — it is not removed.)
+**New settings / env vars (prefix `AGENT_`):** ADD `AGENT_OPENROUTER_API_KEY` (default `""`), `AGENT_MAX_ITERATIONS` (int, default `12`). EXTEND `AGENT_LLM_PROVIDER` valid values to `auto | gemini | openrouter | stub` (blank ⇒ auto-detect from whichever key is set; explicit `stub` when none). `AGENT_LLM_MODEL` overrides the model. `AGENT_GEMINI_API_KEY` is the live key. (`.env.example` is updated to document these; `anthropic` provider stays supported as-is — it is not removed.) ADD `AGENT_ENABLE_DB_CONNECTORS` (bool, default `false`, Phase 9) — gates the entire `/connections/*` surface (C36); when `false` every route except `GET /connections/status` returns `403 connectors_disabled`.
 
 **New `src/` modules (added in place):**
 
 - `src/graph/`: `sandbox.py` (eval namespace + lazy catalog namespace + `save_dataset`), `preflight.py` (C26 clarification), `suggestions.py` (follow-up questions), `describe.py` (C30 notes), `compress.py` (C31 fact extraction), `derived.py` (derived-dataset registration / lineage / staleness), `memory.py` (global-memory block). `state.py`/`nodes.py`/`edges.py`/`agent.py`/`runner.py` are REWRITTEN in place for the ReAct loop.
 - `src/llm/providers/`: `base.py` (provider protocol), `stub.py` (node-tag-branching offline provider), `openrouter.py`. `gemini.py` keeps its shape (default-model note only).
-- `src/api/`: `upload.py`, `datasets.py`, `datasets_ops.py` (clean/describe/re-derive), `ask.py`, `sessions.py`, `stats.py`, `memory.py`, `settings.py` (`GET`/`PATCH /settings`) (NEW); `health.py` + `runs.py` extended.
+- `src/api/`: `upload.py`, `datasets.py`, `datasets_ops.py` (clean/describe/re-derive), `ask.py`, `sessions.py`, `stats.py`, `memory.py`, `settings.py` (`GET`/`PATCH /settings`), `connections.py` (NEW, Phase 9 — C36 connector routes); `health.py` + `runs.py` extended.
 - `src/domain/`: `dataset.py`, `query_run.py`, `session.py`, `setting.py` (NEW); `run.py` kept.
 - `src/config/`: `db_overrides.py` (NEW) — `get_runtime_model()` / `get_runtime_max_iterations()` read the `settings` table so a Settings-panel choice overrides the `.env` default; consumed by `LLMClient._make_provider()` and `runner.run_agent()`.
 - `src/prompts/`: `plan_action.md`, `finalize.md`, `clarify.md`, `suggest.md`, `describe.md`, `compress.md`, `clean.md` (NEW). The boilerplate `transform.md` is removed when the ReAct graph replaces `transform_text`.
+- `src/connectors/` (NEW, Phase 9): `base.py` (`DatasetConnector` ABC + registry `get_connector()`), `uri.py` (`DatasetURI` — `.raw()`/`.display()`), `parquet.py` (`ParquetConnector`, internal, wraps the existing upload store), `postgres.py` (`PostgresConnector` — `connection_check`/`discover_tables`/`discover_relationships`/`pull_table`, all via `psycopg2`). This is a data-LOADING seam only — no MCP server, no live query tool, no graph/agent involvement. See `spec/capabilities/external-db-connectors.md`.
 
-**Avoid:** LangChain (LangGraph only); the repository pattern (use SQLAlchemy directly in routers/nodes per skeleton convention); Pydantic/dataclass for `AgentState` (use `TypedDict`); calling a provider SDK directly in a node (always go through `LLMClient`); a second top-level package or any rename of `agent`/`src/`.
+**Avoid:** LangChain (LangGraph only); the repository pattern (use SQLAlchemy directly in routers/nodes per skeleton convention); Pydantic/dataclass for `AgentState` (use `TypedDict`); calling a provider SDK directly in a node (always go through `LLMClient`); a second top-level package or any rename of `agent`/`src/`; `duckdb` as a dependency (C36 uses native `psycopg2` + `pd.read_sql` only, no DuckDB `ATTACH`); an MCP server or live SQL `query` tool exposed to the agent (C36 is snapshot-import only — a connector never becomes a graph node or a new agent action).
 
 ## LLM Provider Design
 

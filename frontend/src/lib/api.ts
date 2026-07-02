@@ -143,7 +143,7 @@ export interface DatasetSummary {
   row_count: number
   col_count: number
   format: string
-  /** `uploaded` | `derived`. */
+  /** `uploaded` | `derived` | `connected` (C36). */
   origin: string
   /** A derived dataset whose parent changed after derivation (C25). */
   stale?: boolean
@@ -153,6 +153,12 @@ export interface DatasetSummary {
   derived_from_run_id?: string | null
   /** Plain-language summary of how a derived dataset was produced. */
   derivation_description?: string | null
+  /** C36 — external connector type this dataset was pulled from (e.g. "postgresql"); null unless origin="connected". */
+  source_type?: string | null
+  /** C36 — credential-free display rendering of the source connection URI; null unless origin="connected". */
+  source_uri_display?: string | null
+  /** C36 — the external table this dataset was pulled from; null unless origin="connected". */
+  source_table_name?: string | null
   [key: string]: unknown
 }
 
@@ -376,6 +382,76 @@ export interface SettingsData {
 }
 
 // ---------------------------------------------------------------------------
+// External database connectors (C36, Phase 9, BETA)
+// ---------------------------------------------------------------------------
+
+/** GET /connections/status — whether AGENT_ENABLE_DB_CONNECTORS is on. */
+export interface ConnectionsStatusResponse {
+  enabled: boolean
+}
+
+/** One column in a discovered table's schema (POST /connections/check). */
+export interface ConnectorColumnSchema {
+  name: string
+  dtype: string
+  nullable: boolean
+}
+
+/** One table discovered by POST /connections/check. `row_count` is always null. */
+export interface ConnectorTableInfo {
+  table_name: string
+  column_names: string[]
+  schema: ConnectorColumnSchema[]
+  row_count: number | null
+}
+
+/** A best-effort foreign-key relationship discovered by POST /connections/check. */
+export interface ConnectorRelationship {
+  from_table: string
+  from_column: string
+  to_table: string
+  to_column: string
+}
+
+/** Body for POST /connections/check and (minus `tables`) POST /connections/import. */
+export interface ConnectionCheckRequest {
+  /** Only "postgresql" ships in this phase. */
+  type: string
+  /** Full connection string incl. credentials — never persisted client-side beyond submitting the request. */
+  uri: string
+}
+
+export interface ConnectionCheckResponse {
+  tables: ConnectorTableInfo[]
+  relationships: ConnectorRelationship[]
+}
+
+/** One table the user chose to import, as sent in POST /connections/import. */
+export interface ConnectionImportTableRequest {
+  table_name: string
+  alias?: string
+  filter?: string
+}
+
+export interface ConnectionImportRequest {
+  type: string
+  uri: string
+  tables: ConnectionImportTableRequest[]
+}
+
+/** Per-table outcome of POST /connections/import — one table's failure never aborts the others. */
+export interface ConnectionImportResult {
+  table_name: string
+  status: 'ok' | 'error'
+  dataset_id?: string
+  message?: string
+}
+
+export interface ConnectionImportResponse {
+  results: ConnectionImportResult[]
+}
+
+// ---------------------------------------------------------------------------
 // Endpoint wrappers (Phase 2 surface)
 // ---------------------------------------------------------------------------
 
@@ -535,5 +611,38 @@ export const api = {
       body: JSON.stringify(patch),
     })
     return unwrap<SettingsData>(res)
+  },
+
+  // --- External database connectors (C36, Phase 9, BETA) --------------------
+
+  connections: {
+    /** GET /connections/status — always 200, never gated; drives whether the BETA affordance renders at all. */
+    status: () => getJson<ConnectionsStatusResponse>('/connections/status'),
+
+    /**
+     * POST /connections/check — opens one connection, runs a real connect +
+     * `SELECT 1` (8s hard timeout) then table/relationship discovery, and
+     * closes it. Nothing is persisted. Never echoes the URI back.
+     */
+    check: (payload: ConnectionCheckRequest) =>
+      postJson<ConnectionCheckResponse>('/connections/check', payload),
+
+    /**
+     * POST /connections/import — re-validates the connection, then pulls and
+     * registers each requested table independently as an ordinary dataset
+     * (`origin="connected"`). One table's failure never aborts the others —
+     * see the per-table `status`/`message` in the response.
+     */
+    import: (payload: ConnectionImportRequest) =>
+      postJson<ConnectionImportResponse>('/connections/import', payload),
+
+    /**
+     * POST /connections/{dataset_id}/resync — manual re-pull of a connected
+     * dataset's source table (mirrors the C25 `/re-derive` pattern). Returns
+     * the updated dataset (same shape as GET /datasets/{id}; `source_uri_raw`
+     * is never included).
+     */
+    resync: (datasetId: string) =>
+      postJson<DatasetDetail>(`/connections/${encodeURIComponent(datasetId)}/resync`, {}),
   },
 }

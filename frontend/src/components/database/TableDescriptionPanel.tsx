@@ -50,7 +50,7 @@ export function TableDescriptionPanel({
   const [showCode, setShowCode] = useState(false)
   const [cleanOpen, setCleanOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [busy, setBusy] = useState<null | 'rederive' | 'delete' | 'describe'>(null)
+  const [busy, setBusy] = useState<null | 'rederive' | 'delete' | 'describe' | 'resync'>(null)
 
   // Context-notes editing (debounced auto-save).
   const [notes, setNotes] = useState('')
@@ -204,6 +204,28 @@ export function TableDescriptionPanel({
     }
   }, [datasetId, loadDetail, onChanged])
 
+  // --- Re-sync (C36; connected datasets only) -------------------------------
+  const doResync = useCallback(async () => {
+    if (!datasetId) return
+    setBusy('resync')
+    setError(null)
+    try {
+      await api.connections.resync(datasetId)
+      await loadDetail(datasetId)
+      onChanged()
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to re-sync the dataset.',
+      )
+    } finally {
+      setBusy(null)
+    }
+  }, [datasetId, loadDetail, onChanged])
+
   // --- Delete --------------------------------------------------------------
   const doDelete = useCallback(async () => {
     if (!datasetId) return
@@ -246,6 +268,7 @@ export function TableDescriptionPanel({
       onNotesChange={onNotesChange}
       onGenerateNotes={() => void generateNotes()}
       onReDerive={() => void doReDerive()}
+      onResync={() => void doResync()}
       onOpenClean={() => setCleanOpen(true)}
       onCloseClean={() => setCleanOpen(false)}
       onCleanApplied={id => {
@@ -302,7 +325,7 @@ export interface TableDescriptionPanelViewProps {
   /** Whether the inline delete confirmation is showing. */
   confirmDelete: boolean
   /** Which long-running mutation is active, or null. */
-  busy: null | 'rederive' | 'delete' | 'describe'
+  busy: null | 'rederive' | 'delete' | 'describe' | 'resync'
   /** Collapse this panel (hide it), when provided. */
   onCollapse?: () => void
   /** Toggle the derivation-code block. */
@@ -315,6 +338,8 @@ export interface TableDescriptionPanelViewProps {
   onGenerateNotes: () => void
   /** Re-derive a derived+stale dataset. */
   onReDerive: () => void
+  /** C36 — manually re-pull a connected dataset's source table. */
+  onResync: () => void
   /** Open the clean modal. */
   onOpenClean: () => void
   /** Close the clean modal. */
@@ -353,6 +378,7 @@ export function TableDescriptionPanelView({
   onNotesChange,
   onGenerateNotes,
   onReDerive,
+  onResync,
   onOpenClean,
   onCloseClean,
   onCleanApplied,
@@ -444,6 +470,27 @@ export function TableDescriptionPanelView({
               {detail.row_count.toLocaleString()} rows × {detail.col_count} cols ·{' '}
               {detail.format?.toUpperCase()}
             </p>
+            {/* C36 (Phase 9, BETA) — provenance readout for a connected dataset.
+                Credential-free: only `source_uri_display` (never the raw URI)
+                and `source_table_name` are shown. */}
+            {detail.source_type && (
+              <p className="mt-1 text-[11px] text-gray-500">
+                from {connectorDisplayName(detail.source_type)}:{' '}
+                {detail.source_uri_display && (
+                  <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] text-gray-600">
+                    {detail.source_uri_display}
+                  </code>
+                )}
+                {detail.source_table_name && (
+                  <>
+                    {' · '}
+                    <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] text-gray-600">
+                      {detail.source_table_name}
+                    </code>
+                  </>
+                )}
+              </p>
+            )}
           </div>
 
           {/* Derived lineage block */}
@@ -670,6 +717,21 @@ export function TableDescriptionPanelView({
               </button>
             )}
 
+            {/* C36 (Phase 9, BETA) — manual re-pull for a connected dataset;
+                there is no automatic staleness flag for these, so this is
+                always available (not gated on a "stale" condition). */}
+            {detail.source_type && (
+              <button
+                type="button"
+                onClick={onResync}
+                disabled={busy === 'resync'}
+                className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {busy === 'resync' && <Spinner />}
+                {busy === 'resync' ? 'Re-syncing…' : 'Re-sync'}
+              </button>
+            )}
+
             <span className="ml-auto">
               {confirmDelete ? (
                 <span className="inline-flex items-center gap-2">
@@ -725,6 +787,14 @@ function Spinner() {
       className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"
     />
   )
+}
+
+/** Human-readable label for a C36 connector `source_type` (e.g. "postgresql" → "PostgreSQL"). */
+function connectorDisplayName(sourceType: string): string {
+  if (sourceType.toLowerCase() === 'postgresql' || sourceType.toLowerCase() === 'postgres') {
+    return 'PostgreSQL'
+  }
+  return sourceType.charAt(0).toUpperCase() + sourceType.slice(1)
 }
 
 /** Read a preview cell — the API returns row OBJECTS keyed by column name. */
