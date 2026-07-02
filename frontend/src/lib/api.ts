@@ -639,10 +639,14 @@ export const api = {
     /**
      * POST /connections/{dataset_id}/resync — manual re-pull of a connected
      * dataset's source table (mirrors the C25 `/re-derive` pattern). Returns
-     * the updated dataset (same shape as GET /datasets/{id}; `source_uri_raw`
-     * is never included).
+     * the updated dataset as a `DatasetSummary` (the same list-item shape as
+     * an entry in `GET /datasets`) — NOT the fuller `DatasetDetail` shape
+     * (no `columns_schema`/`content_hash`/`file_path`/`parquet_path`/
+     * `derivation_code`/`context_facts`). Same precedent as `/re-derive`.
+     * `source_uri_raw` is never included. Callers needing full detail should
+     * follow up with `datasets.get(datasetId)`.
      */
     resync: (datasetId: string) =>
-      postJson<DatasetDetail>(`/connections/${encodeURIComponent(datasetId)}/resync`, {}),
+      postJson<DatasetSummary>(`/connections/${encodeURIComponent(datasetId)}/resync`, {}),
   },
 }
