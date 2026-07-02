@@ -380,14 +380,14 @@ def _plan_prompt_sections(state: AgentState, wrap_up: bool) -> dict[str, str]:
     Returns a dict mapping a stable section key to its rendered text (empty string
     when the section is absent). The keys partition the WHOLE assembled user prompt
     with no overlap — `_assemble_plan_prompt` joins the non-empty ones, and
-    `_plan_prompt_chars` measures them into the six C29 buckets. The `tag`,
+    `_plan_prompt_chars` measures them into the five C29 buckets. The `tag`,
     `question`, `wrap_up`, and `footer` keys are the fixed scaffolding; `datasets`,
     `memory`, `history`, and `actions` are the variable context blocks.
 
     NOTE: `dataset_context` is the metadata-only CATALOG built in `setup`, which
     folds each dataset's notes INTO its catalog line (via `_catalog_block`), so the
-    `## Datasets` section is measured wholly into `dataset_schemas` and
-    `dataset_notes` is 0 — measuring them separately would double-count. See
+    `## Datasets` section (measured into `dataset_schemas`) already includes dataset
+    notes — there is no separate `dataset_notes` bucket. See
     spec/capabilities/context-window-display.md.
     """
     sections: dict[str, str] = {}
@@ -483,11 +483,10 @@ def _plan_system_prompt(state: AgentState, system: str) -> str:
     return system
 
 
-# The six C29 buckets, in the order the breakdown reports them.
+# The five C29 buckets, in the order the breakdown reports them.
 _PLAN_COMPONENT_KEYS = (
     "system_overhead",
     "dataset_schemas",
-    "dataset_notes",
     "memory",
     "history",
     "action_history",
@@ -498,17 +497,17 @@ def _plan_prompt_chars(
     state: AgentState, wrap_up: bool, system_text: str
 ) -> dict[str, int]:
     """C29: partition THIS iteration's assembled plan prompt + system template into
-    the six buckets, measured in raw CHARS (not tokens).
+    the five buckets, measured in raw CHARS (not tokens).
 
-    The six keys partition the WHOLE prompt (system template `plan_action.md` plus
+    The five keys partition the WHOLE prompt (system template `plan_action.md` plus
     every section of the assembled user prompt) with NO overlap and NO omission. The
     runner accumulates these across all iterations and then scales the cumulative
     char counts to the real cumulative provider `tokens_input`.
 
       - system_overhead = system template + fixed scaffolding (tag + question +
         wrap-up + instruction footer). All the fixed pieces and the question.
-      - dataset_schemas = the `## Datasets` section (notes are folded in here).
-      - dataset_notes   = 0 (folded into dataset_schemas to avoid double-counting).
+      - dataset_schemas = the `## Datasets` section (dataset notes are folded in
+        here, not counted separately — counting them again would double-count).
       - memory          = the `## Persistent memory` section.
       - history         = the `## Earlier in this conversation` section.
       - action_history  = the `## Actions so far` section.
@@ -524,7 +523,6 @@ def _plan_prompt_chars(
     return {
         "system_overhead": system_overhead,
         "dataset_schemas": len(s["datasets"]),
-        "dataset_notes": 0,
         "memory": len(s["memory"]),
         "history": len(s["history"]),
         "action_history": len(s["actions"]),

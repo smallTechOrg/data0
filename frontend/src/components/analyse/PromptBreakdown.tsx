@@ -22,7 +22,6 @@ const LABEL_MAP: Record<string, string> = {
   total_prompt: 'Input total',
   dataset_schemas: 'Dataset schemas',
   history: 'Conversation history',
-  dataset_notes: 'Dataset notes',
   memory: 'Memory',
   action_history: 'Action history',
   system_overhead: 'System overhead',

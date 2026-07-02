@@ -96,12 +96,11 @@ def _peek_columns(dataset_id: str) -> list[str]:
     return []
 
 
-# The six C29 component keys (the frontend renders these). `total_prompt` is their
+# The five C29 component keys (the frontend renders these). `total_prompt` is their
 # exact sum — see spec/capabilities/context-window-display.md.
 _BREAKDOWN_COMPONENT_KEYS = (
     "system_overhead",
     "dataset_schemas",
-    "dataset_notes",
     "memory",
     "history",
     "action_history",
@@ -121,13 +120,13 @@ def _build_prompt_breakdown(
     the state (`prompt_component_chars`). Here we scale those cumulative char counts
     to the real cumulative `tokens_input`: each bucket gets
     `round(cum[bucket] / total_chars * tokens_input)`, then the rounding residual is
-    added to the largest bucket so the six components sum EXACTLY to `tokens_input`.
+    added to the largest bucket so the five components sum EXACTLY to `tokens_input`.
     `total_prompt` is the real cumulative input; `tokens_output` is the real
     cumulative output (carried for the response). This aligns the breakdown with the
     "Last query (In / Out)" row. See spec/capabilities/context-window-display.md.
 
     Fallback (a run that never planned — clarification short-circuit,
-    cancelled-before-plan, or zero total chars): the six buckets are 0,
+    cancelled-before-plan, or zero total chars): the five buckets are 0,
     `total_prompt` is `tokens_input` (likely 0), `tokens_output` is `tokens_output`.
     Never crashes.
     """
@@ -145,7 +144,7 @@ def _build_prompt_breakdown(
         key: round(int(cum.get(key, 0)) / total_chars * real_in)
         for key in _BREAKDOWN_COMPONENT_KEYS
     }
-    # Fix rounding so the six sum EXACTLY to real_in: push the residual into the
+    # Fix rounding so the five sum EXACTLY to real_in: push the residual into the
     # largest bucket (the most stable place to absorb a +/-1 adjustment).
     residual = real_in - sum(components.values())
     if residual:

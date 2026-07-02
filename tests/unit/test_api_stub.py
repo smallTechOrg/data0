@@ -200,24 +200,24 @@ def test_ask_single_dataset_returns_answer(api_client):
     assert isinstance(data["prompt_breakdown"], dict)
     assert data["prompt_breakdown"]  # non-empty: carries the scaled components
     assert "total_prompt" in data["prompt_breakdown"]
-    # All named spec components must be present (spec/capabilities/context-window-display.md).
-    assert "dataset_notes" in data["prompt_breakdown"]
     # C29: the breakdown now represents the CUMULATIVE input of the whole query —
-    # the six components are scaled to sum EXACTLY to total_prompt, which equals the
+    # the five components are scaled to sum EXACTLY to total_prompt, which equals the
     # run's real cumulative tokens_input ("Last query In"). It also carries the real
     # cumulative tokens_output.
     breakdown = data["prompt_breakdown"]
     component_keys = [
         "system_overhead",
         "dataset_schemas",
-        "dataset_notes",
         "memory",
         "history",
         "action_history",
     ]
     for key in component_keys:
         assert key in breakdown, key
-    # The six components sum EXACTLY to total_prompt (rounding residual absorbed).
+    # dataset_notes is folded into dataset_schemas — never a separate bucket
+    # (spec/capabilities/context-window-display.md).
+    assert "dataset_notes" not in breakdown
+    # The five components sum EXACTLY to total_prompt (rounding residual absorbed).
     assert sum(breakdown[key] for key in component_keys) == breakdown["total_prompt"]
     # total_prompt == the run's real cumulative tokens_input.
     run = api_client.get(f"/runs/{data['run_id']}").json()["data"]
