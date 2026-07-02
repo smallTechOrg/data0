@@ -174,12 +174,15 @@ def run_agent(
     The C26 clarification check runs ONLY when `run_clarification=True` (the first
     turn of a conversation) and can be suppressed with `skip_clarification`.
 
-    `fast_mode` (C35, request-scoped only, never persisted): applies a tightened
-    `max_iterations` cap of `5` that WINS OVER both `settings.max_iterations` and
-    any DB `SettingRow` override; skips the C26 `check_clarification` call entirely
-    (proceeds straight to the ReAct loop, regardless of `run_clarification`/
-    `skip_clarification`); skips the post-answer `generate_suggestions` call. See
-    spec/capabilities/fast-mode.md.
+    `fast_mode` (C35, per-request only — never a settings/DB default for future
+    requests): applies a tightened `max_iterations` cap of `5` that WINS OVER both
+    `settings.max_iterations` and any DB `SettingRow` override; skips the C26
+    `check_clarification` call entirely (proceeds straight to the ReAct loop,
+    regardless of `run_clarification`/`skip_clarification`); skips the post-answer
+    `generate_suggestions` call. The completed run's value IS persisted on
+    `QueryRunRow.fast_mode` below, purely so `GET /sessions/{id}` can report it
+    (badge survives reload) — that is historical record-keeping, not a behavioral
+    default. See spec/capabilities/fast-mode.md.
 
     The `query_runs` row is created with an EMPTY `dataset_ids_json` and updated
     after the graph returns with the ids the agent actually loaded (`get_loaded_ids`)
@@ -263,6 +266,7 @@ def run_agent(
             iteration_count=0,
             tokens_input=0,
             tokens_output=0,
+            fast_mode=fast_mode,
         )
         session.add(row)
         session.flush()

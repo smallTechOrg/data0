@@ -22,5 +22,5 @@ None (read from DB).
 - Both user notes and C31 compressed facts may contribute; column schema always included.
 
 ## Success Criteria
-- [ ] A dataset with a context note has that note present in the assembled `plan_action` prompt (verifiable via `prompt_breakdown.dataset_notes` > 0).
+- [ ] A dataset with a context note has that note present in the assembled `plan_action` prompt (verifiable via a larger `prompt_breakdown.dataset_schemas` than an otherwise-identical run against a dataset with no context note — dataset notes are folded into the `dataset_schemas` bucket, not a separate one; see `spec/capabilities/context-window-display.md`).
 - [ ] Editing the context via PATCH changes the injected text on the next run.

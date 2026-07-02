@@ -124,6 +124,36 @@ def test_session_detail_returns_turns_with_html(api_client):
     assert turn["clarification_question"] is None
 
 
+def test_session_detail_turn_reflects_fast_mode_true(api_client):
+    """C35 fix: a turn asked with fast_mode=True must round-trip through
+    GET /sessions/{id} as fast_mode: true (previously never persisted)."""
+    up = _upload_csv(api_client)
+    dataset_id = up.json()["data"]["dataset_id"]
+    r = _ask(api_client, dataset_id, question="fast one", fast_mode=True)
+    assert r.status_code == 200, r.text
+    sid = r.json()["data"]["session_id"]
+
+    detail = api_client.get(f"/sessions/{sid}")
+    assert detail.status_code == 200
+    turn = detail.json()["data"]["turns"][0]
+    assert turn["fast_mode"] is True
+
+
+def test_session_detail_turn_reflects_fast_mode_false_by_default(api_client):
+    """Sanity check: a normal (non-fast) turn round-trips fast_mode: false, so
+    the true case above isn't passing by coincidence (e.g. a hardcoded True)."""
+    up = _upload_csv(api_client)
+    dataset_id = up.json()["data"]["dataset_id"]
+    r = _ask(api_client, dataset_id, question="slow one")
+    assert r.status_code == 200, r.text
+    sid = r.json()["data"]["session_id"]
+
+    detail = api_client.get(f"/sessions/{sid}")
+    assert detail.status_code == 200
+    turn = detail.json()["data"]["turns"][0]
+    assert turn["fast_mode"] is False
+
+
 def test_session_detail_404_when_missing(api_client):
     r = api_client.get("/sessions/does-not-exist")
     assert r.status_code == 404

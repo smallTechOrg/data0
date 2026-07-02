@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, Integer, Text, TIMESTAMP
+from sqlalchemy import JSON, Boolean, Integer, Text, TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -79,6 +79,7 @@ class QueryRunRow(Base):
     charts_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
     dataset_ids_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
     selector_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fast_mode: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, default=_now
     )

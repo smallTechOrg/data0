@@ -41,8 +41,12 @@ class AgentState(TypedDict, total=False):
     wants_chart: bool                    # set in setup from _wants_chart(question)
     chart_force_count: int               # times a final-without-chart was rejected
 
-    # C35 Fast Mode: a request-scoped (never persisted) flag that tightens the
-    # iteration cap, skips clarification/suggestions (call-site decisions in
-    # runner.py), truncates action_history results, adds a brevity prompt line,
-    # and disables the forced-chart-retry guardrail. See spec/capabilities/fast-mode.md.
+    # C35 Fast Mode: a per-request flag (never a settings/DB default for future
+    # requests) that tightens the iteration cap, skips clarification/suggestions
+    # (call-site decisions in runner.py), truncates action_history results, adds
+    # a brevity prompt line, and disables the forced-chart-retry guardrail. The
+    # completed run's value IS persisted on query_runs.fast_mode (see
+    # graph/runner.py's run_agent) purely so the UI badge survives reload — that
+    # is historical record-keeping, not a behavioral default. See
+    # spec/capabilities/fast-mode.md.
     fast_mode: bool                      # set from the /ask request; default False

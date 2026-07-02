@@ -52,10 +52,11 @@ One analysis run (one question → one answer), with its full step history.
 | iteration_count | Integer | yes | Steps taken (live-polled, C22) |
 | tokens_input | Integer | yes | Accumulated prompt tokens (C7) |
 | tokens_output | Integer | yes | Accumulated completion tokens (C7) |
-| prompt_breakdown | JSON | no | C29 token breakdown: six components scaled to sum to `total_prompt` (= cumulative `tokens_input`), plus `tokens_output` |
+| prompt_breakdown | JSON | no | C29 token breakdown: five components scaled to sum to `total_prompt` (= cumulative `tokens_input`), plus `tokens_output` |
 | charts_json | JSON | no | Persisted chart array from the run; reloaded as `charts[]` in `GET /sessions/{id}` turns so charts survive server restarts |
 | dataset_ids_json | JSON | no | The datasets the agent actually LOADED this run (C14); scopes the C15 cascade |
 | selector_reasoning | Text | no | Legacy C19 selector rationale; always NULL under agent-driven selection (column retained for compat) |
+| fast_mode | Boolean | yes | C35 — whether this run used Fast Mode; set once at row creation, never updated. `nullable=False, default=False`. Returned per turn by `GET /sessions/{id}` so the "⚡ Fast Mode" badge survives reload (see `spec/capabilities/fast-mode.md` → "Persistence Amendment"). |
 | created_at | TIMESTAMP(tz) | yes | `_now` default |
 | updated_at | TIMESTAMP(tz) | yes | `_now` default + onupdate |
 
