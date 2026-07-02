@@ -102,8 +102,9 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 
 - `src/graph/`: `sandbox.py` (eval namespace + lazy catalog namespace + `save_dataset`), `preflight.py` (C26 clarification), `suggestions.py` (follow-up questions), `describe.py` (C30 notes), `compress.py` (C31 fact extraction), `derived.py` (derived-dataset registration / lineage / staleness), `memory.py` (global-memory block). `state.py`/`nodes.py`/`edges.py`/`agent.py`/`runner.py` are REWRITTEN in place for the ReAct loop.
 - `src/llm/providers/`: `base.py` (provider protocol), `stub.py` (node-tag-branching offline provider), `openrouter.py`. `gemini.py` keeps its shape (default-model note only).
-- `src/api/`: `upload.py`, `datasets.py`, `datasets_ops.py` (clean/describe/re-derive), `ask.py`, `sessions.py`, `stats.py`, `memory.py` (NEW); `health.py` + `runs.py` extended.
+- `src/api/`: `upload.py`, `datasets.py`, `datasets_ops.py` (clean/describe/re-derive), `ask.py`, `sessions.py`, `stats.py`, `memory.py`, `settings.py` (`GET`/`PATCH /settings`) (NEW); `health.py` + `runs.py` extended.
 - `src/domain/`: `dataset.py`, `query_run.py`, `session.py`, `setting.py` (NEW); `run.py` kept.
+- `src/config/`: `db_overrides.py` (NEW) — `get_runtime_model()` / `get_runtime_max_iterations()` read the `settings` table so a Settings-panel choice overrides the `.env` default; consumed by `LLMClient._make_provider()` and `runner.run_agent()`.
 - `src/prompts/`: `plan_action.md`, `finalize.md`, `clarify.md`, `suggest.md`, `describe.md`, `compress.md`, `clean.md` (NEW). The boilerplate `transform.md` is removed when the ReAct graph replaces `transform_text`.
 
 **Avoid:** LangChain (LangGraph only); the repository pattern (use SQLAlchemy directly in routers/nodes per skeleton convention); Pydantic/dataclass for `AgentState` (use `TypedDict`); calling a provider SDK directly in a node (always go through `LLMClient`); a second top-level package or any rename of `agent`/`src/`.
