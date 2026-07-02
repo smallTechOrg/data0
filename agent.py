@@ -201,7 +201,17 @@ def do_run() -> None:
     print()
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT / "src")
-    os.execvpe("uv", ["uv", "run", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8001"], env)
+    # subprocess.run (not os.execvpe): process-replacement via execvpe segfaults
+    # on this Windows/uv setup once the venv grows a native C-extension dep
+    # (reproduced with psycopg2-binary, Phase 9) — uv's own process handoff
+    # doesn't survive being exec'd into. A normal child process avoids it and
+    # behaves identically for this foreground, single-server use case.
+    r = subprocess.run(
+        ["uv", "run", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8001"],
+        cwd=ROOT,
+        env=env,
+    )
+    sys.exit(r.returncode)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
