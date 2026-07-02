@@ -34,6 +34,14 @@ html {
 
 :root,
 [data-theme='light'] {
+  /* Tell the browser to render native widgets (select dropdowns,
+     scrollbars, checkboxes, etc.) with the light UA palette. Without this,
+     the browser infers the scheme from prefers-color-scheme/luminance
+     heuristics, which can desync from our own data-theme state — e.g. a
+     <select>'s closed box picks up a dark heuristic while its native
+     popup list stays light. */
+  color-scheme: light;
+
   /* Surfaces */
   --surface: #ffffff;
   --surface-muted: #f9fafb;
@@ -73,6 +81,8 @@ html {
 }
 
 [data-theme='dark'] {
+  color-scheme: dark;
+
   --surface: #111827;
   --surface-muted: #1a2233;
   --surface-muted-2: #232b3d;
