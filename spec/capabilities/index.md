@@ -1,6 +1,6 @@
 # Capabilities Index
 
-> One file per capability, IDs preserved from the source spec (C1–C32) plus C33/C34 added post-source (Phases 5/7). The source numbering **skips C5 and C28** — both are intentional gaps in the source list, not missing capabilities; no `C5` or `C28` file exists. The 31 capabilities below are the complete set. Each file states what it does, inputs/outputs, external calls, business rules, the phase that delivers it, and testable success criteria.
+> One file per capability, IDs preserved from the source spec (C1–C32) plus C33/C34/C35 added post-source (Phases 5/7/8). The source numbering **skips C5 and C28** — both are intentional gaps in the source list, not missing capabilities; no `C5` or `C28` file exists. The 32 capabilities below are the complete set. Each file states what it does, inputs/outputs, external calls, business rules, the phase that delivers it, and testable success criteria.
 
 ---
 
@@ -40,9 +40,11 @@
 | C32 | Collapsible conversation turns | 3 | [collapsible-turns.md](collapsible-turns.md) |
 | C33 | Per-step reasoning | 5 | [per-step-reasoning.md](per-step-reasoning.md) |
 | C34 | Theming — dark/light + accent + density | 7 | [theming.md](theming.md) |
+| C35 | Fast Mode — a single latency toggle | 8 | [fast-mode.md](fast-mode.md) |
 
 > **C28:** intentionally absent in the source numbering — no capability, no file.
 > **C34** is a new addition (post-source-spec), numbered after the source's C1–C33 range — a pure-frontend capability with no LLM/backend involvement, added via the "add a capability" path.
+> **C35** is a new addition (post-source-spec), numbered after C34 — a per-query latency toggle (backend + frontend), added via the "add a capability" path. See `spec/roadmap.md` → "Future / Backlog" for its origin and the resolved open questions.
 
 ## How to Add a New Capability
 

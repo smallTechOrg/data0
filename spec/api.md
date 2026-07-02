@@ -65,16 +65,18 @@ C24 NL cleaning PREVIEW: LLM generates pandas code, run on a copy, return `{code
 C24 apply code in place; rewrite CSV + Parquet, update counts. **422** exec error / **404** missing.
 
 ### `POST /ask`
-Body `{question, session_id?, skip_clarification:false}`. Legacy `dataset_id?`/`dataset_ids?` are still accepted (API compat) but IGNORED — dataset selection is agent-driven, never client-scoped.
-Dataset selection is AGENT-DRIVEN: every `/ask` hands the agent a metadata-only *catalog* of ALL workspace datasets and it picks (and lazily loads) whichever it needs. A `no_datasets` **400** is returned when the workspace is empty. Pre-flight C26 runs on the FIRST turn only (no `session_id`, unless `skip_clarification`) → may return `{type:"clarification", clarification_question, run_id, session_id}` (thin run, status `clarification`). Otherwise create the run (`status=running`), run the agent, return:
+Body `{question, session_id?, skip_clarification:false, fast_mode:false}`. Legacy `dataset_id?`/`dataset_ids?` are still accepted (API compat) but IGNORED — dataset selection is agent-driven, never client-scoped.
+Dataset selection is AGENT-DRIVEN: every `/ask` hands the agent a metadata-only *catalog* of ALL workspace datasets and it picks (and lazily loads) whichever it needs. A `no_datasets` **400** is returned when the workspace is empty. Pre-flight C26 runs on the FIRST turn only (no `session_id`, unless `skip_clarification` OR `fast_mode`) → may return `{type:"clarification", clarification_question, run_id, session_id}` (thin run, status `clarification`). Otherwise create the run (`status=running`), run the agent, return:
 ```json
 {"type":"answer","run_id":"...","session_id":"...","dataset_ids":[...],
  "derived_dataset_ids":[...],"datasets_used":[...],"selector_reasoning":null,
  "answer_markdown":"...","answer_html":"...","charts":[...],
  "iteration_count":3,"tokens_input":1234,"tokens_output":567,"status":"completed",
  "is_best_effort":false,"steps":[...],"suggested_questions":[...],
- "prompt_breakdown":{...},"duration_ms":4210}
+ "prompt_breakdown":{...},"duration_ms":4210,"fast_mode":false}
 ```
+
+> **`fast_mode` field (C35, request + response):** a boolean, default `false`. When `true` on the request, the run applies a tighter per-request `max_iterations` (`5`, overriding the settings/DB value), SKIPS the C26 pre-flight clarification call outright (no clarifying-question roundtrip, regardless of first-turn status), SKIPS `generate_suggestions` (`suggested_questions` is always `[]`), truncates each `action_history` step's stored `result` to ~500 chars before it re-enters later prompts, adds a prompt-level brevity instruction (no hard output-token cap), and disables the forced-chart-retry guardrail (a chart is still rendered if the model produces one within the tighter budget, but no extra iteration is forced to get one). It never changes model/provider selection (that remains Settings-owned) and is never persisted — it is a per-request flag only. The response echoes the `fast_mode` value that was actually applied. See `spec/capabilities/fast-mode.md`.
 
 > **`dataset_ids` vs `datasets_used`:** `dataset_ids` carries the raw **ids the agent actually LOADED** this run (used for session continuity and follow-up turns; empty if it loaded nothing). `datasets_used` carries the human-readable list of dataset **filenames** for display — each loaded id is mapped to its `DatasetRow.filename` (falling back to the id itself only if the row is missing). The UI renders `datasets_used` directly, so it must be names, never raw UUIDs. The two lists are positionally aligned.
 
