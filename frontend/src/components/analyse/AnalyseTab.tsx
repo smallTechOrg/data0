@@ -140,8 +140,9 @@ export function AnalyseTab({
 
       {/* Sidebar — Settings sits at the bottom-left, below sessions + usage.
           Sticky on large screens so it stays in view while the main column
-          scrolls; scrolls internally if it's taller than the viewport. */}
-      <aside className="flex flex-col gap-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:self-start lg:overflow-y-auto">
+          scrolls; grows with its content (no nested scroll region) — if it's
+          ever taller than the viewport, the page scrolls instead. */}
+      <aside className="flex flex-col gap-4 lg:sticky lg:top-20 lg:self-start">
         <SessionSidebar
           activeSessionId={sessionId}
           refreshToken={sessionsVersion}

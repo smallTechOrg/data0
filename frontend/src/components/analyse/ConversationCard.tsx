@@ -415,7 +415,7 @@ export function ConversationCard({
                 type="button"
                 onClick={() => setAllExpanded(false)}
                 aria-label="Collapse all answers"
-                className="rounded px-1.5 py-0.5 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                className="rounded border border-gray-300 px-1.5 py-0.5 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700"
               >
                 Collapse all
               </button>
@@ -426,14 +426,11 @@ export function ConversationCard({
                 type="button"
                 onClick={() => setAllExpanded(true)}
                 aria-label="Expand all answers"
-                className="rounded px-1.5 py-0.5 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                className="rounded border border-gray-300 px-1.5 py-0.5 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700"
               >
                 Expand all
               </button>
             </div>
-          )}
-          {sessionId && (
-            <span className="text-[11px] text-gray-400">Session active</span>
           )}
         </div>
       </div>

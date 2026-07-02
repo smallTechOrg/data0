@@ -268,7 +268,7 @@ export function SessionSidebarView({
           No sessions yet. Ask a question to start one.
         </div>
       ) : (
-        <ul role="list" className="max-h-[20rem] space-y-0.5 overflow-y-auto pr-1">
+        <ul role="list" className="space-y-0.5">
           {sessions.map(s => {
             const active = activeSessionId === s.id
             const label = s.name?.trim() || s.first_question?.trim() || 'Untitled session'
@@ -323,7 +323,7 @@ export function SessionSidebarView({
                       }
                     }}
                     aria-label={`Resume session ${label}`}
-                    className="cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400 rounded"
+                    className="cursor-pointer leading-tight focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400 rounded"
                   >
                     {/* Row 1: checkbox + label (click to resume) */}
                     <div className="flex items-center gap-2">
@@ -435,7 +435,7 @@ export function SessionSidebarView({
 
                     {/* Row 3: session start + last-updated timestamps — single line, truncates */}
                     {(fmtTime(s.created_at) || fmtTime(s.updated_at)) && (
-                      <div className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap pl-[1.375rem] text-[10px] text-gray-400">
+                      <div className="overflow-hidden text-ellipsis whitespace-nowrap pl-[1.375rem] text-[10px] text-gray-400">
                         {fmtTime(s.created_at) && <span>Started {fmtTime(s.created_at)}</span>}
                         {fmtTime(s.created_at) && fmtTime(s.updated_at) && (
                           <span aria-hidden="true"> · Updated </span>

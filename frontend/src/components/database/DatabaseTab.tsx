@@ -266,7 +266,7 @@ export function DatabaseTab() {
             title={leftOpen ? 'Hide upload and tables' : 'Show upload and tables'}
             className="absolute -left-3 top-1/2 z-10 flex h-20 w-7 -translate-y-1/2 items-center justify-center rounded-md bg-blue-600 text-lg text-white shadow-md hover:bg-blue-700"
           >
-            ‹
+            {leftOpen ? '‹' : '›'}
           </button>
           {!isEmpty && (
             <button
@@ -276,7 +276,7 @@ export function DatabaseTab() {
               title={descOpen ? 'Hide table description' : 'Show table description'}
               className="absolute -right-3 top-1/2 z-10 flex h-20 w-7 -translate-y-1/2 items-center justify-center rounded-md bg-blue-600 text-lg text-white shadow-md hover:bg-blue-700"
             >
-              ›
+              {descOpen ? '›' : '‹'}
             </button>
           )}
 

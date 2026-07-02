@@ -586,7 +586,7 @@ export function TableDescriptionPanelView({
                   type="button"
                   onClick={onGenerateNotes}
                   disabled={busy === 'describe' || notesStatus === 'pending'}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="generate-notes-btn inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {(busy === 'describe' || notesStatus === 'pending') && <Spinner />}
                   {notesStatus === 'pending' ? 'Generating…' : 'Generate notes'}

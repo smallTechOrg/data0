@@ -189,8 +189,10 @@ function TabButton({
       aria-selected={active}
       aria-controls={`panel-${label.toLowerCase()}`}
       onClick={onClick}
-      className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${
-        active ? 'tab-active-pill text-white shadow-md' : 'text-white hover:bg-white/20'
+      className={`rounded-lg border px-4 py-2 text-sm font-medium transition-all ${
+        active
+          ? 'tab-active-pill border-transparent text-white shadow-md'
+          : 'border-white/40 text-white hover:bg-white/20'
       }`}
     >
       {label}

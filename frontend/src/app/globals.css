@@ -332,6 +332,11 @@ html {
 [data-theme] .bg-gray-50\/60 {
   background-color: var(--surface-muted);
 }
+[data-theme] .bg-white\/70,
+[data-theme] .bg-white\/80,
+[data-theme] .bg-white\/85 {
+  background-color: var(--surface);
+}
 [data-theme] .bg-green-50\/60,
 [data-theme] .bg-green-100\/60 {
   background-color: var(--tint-success);
@@ -357,6 +362,15 @@ html {
    the sidebar card's --surface — force pure white so it matches the header's
    old "Project notes" button (removed as a duplicate) at a glance. */
 [data-theme='dark'] .project-notes-btn {
+  color: #ffffff;
+}
+
+/* "Generate notes" button (TableDescriptionPanel.tsx, design-synced): the
+   standard soft-chip text-blue-700 (--accent-soft-fg, a pale lavender in dark
+   mode) reads faint against this button's own bg-blue-50 (--accent-soft, a
+   dark indigo tint) at this small size — force pure white for legibility,
+   matching the "Project notes" button treatment above. */
+[data-theme='dark'] .generate-notes-btn {
   color: #ffffff;
 }
 

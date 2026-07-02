@@ -108,7 +108,7 @@ export function ConversationTurnView({
                     type="button"
                     onClick={onToggle}
                     aria-expanded="true"
-                    className="shrink-0 text-[11px] font-medium text-gray-400 hover:text-gray-700"
+                    className="shrink-0 rounded border border-gray-300 px-1.5 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700"
                   >
                     collapse
                   </button>
@@ -156,7 +156,9 @@ function CollapsedAnswer({ answer, onExpand }: { answer: AskResponse; onExpand: 
       <span className="min-w-0 flex-1 truncate text-xs text-gray-500">
         {preview || '(answer)'}
       </span>
-      <span className="shrink-0 text-[10px] text-blue-600">expand</span>
+      <span className="shrink-0 rounded border border-gray-300 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700">
+        expand
+      </span>
     </button>
   )
 }
@@ -184,7 +186,9 @@ function CollapsedClarification({
       <span className="min-w-0 flex-1 truncate text-xs text-amber-700">
         ✓ Clarification resolved — {clarificationQuestion}
       </span>
-      <span className="shrink-0 text-[10px] text-blue-600">expand</span>
+      <span className="shrink-0 rounded border border-gray-300 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700">
+        expand
+      </span>
     </button>
   )
 }
@@ -225,7 +229,7 @@ function AnswerView({
               type="button"
               onClick={onCollapse}
               aria-expanded="true"
-              className="shrink-0 text-[11px] font-medium text-gray-400 hover:text-gray-700"
+              className="shrink-0 rounded border border-gray-300 px-1.5 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700"
             >
               collapse
             </button>
