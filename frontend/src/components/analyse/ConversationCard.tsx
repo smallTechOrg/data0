@@ -13,6 +13,7 @@ import { api, type AskResponse, type SessionDetail, type TurnView } from '@/lib/
 import type { LastQueryTokens } from '@/components/analyse/AnalyseTab'
 import { ProgressBar } from '@/components/analyse/ProgressBar'
 import { SuggestionChips } from '@/components/analyse/SuggestionChips'
+import { FastModeToggle } from '@/components/analyse/FastModeToggle'
 import {
   ConversationTurnView,
   type Turn,
@@ -114,6 +115,7 @@ function turnFromView(v: TurnView): Turn {
     suggested_questions: v.suggested_questions ?? [],
     prompt_breakdown: v.prompt_breakdown,
     charts: v.charts ?? [],
+    fast_mode: v.fast_mode,
   }
   // Persisted turns may carry a `created_at` ISO string; use it for the
   // "Asked at" meta when present (parse to epoch ms), else leave it undefined so
@@ -146,6 +148,9 @@ export function ConversationCard({
   const [question, setQuestion] = useState('')
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const [turns, setTurns] = useState<Turn[]>([])
+  // C35 Fast Mode: per-query toggle, default OFF, deliberately NOT persisted to
+  // Settings/localStorage — resets each composer session (spec/capabilities/fast-mode.md).
+  const [fastMode, setFastMode] = useState(false)
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState<{ iteration: number; max: number } | null>(null)
   const [progressLabel, setProgressLabel] = useState('Thinking…')
@@ -206,7 +211,7 @@ export function ConversationCard({
    * the next ask continues this session.
    */
   const runAsk = useCallback(
-    async (q: string, skipClarification: boolean) => {
+    async (q: string, skipClarification: boolean, useFastMode: boolean) => {
       const turnId = nextTurnId()
       const controller = new AbortController()
       abortRef.current = controller
@@ -236,6 +241,7 @@ export function ConversationCard({
           question: q,
           sessionId,
           skipClarification,
+          fastMode: useFastMode,
           signal: controller.signal,
         })
 
@@ -293,14 +299,16 @@ export function ConversationCard({
     const q = question.trim()
     if (!q || running) return
     setQuestion('')
-    void runAsk(q, false)
-  }, [question, running, runAsk])
+    void runAsk(q, false, fastMode)
+  }, [question, running, runAsk, fastMode])
 
   // Re-submit a clarification's original question without touching the composer.
+  // Fast Mode always skips clarification outright, so a clarification re-submit
+  // can only originate from a normal (non-Fast-Mode) turn — pass `false` here.
   const submitQuestion = useCallback(
     (q: string, skipClarification = false) => {
       if (running) return
-      void runAsk(q.trim(), skipClarification)
+      void runAsk(q.trim(), skipClarification, false)
     },
     [running, runAsk],
   )
@@ -505,9 +513,12 @@ export function ConversationCard({
           className="w-full resize-none rounded-md border border-gray-200 p-3 text-sm text-gray-800 placeholder:text-gray-400 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-gray-50 disabled:text-gray-400"
         />
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs text-gray-400">
-            Enter to send · Shift+Enter for a new line · the agent picks datasets
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-gray-400">
+              Enter to send · Shift+Enter for a new line · the agent picks datasets
+            </span>
+            <FastModeToggle enabled={fastMode} onChange={setFastMode} disabled={running} />
+          </div>
           <div className="flex items-center gap-2">
             {running && (
               <button

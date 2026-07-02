@@ -76,6 +76,31 @@ _FINALIZE_TAG = "<node:finalize>"
 # How many consecutive execution errors force a wrap-up.
 _MAX_CONSECUTIVE_ERRORS = 3
 
+# C35 Fast Mode: truncate a step's stored `result` to this many characters (plus
+# `_FAST_MODE_TRUNCATION_MARKER`) before it re-enters `action_history`. This is the
+# STORED/re-transmitted value only — truncation happens ONCE at append time, so it
+# compounds correctly across iterations (each later prompt re-sends the already-
+# shortened result). See spec/capabilities/fast-mode.md.
+_FAST_MODE_RESULT_MAX_CHARS = 500
+_FAST_MODE_TRUNCATION_MARKER = "… [truncated]"
+
+# C35 Fast Mode: one extra instruction line appended to the plan_action system
+# prompt asking for a shorter final answer. Prompt-level guidance ONLY — never a
+# hard max_output_tokens/max_tokens cap (risks mid-sentence truncation).
+_FAST_MODE_BREVITY_LINE = (
+    "\n\nFast Mode is ON: keep your `FINAL ANSWER:` brief — a few sentences unless "
+    "the question genuinely needs a table or list."
+)
+
+
+def _truncate_result(text: str) -> str:
+    """Truncate a step's result to `_FAST_MODE_RESULT_MAX_CHARS` (+ marker) when
+    it exceeds that length. A short result is returned unchanged."""
+    text = text or ""
+    if len(text) <= _FAST_MODE_RESULT_MAX_CHARS:
+        return text
+    return text[:_FAST_MODE_RESULT_MAX_CHARS] + _FAST_MODE_TRUNCATION_MARKER
+
 
 # Explicit visualization request: a conservative, case-insensitive match for words
 # that unambiguously ask for a chart. Kept narrow on purpose — only explicit asks
@@ -449,6 +474,15 @@ def _assemble_plan_prompt(state: AgentState, wrap_up: bool) -> str:
     return "\n\n".join(parts)
 
 
+def _plan_system_prompt(state: AgentState, system: str) -> str:
+    """The plan_action system prompt, with the C35 Fast Mode brevity instruction
+    appended conditionally (never a hard output-token cap — prompt guidance only).
+    """
+    if state.get("fast_mode"):
+        return (system or "") + _FAST_MODE_BREVITY_LINE
+    return system
+
+
 # The six C29 buckets, in the order the breakdown reports them.
 _PLAN_COMPONENT_KEYS = (
     "system_overhead",
@@ -526,6 +560,9 @@ def plan_action(state: AgentState) -> AgentState:
 
     try:
         system = _load_prompt(_PLAN_PROMPT_PATH)
+        # C35 Fast Mode: append the brevity instruction line to the system prompt
+        # when active (prompt-level guidance only, never a hard token cap).
+        system = _plan_system_prompt(state, system)
         prompt = _assemble_plan_prompt(state, wrap_up)
         # C29: measure THIS iteration's per-bucket char counts and ADD them into the
         # cumulative dict on state, so the runner's prompt_breakdown describes the
@@ -751,9 +788,19 @@ def execute_action(state: AgentState) -> AgentState:
         except Exception as exc:  # noqa: BLE001 — a bad option must not crash the run
             logger.warning("chart_serialize_failed", run_id=run_id, error=str(exc))
 
+    step_result = error_str if is_error else result_str
+    # C35 Fast Mode: truncate the STORED/re-transmitted result AFTER the
+    # error/non-error string is chosen (so it never affects is_error detection),
+    # immediately before the step is appended (so it compounds correctly across
+    # iterations — each later prompt re-sends the already-shortened result). The
+    # UI shows this same (truncated) string, so there is no "model saw less than
+    # what I see" mismatch.
+    if state.get("fast_mode"):
+        step_result = _truncate_result(step_result)
+
     step = {
         "action": expr,
-        "result": error_str if is_error else result_str,
+        "result": step_result,
         "is_error": is_error,
         "reasoning": reasoning,
     }

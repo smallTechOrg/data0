@@ -43,6 +43,11 @@ from observability.events import get_logger
 
 logger = get_logger("graph.runner")
 
+# C35 Fast Mode: the tightened per-request `max_iterations` cap. WINS OVER both
+# `settings.max_iterations` and any DB `SettingRow` override for this request only
+# — never persisted, never written back. See spec/capabilities/fast-mode.md.
+_FAST_MODE_MAX_ITERATIONS = 5
+
 
 def _uploads_dir() -> Path:
     """`uploads/` at the repo root (two levels up from src/graph/)."""
@@ -161,6 +166,7 @@ def run_agent(
     skip_clarification: bool = False,
     run_clarification: bool = False,
     max_iterations: int | None = None,
+    fast_mode: bool = False,
 ) -> dict[str, Any]:
     """Run a single analysis; return the `/ask` payload.
 
@@ -168,6 +174,13 @@ def run_agent(
     agent picks and lazily loads whichever it needs from the catalog `setup` builds.
     The C26 clarification check runs ONLY when `run_clarification=True` (the first
     turn of a conversation) and can be suppressed with `skip_clarification`.
+
+    `fast_mode` (C35, request-scoped only, never persisted): applies a tightened
+    `max_iterations` cap of `5` that WINS OVER both `settings.max_iterations` and
+    any DB `SettingRow` override; skips the C26 `check_clarification` call entirely
+    (proceeds straight to the ReAct loop, regardless of `run_clarification`/
+    `skip_clarification`); skips the post-answer `generate_suggestions` call. See
+    spec/capabilities/fast-mode.md.
 
     The `query_runs` row is created with an EMPTY `dataset_ids_json` and updated
     after the graph returns with the ids the agent actually loaded (`get_loaded_ids`)
@@ -189,6 +202,11 @@ def run_agent(
     _db_max_iter = get_runtime_max_iterations()
     if _db_max_iter is not None:
         cap = _db_max_iter
+    # C35 Fast Mode: the tightened cap WINS OVER the settings/DB-override value
+    # just applied above — evaluated LAST so it always has the final word for this
+    # one request. Never written back to settings/DB.
+    if fast_mode:
+        cap = _FAST_MODE_MAX_ITERATIONS
     candidate_ids = [d for d in (dataset_ids or []) if d]
     conversation_history = conversation_history or []
 
@@ -198,8 +216,10 @@ def run_agent(
 
     # ------------------------------------------------------------------ #
     # Pre-flight: C26 clarification only, first turn of a conversation.
+    # Fast Mode skips this call ENTIRELY (zero clarification roundtrips), even on
+    # a first turn where a normal run would ask.
     # ------------------------------------------------------------------ #
-    if run_clarification and not skip_clarification:
+    if run_clarification and not skip_clarification and not fast_mode:
         schemas_text = _candidate_schemas_text(candidate_ids)
         clarification = check_clarification(question, schemas_text)
         if clarification:
@@ -256,6 +276,7 @@ def run_agent(
         max_iterations=cap,
         session_id=session_id,
         run_clarification=run_clarification,
+        fast_mode=fast_mode,
     )
 
     # ------------------------------------------------------------------ #
@@ -278,6 +299,7 @@ def run_agent(
         "max_iterations": cap,
         "error": None,
         "selector_reasoning": None,
+        "fast_mode": fast_mode,
     }
 
     config = {"recursion_limit": cap * 3 + 10}
@@ -310,9 +332,10 @@ def run_agent(
     # Follow-up suggestions (graph-adjacent; add its tokens to the total).
     # ------------------------------------------------------------------ #
     # A user-stopped run skips suggestions — stopping must not trigger MORE LLM
-    # calls (that's the whole point).
+    # calls (that's the whole point). Fast Mode also skips this call entirely —
+    # `suggested_questions` stays `[]`, same shape as any other empty-suggestions run.
     suggested_questions: list[str] = []
-    if status == "completed" and answer and error_message != "cancelled":
+    if status == "completed" and answer and error_message != "cancelled" and not fast_mode:
         suggested_questions, s_in, s_out = generate_suggestions(question, answer)
         tokens_input += s_in
         tokens_output += s_out

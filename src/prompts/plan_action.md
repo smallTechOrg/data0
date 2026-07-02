@@ -111,3 +111,16 @@ Result: `42.7`
 Turn 2 (you): `FINAL ANSWER: The average price is **42.70**.`
 
 (The `REASONING:` line and the bare expression are shown in a fence here only for illustration — do NOT include the ``` fence in your real reply.)
+
+## Fast Mode (C35)
+
+<!-- When the request has fast_mode=true, src/graph/nodes.py's `_plan_system_prompt`
+     appends ONE extra instruction line to this system prompt (never edited into the
+     file itself, since the line must be conditional on the per-request flag):
+
+       "Fast Mode is ON: keep your `FINAL ANSWER:` brief — a few sentences unless
+       the question genuinely needs a table or list."
+
+     This is prompt-level guidance only — never a hard max_output_tokens/max_tokens
+     cap (a hard cap risks mid-sentence truncation). See
+     spec/capabilities/fast-mode.md. -->

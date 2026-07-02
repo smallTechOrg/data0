@@ -36,8 +36,14 @@ def after_plan(state: AgentState) -> str:
     # rejected finalize) caps the retries: once it reaches 2 we fall through to the
     # normal finalize, guaranteeing termination even if the model never charts (or
     # in stub mode, which never charts).
+    # C35 Fast Mode: this guardrail is SKIPPED entirely — a FINAL ANSWER with
+    # wants_chart=True and no chart finalizes immediately instead of forcing one
+    # extra iteration. Charts are NOT disabled outright: an echart(...) call the
+    # model makes on its own within the tightened budget still renders. This is
+    # strictly a removal of the FORCED extra iteration, never charting itself.
     if (
-        is_final
+        not state.get("fast_mode")
+        and is_final
         and state.get("wants_chart")
         and not state.get("charts")
         and state.get("chart_force_count", 0) < 2

@@ -40,3 +40,9 @@ class AgentState(TypedDict, total=False):
     # arrives with no chart produced. Capped so it can never loop forever.
     wants_chart: bool                    # set in setup from _wants_chart(question)
     chart_force_count: int               # times a final-without-chart was rejected
+
+    # C35 Fast Mode: a request-scoped (never persisted) flag that tightens the
+    # iteration cap, skips clarification/suggestions (call-site decisions in
+    # runner.py), truncates action_history results, adds a brevity prompt line,
+    # and disables the forced-chart-retry guardrail. See spec/capabilities/fast-mode.md.
+    fast_mode: bool                      # set from the /ask request; default False

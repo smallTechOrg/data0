@@ -172,6 +172,7 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
         skip_clarification=req.skip_clarification,
         run_clarification=run_clarification,
         max_iterations=None,
+        fast_mode=req.fast_mode,
     )
     duration_ms = int((time.monotonic() - _t0) * 1000)
 
@@ -207,6 +208,7 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
                 "run_id": result["run_id"],
                 "session_id": session_id,
                 "status": "clarification",
+                "fast_mode": req.fast_mode,
             }
         )
 
@@ -242,5 +244,6 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
             "suggested_questions": result.get("suggested_questions") or [],
             "prompt_breakdown": result.get("prompt_breakdown") or {},
             "duration_ms": duration_ms,
+            "fast_mode": req.fast_mode,
         }
     )

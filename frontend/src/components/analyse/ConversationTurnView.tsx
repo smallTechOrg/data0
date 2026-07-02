@@ -222,6 +222,14 @@ function AnswerView({
               Best effort
             </span>
           )}
+          {answer.fast_mode && (
+            <span
+              title="This answer ran under Fast Mode: tighter iteration cap, no clarification, no follow-up suggestions"
+              className="rounded bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-700"
+            >
+              ⚡ Fast Mode
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {collapsible && onCollapse && (

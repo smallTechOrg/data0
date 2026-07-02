@@ -254,6 +254,8 @@ export interface AskResponse {
   charts?: string[]
   /** Wall-clock response time of the run in milliseconds (answer path). */
   duration_ms?: number
+  /** C35 — whether this run applied Fast Mode (tighter cap, no clarification/suggestions). */
+  fast_mode?: boolean
   // Clarification variant (type === "clarification"):
   clarification_question?: string
 }
@@ -268,6 +270,13 @@ export interface AskArgs {
   sessionId?: string | null
   /** Skip the C26 clarification pre-flight (used on clarification re-submit). */
   skipClarification?: boolean
+  /**
+   * C35 — per-query Fast Mode: tighter iteration cap (5), skips pre-flight
+   * clarification and follow-up suggestions, truncates action_history results,
+   * adds a brevity instruction, and disables the forced-chart retry. Default
+   * `false`. Never persisted — a per-request flag only (spec/capabilities/fast-mode.md).
+   */
+  fastMode?: boolean
   /** Abort signal so the UI can cancel the request (the Stop button). */
   signal?: AbortSignal
 }
@@ -336,6 +345,8 @@ export interface TurnView {
   created_at?: string | null
   /** Approximate response time (ms) derived from the run's lifespan. */
   duration_ms?: number
+  /** C35 — whether this turn ran under Fast Mode. */
+  fast_mode?: boolean
   [key: string]: unknown
 }
 
@@ -449,12 +460,14 @@ export const api = {
   /**
    * POST /ask — the analysis entry point (spec/api.md).
    *
-   * Body: `{question, session_id?, skip_clarification}`. Dataset selection is
-   * agent-driven server-side (the agent picks from a catalog of every dataset),
-   * so the body carries no dataset scoping.
+   * Body: `{question, session_id?, skip_clarification, fast_mode}`. Dataset
+   * selection is agent-driven server-side (the agent picks from a catalog of
+   * every dataset), so the body carries no dataset scoping.
    *  - Pass `sessionId` to continue a session; omit to start a new one.
    *  - Pass `skipClarification` to bypass the C26 pre-flight (used when a user
    *    re-submits after a clarification turn).
+   *  - Pass `fastMode` to opt into C35 Fast Mode for this request only (default
+   *    `false`); the response echoes the `fast_mode` that was actually applied.
    *
    * Returns either a `type:"answer"` or a `type:"clarification"` AskResponse.
    */
@@ -462,6 +475,7 @@ export const api = {
     const body: Record<string, unknown> = {
       question: args.question,
       skip_clarification: args.skipClarification ?? false,
+      fast_mode: args.fastMode ?? false,
     }
     if (args.sessionId) body.session_id = args.sessionId
     return postJson<AskResponse>('/ask', body, args.signal)
