@@ -15,6 +15,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
+# Windows attaches a non-UTF-8 codepage (e.g. cp1252) to stdout/stderr when
+# they aren't a real console (piped, redirected to a file) — reconfigure so
+# the ✓ / → / ✗ glyphs below don't crash the script in that case.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
+
 # ── colours ──────────────────────────────────────────────────────────────────
 GREEN  = "\033[32m"
 RED    = "\033[31m"
@@ -34,7 +41,11 @@ _failures: list[str] = []
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 def run(cmd: list[str], *, cwd: Path = ROOT, capture: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=cwd, capture_output=capture, text=True)
+    # On Windows, tools installed via npm (pnpm, node, claude) are .cmd shims —
+    # CreateProcess can't exec those directly without going through the shell.
+    # All call sites below pass static argv lists (no untrusted input), so
+    # shell=True here is safe.
+    return subprocess.run(cmd, cwd=cwd, capture_output=capture, text=True, shell=(os.name == "nt"))
 
 def which(name: str) -> bool:
     return shutil.which(name) is not None
