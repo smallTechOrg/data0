@@ -9,6 +9,8 @@ import {
   useState,
 } from 'react'
 import type { DatasetSummary } from '@/lib/api'
+import { clampZoom, hasLayoutOverrides, isDragMove, zoomAnchored } from './erdInteraction'
+export { clampZoom, hasLayoutOverrides, isDragMove, zoomAnchored } from './erdInteraction'
 
 /**
  * Schema / ER-diagram panel — REAL (Phase 4).
@@ -483,11 +485,9 @@ function dtypeColor(dtype: string): string {
   return '#9ca3af' // grey — other
 }
 
-/** Clamp a zoom factor. The low floor (0.15) lets Fit zoom OUT far enough to
- * fit a large/wide diagram into a narrow pane. */
-function clampZoom(z: number): number {
-  return Math.min(3, Math.max(0.15, z))
-}
+// clampZoom is imported from erdInteraction.ts (see the import above). The low
+// floor (0.15) lets Fit zoom OUT far enough to fit a large/wide diagram into
+// a narrow pane.
 
 // ---------------------------------------------------------------------------
 // Component
@@ -633,15 +633,17 @@ export function ERDiagramPanel({
   // Zoom by `factor`, anchored at (anchorX, anchorY) in CONTAINER-relative screen
   // pixels, so whatever content sits under that point stays under it — rather
   // than the transform's implicit pivot at local (0,0) (the content's top-left),
-  // which is why zoom used to visibly drift toward the top-left corner.
+  // which is why zoom used to visibly drift toward the top-left corner. The
+  // pure math lives in zoomAnchored() (erdInteraction.ts); this just wires it
+  // through nested functional setState updaters so a rapid burst of wheel
+  // events always reads the truly-latest zoom/pan, never a stale closure.
   const zoomAt = useCallback((factor: number, anchorX: number, anchorY: number) => {
     setZoom(zOld => {
+      // Computed independently of the nested setPan below (not read back from
+      // it) so this is correct regardless of whether React runs that updater
+      // synchronously — same safety property the pre-extraction code had.
       const zNew = clampZoom(zOld * factor)
-      const ratio = zNew / zOld
-      setPan(panOld => ({
-        x: anchorX - ratio * (anchorX - panOld.x),
-        y: anchorY - ratio * (anchorY - panOld.y),
-      }))
+      setPan(panOld => zoomAnchored(zOld, panOld, factor, anchorX, anchorY).pan)
       return zNew
     })
   }, [])
@@ -820,7 +822,7 @@ export function ERDiagramPanel({
             <button
               type="button"
               onClick={resetLayout}
-              disabled={isEmpty || Object.keys(dragOverrides).length === 0}
+              disabled={isEmpty || !hasLayoutOverrides(dragOverrides)}
               aria-label="Reset table positions to auto layout"
               title="Reset any dragged tables back to the auto layout"
               className="rounded-md border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300"
@@ -1235,7 +1237,7 @@ function TableCard({
     if (!d) return
     const dxScreen = e.clientX - d.startX
     const dyScreen = e.clientY - d.startY
-    if (Math.abs(dxScreen) > 3 || Math.abs(dyScreen) > 3) d.moved = true
+    if (isDragMove(dxScreen, dyScreen)) d.moved = true
     if (!d.moved) return
     // Screen-pixel movement -> local content-space movement (divide out zoom;
     // pan is a pure translation and doesn't affect the delta).
