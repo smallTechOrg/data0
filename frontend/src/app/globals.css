@@ -367,6 +367,15 @@ html {
   background-color: var(--accent-solid);
 }
 
+/* ER diagram canvas (ERDiagramPanel.tsx, not design-synced): the drawing pane
+   requested an absolute-black backdrop in dark mode specifically, distinct
+   from the standard --surface-muted (a dark navy) every other muted panel
+   uses — the diagram's own card chrome (header, toolbar, border) is left on
+   the normal remap so only the pan/zoom/drag canvas itself goes pure black. */
+[data-theme='dark'] .erd-canvas {
+  background-color: #000000;
+}
+
 /* "Project notes" button (SessionSidebar.tsx, not design-synced): its default
    text-gray-600 (--text-secondary) is readable but faint in dark mode against
    the sidebar card's --surface — force pure white so it matches the header's

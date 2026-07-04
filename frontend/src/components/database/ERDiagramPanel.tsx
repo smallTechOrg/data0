@@ -524,6 +524,10 @@ export function ERDiagramPanel({
   // uploaded or only derived tables. Counts come from the FULL prop (below); the
   // render path (layout / nodes / edges) is driven by `visibleDatasets`.
   const [typeFilter, setTypeFilter] = useState<'all' | 'uploaded' | 'derived'>('all')
+  // Session-only manual card positions (dataset id -> local content-space {x,y}).
+  // Overrides the auto-layout's position for that card only; cleared by "Reset
+  // layout" or a page reload — never persisted.
+  const [dragOverrides, setDragOverrides] = useState<Record<string, { x: number; y: number }>>({})
 
   // The subset of datasets the DIAGRAM draws. Because `_erFkLinks` only links
   // datasets within the array it's given, filtering the node set here also drops
@@ -544,6 +548,18 @@ export function ERDiagramPanel({
   const { cards } = useMemo(
     () => layoutCards(visibleDatasets, viewSize, { stretchMax, ringGap }),
     [visibleDatasets, viewSize.w, viewSize.h, stretchMax, ringGap],
+  )
+  // Auto-layout cards with any session-only drag overrides applied on top —
+  // this is what actually renders, drives edge routing, and drives `fit()`'s
+  // real-geometry measurement, so a dragged card's edges follow it and Fit
+  // frames the manually-arranged layout too.
+  const displayCards = useMemo(
+    () =>
+      cards.map(c => {
+        const ov = dragOverrides[c.ds.id]
+        return ov ? { ...c, x: ov.x, y: ov.y } : c
+      }),
+    [cards, dragOverrides],
   )
   const links = useMemo(() => _erFkLinks(visibleDatasets), [visibleDatasets])
 
@@ -614,15 +630,41 @@ export function ERDiagramPanel({
     return () => cancelAnimationFrame(id)
   }, [cards, fit])
 
-  const zoomBy = useCallback((factor: number) => {
-    setZoom(z => clampZoom(z * factor))
+  // Zoom by `factor`, anchored at (anchorX, anchorY) in CONTAINER-relative screen
+  // pixels, so whatever content sits under that point stays under it — rather
+  // than the transform's implicit pivot at local (0,0) (the content's top-left),
+  // which is why zoom used to visibly drift toward the top-left corner.
+  const zoomAt = useCallback((factor: number, anchorX: number, anchorY: number) => {
+    setZoom(zOld => {
+      const zNew = clampZoom(zOld * factor)
+      const ratio = zNew / zOld
+      setPan(panOld => ({
+        x: anchorX - ratio * (anchorX - panOld.x),
+        y: anchorY - ratio * (anchorY - panOld.y),
+      }))
+      return zNew
+    })
   }, [])
 
-  const onWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault()
-    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
-    setZoom(z => clampZoom(z * factor))
-  }, [])
+  const zoomBy = useCallback(
+    (factor: number) => {
+      const el = containerRef.current
+      zoomAt(factor, (el?.clientWidth ?? 0) / 2, (el?.clientHeight ?? 0) / 2)
+    },
+    [zoomAt],
+  )
+
+  const onWheel = useCallback(
+    (e: React.WheelEvent) => {
+      e.preventDefault()
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
+      const rect = containerRef.current?.getBoundingClientRect()
+      const anchorX = rect ? e.clientX - rect.left : 0
+      const anchorY = rect ? e.clientY - rect.top : 0
+      zoomAt(factor, anchorX, anchorY)
+    },
+    [zoomAt],
+  )
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -644,7 +686,16 @@ export function ERDiagramPanel({
     ;(e.target as Element).releasePointerCapture?.(e.pointerId)
   }, [])
 
-  const cardById = useMemo(() => new Map(cards.map(c => [c.ds.id, c])), [cards])
+  const cardById = useMemo(() => new Map(displayCards.map(c => [c.ds.id, c])), [displayCards])
+
+  const handleCardDrag = useCallback((id: string, x: number, y: number) => {
+    setDragOverrides(prev => ({ ...prev, [id]: { x, y } }))
+  }, [])
+
+  const resetLayout = useCallback(() => {
+    setDragOverrides({})
+    requestAnimationFrame(fit)
+  }, [fit])
 
   // Route every edge once (per layout); hover state (highlight/dim/label) is
   // applied cheaply at render time below.
@@ -657,7 +708,7 @@ export function ERDiagramPanel({
         return { link: l, geom: routeEdge(a, b, l) }
       })
       .filter((e): e is { link: ErLink; geom: EdgeGeometry } => e !== null)
-  }, [links, cards, cardById])
+  }, [links, cardById])
 
   // The set of dataset ids related to the hovered card (for dim/highlight).
   const relatedIds = useMemo(() => {
@@ -768,6 +819,16 @@ export function ERDiagramPanel({
             </button>
             <button
               type="button"
+              onClick={resetLayout}
+              disabled={isEmpty || Object.keys(dragOverrides).length === 0}
+              aria-label="Reset table positions to auto layout"
+              title="Reset any dragged tables back to the auto layout"
+              className="rounded-md border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300"
+            >
+              Reset layout
+            </button>
+            <button
+              type="button"
               onClick={() => zoomBy(1.2)}
               disabled={isEmpty}
               aria-label="Zoom in"
@@ -818,7 +879,7 @@ export function ERDiagramPanel({
         <div
           ref={containerRef}
           onWheel={onWheel}
-          className="relative h-[34rem] w-full cursor-grab touch-none overflow-hidden rounded-md border border-gray-100 bg-gray-50 active:cursor-grabbing"
+          className="erd-canvas relative h-[34rem] w-full cursor-grab touch-none overflow-hidden rounded-md border border-gray-100 bg-gray-50 active:cursor-grabbing"
         >
           <svg
             width="100%"
@@ -851,7 +912,7 @@ export function ERDiagramPanel({
               })}
 
               {/* Cards on top. */}
-              {cards.map(card => {
+              {displayCards.map(card => {
                 const dimmed = relatedIds !== null && !relatedIds.has(card.ds.id)
                 return (
                   <TableCard
@@ -860,7 +921,9 @@ export function ERDiagramPanel({
                     keys={keysById.get(card.ds.id)}
                     selected={selectedId === card.ds.id}
                     dimmed={dimmed}
+                    zoom={zoom}
                     onSelect={() => onSelect(card.ds.id)}
+                    onDrag={handleCardDrag}
                     onHover={() => setHoverId(card.ds.id)}
                     onLeave={() => setHoverId(null)}
                   />
@@ -1126,7 +1189,9 @@ function TableCard({
   keys,
   selected,
   dimmed,
+  zoom,
   onSelect,
+  onDrag,
   onHover,
   onLeave,
 }: {
@@ -1134,7 +1199,11 @@ function TableCard({
   keys?: { pk: Set<string>; fk: Set<string> }
   selected: boolean
   dimmed: boolean
+  zoom: number
   onSelect: () => void
+  /** Session-only manual reposition: called with the card's dataset id and its
+   * new local content-space {x,y} while dragging. */
+  onDrag: (id: string, x: number, y: number) => void
   onHover: () => void
   onLeave: () => void
 }) {
@@ -1143,13 +1212,50 @@ function TableCard({
   const shown = card.cols.slice(0, MAX_ROWS)
   const extra = card.cols.length - shown.length
 
+  // Drag vs click: a plain click (no real pointer movement) still selects the
+  // card, exactly like before; movement past a small threshold latches into a
+  // drag for the rest of the gesture and suppresses the click-to-select on
+  // release. Pointer capture keeps delivering move/up here even once the
+  // cursor leaves the card's bounds, so a fast drag never "drops" the card.
+  const dragState = useRef<{
+    startX: number
+    startY: number
+    origX: number
+    origY: number
+    moved: boolean
+  } | null>(null)
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    dragState.current = { startX: e.clientX, startY: e.clientY, origX: card.x, origY: card.y, moved: false }
+    ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+  }
+  const handlePointerMove = (e: React.PointerEvent) => {
+    const d = dragState.current
+    if (!d) return
+    const dxScreen = e.clientX - d.startX
+    const dyScreen = e.clientY - d.startY
+    if (Math.abs(dxScreen) > 3 || Math.abs(dyScreen) > 3) d.moved = true
+    if (!d.moved) return
+    // Screen-pixel movement -> local content-space movement (divide out zoom;
+    // pan is a pure translation and doesn't affect the delta).
+    onDrag(card.ds.id, d.origX + dxScreen / zoom, d.origY + dyScreen / zoom)
+  }
+  const handlePointerUp = (e: React.PointerEvent) => {
+    const d = dragState.current
+    dragState.current = null
+    ;(e.currentTarget as Element).releasePointerCapture?.(e.pointerId)
+    if (d && !d.moved) onSelect()
+  }
+
   return (
     <g
       transform={`translate(${card.x},${card.y})`}
       opacity={dimmed ? 0.3 : 1}
-      style={{ cursor: 'pointer' }}
-      onPointerDown={e => e.stopPropagation()}
-      onClick={onSelect}
+      style={{ cursor: 'grab', touchAction: 'none' }}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
       onMouseEnter={onHover}
       onMouseLeave={onLeave}
     >
