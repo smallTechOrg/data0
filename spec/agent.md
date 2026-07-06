@@ -29,7 +29,7 @@
 All calls go through `LLMClient` — **never the provider SDK directly**. The client exposes two methods (both implemented by every provider, contract in `src/llm/providers/base.py`):
 
 - `complete(prompt, *, system=None) -> LLMResponse` — returns the text plus REAL provider-reported token usage (`tokens_input`/`tokens_output` from the provider's usage metadata; `0` when a provider reports none, so the caller falls back to a `chars/4` estimate). The per-iteration `plan_action` and `force_finalize` use `complete()` so the run's token totals are accurate.
-- `call_model(prompt, *, system=None) -> str` — the text-only convenience wrapper over `complete()`. The graph-adjacent single-shot helpers (`check_clarification`, `generate_suggestions`, `generate_dataset_notes`/describe, `extract_facts`/compress, clean) use `call_model`.
+- `call_model(prompt, *, system=None) -> str` — the text-only convenience wrapper over `complete()`. Most graph-adjacent single-shot helpers (`check_clarification`, `generate_dataset_notes`/describe, `extract_facts`/compress, clean) use `call_model`; `generate_suggestions` (and `generate_starter_questions`) use `complete()` directly, because their real provider token usage is added to the run/display totals.
 
 `LLMResponse` is a `NamedTuple(text, tokens_input=0, tokens_output=0)`. Provider is auto-detected (Anthropic key → anthropic; else Gemini → gemini; else OpenRouter; else stub). Model override via `AGENT_LLM_MODEL`.
 
