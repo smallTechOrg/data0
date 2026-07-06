@@ -1,11 +1,16 @@
-"""Graph-adjacent follow-up suggestions (one LLM call, not a graph node).
+"""Graph-adjacent suggestion calls (one LLM call each, not graph nodes).
 
 Per `spec/agent.md` -> "## Graph-adjacent single LLM calls":
-`generate_suggestions(question, answer)` -> up to 3 short follow-up questions
-(JSON array; `[]` on any failure). Runs in the runner AFTER the graph and its
-estimated tokens are added to the run total. Never raises.
+- `generate_suggestions(question, answer)` -> up to 3 short follow-up questions
+  (JSON array; `[]` on any failure). Runs in the runner AFTER the graph and its
+  estimated tokens are added to the run total. Never raises.
+- `generate_starter_questions(catalog_text)` (C37) -> up to 3 session-start
+  questions for `GET /suggestions/starters`, from a metadata-only dataset
+  catalog. `[]` on any failure; belongs to NO run, so its tokens are not
+  attributed anywhere (accepted gap). Never raises.
 
-The stub provider returns `[]` for the `<node:suggest>` tag.
+Both inject the SAME `<node:suggest>` tag with the identical JSON-array reply
+grammar, so the stub provider serves both with its one existing branch (`[]`).
 """
 from __future__ import annotations
 
@@ -20,6 +25,7 @@ logger = get_logger("graph.suggestions")
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _SUGGEST_PROMPT_PATH = _PROMPTS_DIR / "suggest.md"
+_STARTERS_PROMPT_PATH = _PROMPTS_DIR / "starters.md"
 
 # Node tag the stub provider branches on (must match stub.py EXACTLY).
 _SUGGEST_TAG = "<node:suggest>"
@@ -102,3 +108,37 @@ def generate_suggestions(question: str, answer: str) -> tuple[list[str], int, in
     suggestions = _coerce_string_list(raw)[:_MAX_SUGGESTIONS]
     logger.info("suggestions_ok", count=len(suggestions))
     return suggestions, tokens_input, tokens_output
+
+
+def generate_starter_questions(catalog_text: str) -> list[str]:
+    """C37: propose up to 3 session-start questions from the dataset catalog.
+
+    `catalog_text` is METADATA-ONLY (filenames + `columns_json` + compressed
+    `context_facts` notes — no frames loaded, mirroring `setup`'s catalog); the
+    caller (`GET /suggestions/starters`) builds it and short-circuits on an
+    empty workspace BEFORE calling here. Reuses this module's JSON-array
+    parsing (`_coerce_string_list`), the <=3 cap, and the `<node:suggest>` tag
+    — the reply grammar is identical to follow-up suggestions, so the stub
+    provider needs no new branch (it returns `[]`, and the UI hides the block).
+
+    Returns `[]` on ANY failure (blank catalog, LLM error, unparseable reply)
+    — never raises. Belongs to no run: tokens are not attributed anywhere.
+    """
+    if not (catalog_text or "").strip():
+        return []
+
+    try:
+        system = _load_prompt(_STARTERS_PROMPT_PATH)
+        prompt = (
+            f"{_SUGGEST_TAG}\n\n"
+            f"## Available datasets\n{catalog_text}\n\n"
+            "Reply with ONLY a JSON array of up to 3 short starter questions."
+        )
+        raw = LLMClient().call_model(prompt, system=system) or ""
+    except Exception as exc:  # noqa: BLE001 — never raise; starters are optional
+        logger.warning("starters_failed", error=str(exc))
+        return []
+
+    questions = _coerce_string_list(raw)[:_MAX_SUGGESTIONS]
+    logger.info("starters_ok", count=len(questions))
+    return questions

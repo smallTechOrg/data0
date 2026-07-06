@@ -67,7 +67,7 @@ Puts tap-able question chips in front of the user at the two moments the compose
 - `src/graph/runner.py` — the clarification short-circuit payload gains `suggested_questions`. (backend slice)
 - `src/api/suggestions.py` (NEW) — `GET /suggestions/starters`, registered in `create_app()`; builds the metadata-only catalog, short-circuits on an empty workspace, never 5xx. (backend slice)
 - `src/llm/providers/stub.py` — NOT edited: `<node:clarify>` → `"proceed"` and `<node:suggest>` → `"[]"` already cover both new call sites. (contract note, no change)
-- `frontend/src/lib/api.ts` — `api.starterSuggestions()` for the new endpoint; document `suggested_questions` on the clarification variant of `AskResponse` (the optional field already exists on the type). (frontend slice)
+- `frontend/src/lib/api.ts` — `api.suggestions.starters()` for the new endpoint (namespaced like `api.connections.*`); document `suggested_questions` on the clarification variant of `AskResponse` (the optional field already exists on the type). (frontend slice)
 - `frontend/src/components/analyse/SuggestionChips.tsx` — optional `label` prop. (frontend slice)
 - `frontend/src/components/analyse/ConversationCard.tsx` — the empty-state "Try asking:" block (fetch-once + hide-when-empty) and chips under the latest clarification turn; clarification turns carry their candidates into the `Turn` model. (frontend slice)
 - `frontend/src/components/analyse/ConversationTurnView.tsx` — the `Turn` type gains the clarification candidates field threaded to the live clarification card. (frontend slice)

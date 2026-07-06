@@ -190,7 +190,9 @@ def run_agent(
 
     Returns either:
     - a clarification short-circuit (no graph run):
-      `{"type":"clarification","run_id","clarification_question","session_id"}`
+      `{"type":"clarification","run_id","clarification_question",
+        "suggested_questions","session_id"}` — `suggested_questions` (C37) is up
+      to 3 refined candidates from the SAME pre-flight call, `[]` on fallback
     - an answer:
       `{"type":"answer", run_id, status, answer, iteration_count, tokens_input,
         tokens_output, action_history, charts, derived_dataset_ids, dataset_ids,
@@ -234,7 +236,9 @@ def run_agent(
                     session_id=session_id,
                     question=question,
                     status="clarification",
-                    answer=clarification,
+                    # Only the question is persisted — C37 candidates are live-only
+                    # (no DB column; a resumed clarification turn shows no chips).
+                    answer=clarification.question,
                     dataset_ids_json=[],
                     iteration_count=0,
                     tokens_input=0,
@@ -243,11 +247,19 @@ def run_agent(
                 session.add(row)
                 session.flush()
                 clar_run_id = row.id
-            logger.info("clarification_returned", run_id=clar_run_id, session_id=session_id)
+            logger.info(
+                "clarification_returned",
+                run_id=clar_run_id,
+                session_id=session_id,
+                suggestions=len(clarification.suggestions),
+            )
             return {
                 "type": "clarification",
                 "run_id": clar_run_id,
-                "clarification_question": clarification,
+                "clarification_question": clarification.question,
+                # C37: up to 3 refined candidate questions from the SAME single
+                # pre-flight call ([] when the reply fell back to plain text).
+                "suggested_questions": list(clarification.suggestions),
                 "session_id": session_id,
             }
 

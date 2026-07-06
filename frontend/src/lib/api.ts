@@ -235,7 +235,8 @@ export interface AskStep {
  * Response from POST /ask. Two variants share this shape (spec/api.md):
  *  - `type: "answer"`       — the full analysis result (answer + steps + tokens…)
  *  - `type: "clarification"`— a thin pre-flight (C26) result carrying
- *    `clarification_question`, `run_id`, and `session_id` only; the answer/steps
+ *    `clarification_question`, `run_id`, `session_id`, and (C37) up to 3
+ *    refined candidate questions in `suggested_questions`; the answer/steps
  *    fields are absent, so they are typed optional here.
  */
 export interface AskResponse {
@@ -254,6 +255,12 @@ export interface AskResponse {
   status?: string
   is_best_effort?: boolean
   steps?: AskStep[]
+  /**
+   * Follow-up questions on a `type:"answer"` turn, OR — C37 — up to 3 refined
+   * candidate questions on a `type:"clarification"` turn (produced by the SAME
+   * single pre-flight call; `[]` when the model offered none or its reply fell
+   * back to plain-text parsing). Live-only either way: resumed turns report `[]`.
+   */
   suggested_questions?: string[]
   prompt_breakdown?: Record<string, unknown>
   /** Inline ECharts option objects captured during analysis, each a JSON string (C4). */
@@ -449,6 +456,20 @@ export interface ConnectionImportResult {
 
 export interface ConnectionImportResponse {
   results: ConnectionImportResult[]
+}
+
+// ---------------------------------------------------------------------------
+// Suggested questions (C37, Phase 10)
+// ---------------------------------------------------------------------------
+
+/** GET /suggestions/starters — session-start "Try asking:" questions (spec/api.md). */
+export interface StarterSuggestionsResponse {
+  /**
+   * 0–3 starter questions built from a metadata-only catalog of ALL workspace
+   * datasets. `[]` on an empty workspace, any LLM failure, or the offline stub
+   * — the UI hides the block on an empty list.
+   */
+  questions: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -648,5 +669,18 @@ export const api = {
      */
     resync: (datasetId: string) =>
       postJson<DatasetSummary>(`/connections/${encodeURIComponent(datasetId)}/resync`, {}),
+  },
+
+  // --- Suggested questions (C37, Phase 10) ----------------------------------
+
+  suggestions: {
+    /**
+     * GET /suggestions/starters — up to 3 session-start questions for the
+     * empty-conversation "Try asking:" block. Session-less, no params. ALWAYS
+     * 200 in the standard envelope: an empty workspace, an LLM failure, or the
+     * offline stub all yield `{questions: []}` (never a 5xx) — callers hide the
+     * block on an empty list (spec/api.md).
+     */
+    starters: () => getJson<StarterSuggestionsResponse>('/suggestions/starters'),
   },
 }

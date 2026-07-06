@@ -6,6 +6,7 @@ import { ChartRender } from '@/components/analyse/ChartRender'
 import { StepsInspector } from '@/components/analyse/StepsInspector'
 import { PromptBreakdown } from '@/components/analyse/PromptBreakdown'
 import { ClarificationTurn } from '@/components/analyse/ClarificationTurn'
+import { SuggestionChips } from '@/components/analyse/SuggestionChips'
 
 /**
  * Presentational primitive for a single conversation turn, extracted from
@@ -25,6 +26,13 @@ export interface Turn {
   clarificationQuestion?: string
   /** The original question to re-send on a clarification "answer anyway". */
   originalQuestion?: string
+  /**
+   * C37 — up to 3 refined candidate questions carried by a clarification turn
+   * (from the same pre-flight call). LIVE-ONLY by design: hydrated/resumed
+   * clarifications have none (the server persists no suggestions), and chips
+   * render only while the clarification is the LATEST turn.
+   */
+  clarificationSuggestions?: string[]
   error?: string
   /**
    * Epoch ms the answer landed, for the "Asked at {time}" meta line. Live
@@ -52,6 +60,12 @@ export interface ConversationTurnViewProps {
   /** Whether an ask is in flight (disables the clarification re-submit). */
   busy: boolean
   /**
+   * C37 — drop a refined candidate question into the composer (same behavior as
+   * the post-answer suggestion chips; never auto-submits). Optional: when
+   * omitted, clarification-turn chips simply don't render.
+   */
+  onPickSuggestion?: (question: string) => void
+  /**
    * Whether this is the LATEST turn in the thread. A clarification card is a live,
    * actionable prompt ONLY while it is the latest turn; once the user has moved on
    * (asked, rephrased, or skipped) it renders as an inert historical note — this is
@@ -68,6 +82,7 @@ export function ConversationTurnView({
   onToggle,
   onResubmitClarification,
   busy,
+  onPickSuggestion,
   isLatest,
 }: ConversationTurnViewProps) {
   return (
@@ -120,6 +135,18 @@ export function ConversationTurnView({
                 busy={busy}
                 resolved={!isLatest}
               />
+              {/* C37 — refined candidate chips, ONLY under the live (latest)
+                  clarification: a resolved clarification shows none, so a stale
+                  candidate can never re-fire. SuggestionChips renders nothing
+                  for an empty list (e.g. a hydrated turn or a parse fallback). */}
+              {isLatest && onPickSuggestion && (
+                <SuggestionChips
+                  suggestions={turn.clarificationSuggestions ?? []}
+                  label="Or try a refined question:"
+                  onPick={onPickSuggestion}
+                  disabled={busy}
+                />
+              )}
             </div>
           )
         ) : turn.answer ? (

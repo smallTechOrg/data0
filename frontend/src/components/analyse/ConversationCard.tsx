@@ -10,6 +10,7 @@ import {
   type Ref,
 } from 'react'
 import { api, type AskResponse, type SessionDetail, type TurnView } from '@/lib/api'
+import { createStartersLoader } from '@/lib/starters'
 import type { LastQueryTokens } from '@/components/analyse/AnalyseTab'
 import { ProgressBar } from '@/components/analyse/ProgressBar'
 import { SuggestionChips } from '@/components/analyse/SuggestionChips'
@@ -32,6 +33,15 @@ import {
  *    with a re-submit that re-sends the SAME question with `skip_clarification`.
  *  - The latest answer's `suggested_questions` render as chips that submit the
  *    next question in the same session.
+ *  - On an EMPTY conversation, C37 "Try asking:" starter chips render in the
+ *    same slot — fetched ONCE per mount from GET /suggestions/starters and
+ *    memoized, so a "New session" reset reuses them (a page reload refetches).
+ *    An empty/failed fetch renders nothing; the composer is never blocked. The
+ *    workspace-has-datasets gate is server-side: an empty workspace answers
+ *    `{questions: []}` before any LLM call, which the hide-on-empty posture
+ *    already handles.
+ *  - A live clarification turn's C37 refined candidates render as chips under
+ *    the amber card (live-only — resumed clarifications carry none).
  *  - Older turns COLLAPSE to question + a one-line answer preview (C32); the
  *    latest is expanded. Each turn keeps its Steps inspector + token counts.
  *  - While an ask runs, GET /runs/current is polled ~1/s to drive a progress bar.
@@ -88,6 +98,9 @@ function saveCollapseOverrides(overrides: Record<string, boolean>): void {
 /** Map a persisted TurnView (from GET /sessions/{id}) into a thread Turn. */
 function turnFromView(v: TurnView): Turn {
   if (v.type === 'clarification' && v.clarification_question) {
+    // C37 candidates are deliberately NOT hydrated: suggestions are live-only
+    // (no persisted column — the server reports `[]` on resumed turns), so a
+    // reloaded clarification shows no chips by design.
     return {
       id: v.run_id || nextTurnId(),
       question: v.question,
@@ -161,6 +174,26 @@ export function ConversationCard({
     loadCollapseOverrides(),
   )
   const questionId = useId()
+
+  // C37 session-start starters. The loader memoizes the fetch for the lifetime
+  // of this mount (useRef keeps the first instance), so a "New session" reset
+  // re-shows the cached chips WITHOUT another LLM call and a page reload
+  // refetches. Failure/empty resolves to [] silently — the block just hides.
+  const loadStartersRef = useRef(createStartersLoader(() => api.suggestions.starters()))
+  const [starters, setStarters] = useState<string[]>([])
+  const hasTurns = turns.length > 0
+  useEffect(() => {
+    // Only the empty-conversation view needs starters; the loader guarantees
+    // at most ONE network call per mount even as this effect re-fires.
+    if (hasTurns) return
+    let cancelled = false
+    void loadStartersRef.current().then(questions => {
+      if (!cancelled) setStarters(questions)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [hasTurns])
 
   // Persist collapse overrides to sessionStorage whenever they change (C32).
   useEffect(() => {
@@ -252,6 +285,9 @@ export function ConversationCard({
             status: 'clarification',
             clarificationQuestion: res.clarification_question,
             originalQuestion: q,
+            // C37 — refined candidates from the SAME pre-flight call; `[]` when
+            // the model offered none (chips then simply don't render).
+            clarificationSuggestions: res.suggested_questions ?? [],
           })
         } else {
           // Capture the moment the answer landed for the "Asked at" meta (the
@@ -473,6 +509,7 @@ export function ConversationCard({
                   turn.originalQuestion && submitQuestion(turn.originalQuestion, true)
                 }
                 busy={running}
+                onPickSuggestion={pickSuggestion}
                 isLatest={isLast}
               />
             )
@@ -489,12 +526,24 @@ export function ConversationCard({
         />
       )}
 
-      {/* Suggestion chips from the latest answer — click drops into the composer */}
-      <SuggestionChips
-        suggestions={latestSuggestions}
-        onPick={pickSuggestion}
-        disabled={running}
-      />
+      {/* Chips above the composer — click drops into the composer, never
+          auto-submits. Empty conversation → C37 "Try asking:" starters (hidden
+          while loading / when empty, so the composer is never delayed); once a
+          turn exists → the latest answer's follow-up suggestions. */}
+      {turns.length === 0 ? (
+        <SuggestionChips
+          suggestions={starters}
+          label="Try asking:"
+          onPick={pickSuggestion}
+          disabled={running}
+        />
+      ) : (
+        <SuggestionChips
+          suggestions={latestSuggestions}
+          onPick={pickSuggestion}
+          disabled={running}
+        />
+      )}
 
       {/* Composer */}
       <div className="mt-3">

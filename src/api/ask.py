@@ -205,6 +205,9 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
             {
                 "type": "clarification",
                 "clarification_question": result.get("clarification_question"),
+                # C37: up to 3 refined candidate questions from the SAME single
+                # pre-flight call ([] on a plain-text fallback; live-only).
+                "suggested_questions": result.get("suggested_questions") or [],
                 "run_id": result["run_id"],
                 "session_id": session_id,
                 "status": "clarification",
