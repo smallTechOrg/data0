@@ -8,18 +8,26 @@
 > audit), and the live debugging sessions of 2026-07-01 → 2026-07-07.
 >
 > **Entry template:**
-> ```
+>
+> ```text
 > ### YYYY-MM-DD — <one-line title> (<commit SHA | "no code change">)
 > - **Symptom:** what was observed.
 > - **Root cause:** the actual mechanism.
 > - **Fix:** what changed (files) + the regression test, or why no change was needed.
 > ```
+>
 > Related docs: `spec/parity-gaps.md` (point-in-time parity audit vs. the reference build A —
 > its open items are mirrored under "Open items" below and tracked here going forward).
 
 ---
 
 ## Open items / known sharp edges (not yet fixed)
+
+> **All items below were promoted to the roadmap backlog on 2026-07-07** — scheduling, priority
+> tiers, and effort estimates live in `spec/roadmap.md` → Future/Backlog (session-cache mutation
+> isolation, run-registry release hardening, the parity-gap closure cluster, and real-key
+> test-suite pacing). This list remains the technical record of each hazard; when one ships,
+> move it into the Log section above with its fix entry.
 
 - **Session DataFrame cache is mutable-shared across turns.** `_session_cache` hands every turn
   the SAME frame object, so in-place mutations by the model (e.g. `df1['Date'] =
@@ -50,6 +58,7 @@
 ## Log (newest first)
 
 ### 2026-07-07 — Ordinary variables vanished between ReAct steps (4daef94)
+
 - **Symptom:** the model assigns `ccl_data = df1[...]` in step 1; step 2 referencing it fails
   `NameError: name 'ccl_data' is not defined` — every occurrence costs a wasted iteration while
   the model re-derives the variable. Observed live in both CCL chart runs on 2026-07-06.
@@ -68,6 +77,7 @@
   the stock stub finalizes after one action and can never exercise this). 312 unit / 29 real-key.
 
 ### 2026-07-06 — Charts with datetime axes silently dropped (90b9dba)
+
 - **Symptom:** "show me some charts" runs completed with chart-describing text but zero rendered
   charts; the model's transcript showed `[chart captured]` on every echart step; one follow-up
   run burned to the 12-iteration cap remaking the same chart nine times.
@@ -89,6 +99,7 @@
   → step error" wording (a capture failure is a step error; a serialization failure only logs).
 
 ### 2026-07-05 — ERD zoom always anchored top-left; no card drag; undocumented interactions (0f6c261 / 4195a3b)
+
 - **Symptom:** wheel-zoom in the ER diagram zoomed toward the origin instead of the cursor;
   cards couldn't be repositioned; after building both, the interactions were undocumented drift.
 - **Root cause (zoom):** pan wasn't compensated for the scale change — correct form is
@@ -100,6 +111,7 @@
   `erdInteraction.ts` with 9 node tests. Drift closed by extending `spec/ui.md:43`.
 
 ### 2026-07-03 — resync's documented response shape overstated (9f926c2, then 40f21c5)
+
 - **Symptom:** none live — caught by the post-Phase-9 drift audit. `spec/api.md` + the `api.ts`
   type claimed `POST /connections/{id}/resync` returns the full `GET /datasets/{id}` detail
   shape; it actually returns `_list_item`'s smaller shape (deliberately mirroring `/re-derive`).
@@ -111,6 +123,7 @@
   Lesson: audit the fix commit too.
 
 ### 2026-07-03 — `agent.py --run` segfaults on Windows after adding a native dep (3383f9f)
+
 - **Symptom:** launcher hard-crashed once `psycopg2-binary` entered the venv.
 - **Root cause:** `os.execvpe` process-replacement through uv's launcher — the identical uvicorn
   command ran fine as a plain subprocess; the crash was specific to exec semantics, not the app.
@@ -119,12 +132,14 @@
   shims (pnpm/node).
 
 ### 2026-07-03 — resync dead code re-set provenance fields it already had (d559752)
+
 - **Symptom:** none — Low finding from the Phase 9 drift audit: `connections_resync` re-assigned
   `source_type`/`source_uri_display`/`source_table_name` onto a dict that already contained them,
   under a stale comment claiming `_list_item` lacked them (true only before the follow-up fix).
 - **Fix:** dead lines + stale comment removed; response relies purely on `_list_item`.
 
 ### 2026-07-02 — Fast Mode badge vanished on session reload (efaf1cd sync)
+
 - **Symptom:** the "⚡ Fast Mode" badge on an answer disappeared after reload/resume even though
   the run genuinely ran under Fast Mode.
 - **Root cause:** `fast_mode` was request-scoped only (spec'd "never persisted"); the badge read
@@ -136,6 +151,7 @@
   broken `prompt_breakdown.dataset_notes > 0` success criterion in dataset-context-notes.md.
 
 ### 2026-07-02 — C29 dataset_notes bucket was always 0 (b3388d4)
+
 - **Symptom:** the token-breakdown widget's "Dataset notes" bar never moved.
 - **Root cause:** `setup` folds dataset notes into the catalog line, which is measured as
   `dataset_schemas` — the sixth bucket was a dead line item by construction.
@@ -143,6 +159,7 @@
   guard asserting the key's ABSENCE.
 
 ### 2026-07-02 — Global memory injected additively and unbounded (2ee0bb5)
+
 - **Symptom:** `memory` was the largest variable bucket in a real breakdown (30% / 4,693 tokens),
   re-sent byte-identical every ReAct iteration.
 - **Root cause:** two independent defects in `src/graph/memory.py`: (1) `get_memory_block()` sent
@@ -155,6 +172,7 @@
   injected block contains the facts and NOT the raw text.
 
 ### 2026-07-02 — Dark-mode contrast + toggle-visibility fixes (6126224, 98585e0, 94d280a, b2edc94)
+
 - **Symptom (cluster):** native widgets (selects, scrollbars) rendered light-scheme in dark mode;
   hover states and blue chips had illegible contrast; the Fast Mode toggle was a faint small chip
   users didn't notice; sidebar chevrons pointed the wrong way.
@@ -165,6 +183,7 @@
 - **Fix:** `color-scheme` + select styling, per-variant hover overrides, full-size toggle.
 
 ### 2026-07-01 — Session cache served deleted datasets (53d062d, closes parity-gap C27)
+
 - **Symptom:** after deleting a dataset mid-session, the next query could still read its stale
   in-memory frame.
 - **Root cause:** `_delete_one()`/`delete_all_datasets()` removed the DB row + files but never
@@ -173,6 +192,7 @@
   red-before/green-after tests in `test_datasets_delete_cache.py`.
 
 ### 2026-07-01 — Clarification card persisted/re-fired across the thread (ccca306)
+
 - **Symptom:** an old mid-thread clarification came back as an ACTIVE prompt on reload, and
   clicking it could re-fire its original trigger question.
 - **Root cause:** the card had no notion of being superseded — it rendered live regardless of
@@ -180,6 +200,7 @@
 - **Fix:** `resolved` prop → inert "✓ Resolved" note unless it is the latest turn.
 
 ### 2026-07-01 — Raw uncompressed notes leaked into prompts via async self-heal (8e98bbf)
+
 - **Symptom:** when C31 facts weren't ready, raw (potentially 4000-char) notes were sent to the
   LLM while a background compression "self-healed"; also `/ask`'s `datasets_used` showed raw
   UUIDs in the UI.
@@ -188,6 +209,7 @@
   never reach the prompt.
 
 ### 2026-07-01 — Chart requests sometimes finalized with no chart (29b4b52)
+
 - **Symptom:** "…with charts" questions inconsistently produced no chart — the model finalized
   with a table instead of calling `echart()`.
 - **Fix (two-part):** prompt mandate in plan_action.md + a deterministic graph guardrail —
@@ -197,6 +219,7 @@
   guardrails that retry on a symptom compound whatever silently causes the symptom.)
 
 ### 2026-06-30 — C29 breakdown never added up (df62d5c → 503e5b2)
+
 - **Symptom:** breakdown bars didn't sum to the total; the total (cumulative across iterations)
   never matched the single-snapshot component estimates; ~87% of the prompt (the system template)
   was unaccounted.
@@ -209,12 +232,14 @@
   session-cache sharp edge above).
 
 ### 2026-06-30 — "Last query (In/Out)" blanked on reload (4b7b206)
+
 - **Symptom:** the token row showed "— / —" for persisted runs while the context-window bar
   (with a persisted fallback) showed real values.
 - **Root cause:** the row read only the ephemeral in-memory prop, null after reload.
 - **Fix:** `/stats/daily` exposes `last_tokens_input/output`; widget falls back to them.
 
 ### 2026-06-30 — Initial spec↔code drift sweep on the fresh fork (e8bce83)
+
 - **Symptom (cluster):** `AGENT_MAX_ITERATIONS` default disagreed across spec/env/tests (6 vs 12);
   `SessionTurn` lacked `charts`/`duration_ms`; `POST /runs/{id}/cancel` untested; stale migration
   revision hardcoded in the roadmap gate; `force_finalize` missing from the documented edge map.
@@ -222,6 +247,7 @@
   demonstration of the drift-audit loop this log now feeds on.
 
 ### 2026-06-29 — Parity audit vs. reference build A (`spec/parity-gaps.md`, no single commit)
+
 - 30 capabilities audited: 24 at parity or ahead, 6 gaps. Closed since: C31 (compression wired,
   2026-06-29), C27 (cache invalidation, `53d062d`), C29 + C8 (verified already shipped,
   2026-07-01), C10 (filename-dup, 2026-06-29). Still open: C11, C14, C9, C16 (re-verify), C13+C17
@@ -232,6 +258,7 @@
 ## Investigations that ended in "no code change"
 
 ### 2026-07-06 — "Pre-flight clarification stopped appearing" (no code change)
+
 - **Reported:** vague questions ("Describe", "Show me some charts") no longer produced a
   clarification turn.
 - **Investigated:** `tests/integration/test_preflight_real.py` passed 3/3 against the real key
@@ -242,6 +269,7 @@
   vague questions never trigger it. Logged so the next report starts from these constraints.
 
 ### 2026-07-06 — Full-suite 429 storms are not regressions (protocol, no code change)
+
 - 11–12 integration/e2e failures appearing in every back-to-back full-suite run, all
   `429 RESOURCE_EXHAUSTED` (free tier, 15 req/min), all green on isolated rerun. Standing
   protocol documented in "Open items". A paid-tier key or a paced test runner would retire this.
