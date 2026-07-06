@@ -25,6 +25,7 @@ Routes every LLM call through one `LLMClient` over Gemini, OpenRouter, or a node
 - `AGENT_LLM_PROVIDER` ∈ `auto|gemini|openrouter|stub`; blank → auto-detect (gemini key → gemini; else openrouter key → openrouter; else stub). Existing `anthropic` retained.
 - Stub branches ONLY on injected node tags (`<node:plan>`/`<node:finalize>`/`<node:clarify>`/…), never on prose. Tag→output table in `spec/agent.md`.
 - No node calls a provider SDK directly — always via `LLMClient`.
+- **Gemini 429 resilience:** `GeminiProvider.complete()` retries ONLY on 429/`RESOURCE_EXHAUSTED` (free-tier rate limit) — it honors the server's suggested retry delay (+0.5s buffer; exponential 2s/8s/30s fallback when unparsable), caps at 3 retries under a ~90s total-wait ceiling (a delay beyond the ceiling re-raises the original 429 immediately so an exhausted key fails fast), and logs one `gemini_429_retry` warning per retry. Zero added latency when no 429 occurs; all other errors — and the other providers — fail fast exactly as before.
 
 ## Success Criteria
 - [ ] With `AGENT_GEMINI_API_KEY` set, `/health` reports `provider:"gemini"` and real answers are produced.

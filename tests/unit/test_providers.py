@@ -264,3 +264,150 @@ def test_client_complete_passes_provider_usage_through_unchanged(monkeypatch, tm
     client._provider = _FakeProvider()  # swap in a provider with known real usage
     resp = client.complete("anything")
     assert (resp.text, resp.tokens_input, resp.tokens_output) == ("real answer", 1234, 56)
+
+
+# ---------------------------------------------------------------------------
+# Gemini adaptive 429 retry — offline (fake client, monkeypatched time.sleep)
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+
+def _gemini_429_error(message=None):
+    """A REAL google-genai ClientError shaped like Gemini's free-tier 429."""
+    from google.genai import errors
+    if message is None:
+        message = (
+            "You exceeded your current quota. Please retry in 1.984709948s."
+        )
+    return errors.ClientError(429, {
+        "error": {
+            "code": 429,
+            "message": message,
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [
+                {"@type": "type.googleapis.com/google.rpc.RetryInfo",
+                 "retryDelay": "1s"},
+            ],
+        },
+    })
+
+
+def _gemini_success_response(text="the answer"):
+    return SimpleNamespace(
+        text=text,
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=10, candidates_token_count=5,
+        ),
+    )
+
+
+class _FakeModels:
+    """Fake for client.models — yields one scripted outcome per call."""
+
+    def __init__(self, outcomes):
+        self._outcomes = list(outcomes)
+        self.calls = 0
+
+    def generate_content(self, *, model, contents, config):
+        self.calls += 1
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def _gemini_provider(outcomes):
+    """GeminiProvider with a fake client — no real genai.Client, no network."""
+    from llm.providers.gemini import GeminiProvider
+    provider = GeminiProvider.__new__(GeminiProvider)
+    provider._client = SimpleNamespace(models=_FakeModels(outcomes))
+    provider._model = "gemini-test"
+    return provider
+
+
+@pytest.fixture
+def recorded_sleeps(monkeypatch):
+    """Record time.sleep() calls instead of sleeping — the suite must stay fast."""
+    calls = []
+    monkeypatch.setattr("llm.providers.gemini.time.sleep", calls.append)
+    return calls
+
+
+def test_gemini_429_retries_then_succeeds_honoring_server_delay(recorded_sleeps):
+    provider = _gemini_provider([
+        _gemini_429_error(),
+        _gemini_429_error(),
+        _gemini_success_response("recovered"),
+    ])
+    resp = provider.complete("q")
+    assert resp.text == "recovered"
+    assert (resp.tokens_input, resp.tokens_output) == (10, 5)
+    # Exactly 2 retries, each honoring the server's 1.984709948s + 0.5s buffer.
+    assert len(recorded_sleeps) == 2
+    for delay in recorded_sleeps:
+        assert delay == pytest.approx(1.984709948 + 0.5)
+    assert provider._client.models.calls == 3
+
+
+def test_gemini_non_429_error_reraises_immediately(recorded_sleeps):
+    from google.genai import errors
+    server_error = errors.ServerError(500, {
+        "error": {"code": 500, "message": "Internal error", "status": "INTERNAL"},
+    })
+    provider = _gemini_provider([server_error])
+    with pytest.raises(errors.ServerError):
+        provider.complete("q")
+    assert recorded_sleeps == []
+    assert provider._client.models.calls == 1  # zero retries
+
+
+def test_gemini_non_api_error_reraises_immediately(recorded_sleeps):
+    provider = _gemini_provider([ValueError("bad input")])
+    with pytest.raises(ValueError, match="bad input"):
+        provider.complete("q")
+    assert recorded_sleeps == []
+    assert provider._client.models.calls == 1
+
+
+def test_gemini_unparsable_429_uses_exponential_fallback(recorded_sleeps):
+    from google.genai import errors
+    def _bare_429():
+        return errors.ClientError(429, {
+            "error": {
+                "code": 429,
+                "message": "Resource has been exhausted (e.g. check quota).",
+                "status": "RESOURCE_EXHAUSTED",
+            },
+        })
+    provider = _gemini_provider([
+        _bare_429(),
+        _bare_429(),
+        _gemini_success_response(),
+    ])
+    provider.complete("q")
+    assert recorded_sleeps == [2.0, 8.0]
+
+
+def test_gemini_429_retries_exhausted_propagates(recorded_sleeps):
+    from google.genai import errors
+    provider = _gemini_provider([_gemini_429_error() for _ in range(4)])
+    with pytest.raises(errors.ClientError) as excinfo:
+        provider.complete("q")
+    assert "429" in str(excinfo.value)
+    assert len(recorded_sleeps) == 3  # max 3 retries = 4 attempts
+    assert provider._client.models.calls == 4
+
+
+def test_gemini_429_total_wait_ceiling_fails_fast(recorded_sleeps):
+    # Suggested delay beyond the ~90s accumulated ceiling (daily-quota case)
+    # -> the original 429 re-raises immediately, no sleep at all.
+    from google.genai import errors
+    provider = _gemini_provider([
+        _gemini_429_error("Quota exceeded. Please retry in 200s."),
+    ])
+    with pytest.raises(errors.ClientError) as excinfo:
+        provider.complete("q")
+    assert "RESOURCE_EXHAUSTED" in str(excinfo.value)
+    assert recorded_sleeps == []
+    assert provider._client.models.calls == 1
