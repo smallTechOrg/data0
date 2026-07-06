@@ -66,7 +66,7 @@ C24 apply code in place; rewrite CSV + Parquet, update counts. **422** exec erro
 
 ### `POST /ask`
 Body `{question, session_id?, skip_clarification:false, fast_mode:false}`. Legacy `dataset_id?`/`dataset_ids?` are still accepted (API compat) but IGNORED — dataset selection is agent-driven, never client-scoped.
-Dataset selection is AGENT-DRIVEN: every `/ask` hands the agent a metadata-only *catalog* of ALL workspace datasets and it picks (and lazily loads) whichever it needs. A `no_datasets` **400** is returned when the workspace is empty. Pre-flight C26 runs on the FIRST turn only (no `session_id`, unless `skip_clarification` OR `fast_mode`) → may return `{type:"clarification", clarification_question, run_id, session_id}` (thin run, status `clarification`). Otherwise create the run (`status=running`), run the agent, return:
+Dataset selection is AGENT-DRIVEN: every `/ask` hands the agent a metadata-only *catalog* of ALL workspace datasets and it picks (and lazily loads) whichever it needs. A `no_datasets` **400** is returned when the workspace is empty. Pre-flight C26 runs on the FIRST turn only (no `session_id`, unless `skip_clarification` OR `fast_mode`) → may return `{type:"clarification", clarification_question, suggested_questions, run_id, session_id}` (thin run, status `clarification`). Otherwise create the run (`status=running`), run the agent, return:
 ```json
 {"type":"answer","run_id":"...","session_id":"...","dataset_ids":[...],
  "derived_dataset_ids":[...],"datasets_used":[...],"selector_reasoning":null,
@@ -77,6 +77,8 @@ Dataset selection is AGENT-DRIVEN: every `/ask` hands the agent a metadata-only 
 ```
 
 > **`fast_mode` field (C35, request + response):** a boolean, default `false`. When `true` on the request, the run applies a tighter per-request `max_iterations` (`5`, overriding the settings/DB value), SKIPS the C26 pre-flight clarification call outright (no clarifying-question roundtrip, regardless of first-turn status), SKIPS `generate_suggestions` (`suggested_questions` is always `[]`), truncates each `action_history` step's stored `result` to ~500 chars before it re-enters later prompts, adds a prompt-level brevity instruction (no hard output-token cap), and disables the forced-chart-retry guardrail (a chart is still rendered if the model produces one within the tighter budget, but no extra iteration is forced to get one). It never changes model/provider selection (that remains Settings-owned) and is never a settings/DB default applied to future requests — each `/ask` call states its own `fast_mode`. The response echoes the `fast_mode` value that was actually applied; the completed run's value is ALSO persisted on `query_runs.fast_mode` and returned per turn by `GET /sessions/{id}` (see the Turn payload note above), purely so the UI badge survives reload — see `spec/capabilities/fast-mode.md` → "Persistence Amendment".
+
+> **`suggested_questions` on the clarification variant (C37, Phase 10):** the `type:"clarification"` payload carries `suggested_questions: string[]` — up to 3 refined candidate questions the user could tap instead of typing an answer, produced by the SAME single C26 pre-flight LLM call (no extra roundtrip; reply contract in `spec/capabilities/suggested-questions.md`). `[]` when the model offered none or its reply fell back to plain-text parsing — a parse failure NEVER blocks the clarification itself (the whole reply then becomes `clarification_question`, exactly the pre-C37 behavior). Live-only: not persisted, so a resumed clarification turn reports `suggested_questions: []` via `GET /sessions/{id}` (parity with answer-turn follow-up suggestions, which are also live-only today). Under Fast Mode the pre-flight is skipped entirely (C35), so this field never appears — no `type:"clarification"` response exists on a Fast Mode request.
 
 > **`dataset_ids` vs `datasets_used`:** `dataset_ids` carries the raw **ids the agent actually LOADED** this run (used for session continuity and follow-up turns; empty if it loaded nothing). `datasets_used` carries the human-readable list of dataset **filenames** for display — each loaded id is mapped to its `DatasetRow.filename` (falling back to the id itself only if the row is missing). The UI renders `datasets_used` directly, so it must be names, never raw UUIDs. The two lists are positionally aligned.
 
@@ -93,13 +95,22 @@ Dataset selection is AGENT-DRIVEN: every `/ask` hands the agent a metadata-only 
 | 404 | dataset or session not found |
 | 400 | empty question / session mismatch / >20 turns / no datasets uploaded |
 
+### `GET /suggestions/starters`
+C37 (Phase 10) session-start starter questions — the "Try asking:" chips shown when the Analyse conversation is empty. Served by a NEW `src/api/suggestions.py` router (registered in `create_app()`). Takes NO parameters and requires NO session — the chips seed the composer before any session exists (a session is only created by the eventual `POST /ask`). Builds a **metadata-only** catalog of ALL workspace datasets (`columns_json` + compressed `context_facts` notes — no DataFrame/file reads, mirroring how `setup` builds the agent's catalog) and makes ONE `LLMClient` call (tag `<node:suggest>`, same JSON-array reply grammar as follow-up suggestions — see `spec/capabilities/suggested-questions.md`). Returns:
+
+```json
+{"questions": ["...", "...", "..."]}
+```
+
+`questions` is 0–3 strings. **Always 200, never a 5xx:** an empty workspace short-circuits to `{questions: []}` before any LLM call; an LLM error, an unparseable reply, or the offline stub provider (whose `<node:suggest>` branch returns `[]`) also yield `{questions: []}` — the UI hides the block on an empty list. Not Fast-Mode-gated (starters precede any query, and `fast_mode` is a per-`/ask` flag). The call belongs to no run, so its tokens are not attributed to `query_runs` / `GET /stats/daily` (documented, accepted gap).
+
 ### `GET /sessions`
 All sessions, most-recently-updated first; each with `turn_count`, `first_question`. Always 200.
 
 ### `GET /sessions/{id}`
 Session + `turns[]`. **404** missing.
 
-> **Turn payload:** each turn (`_turn_payload`) carries `run_id`, `question`, `answer_markdown`, `answer_html`, `iteration_count`, `tokens_input`, `tokens_output`, `status`, `type` (`answer`|`clarification`), `clarification_question`, `steps`, `dataset_ids`, `suggested_questions`, `prompt_breakdown`, `charts`, **`fast_mode`** (bool — whether that specific completed run used Fast Mode; persisted on `query_runs.fast_mode` so it survives reload/resume, see `spec/capabilities/fast-mode.md` → "Persistence Amendment"), plus **`created_at`** (ISO string — when the turn was asked) and **`duration_ms`** (integer ms, derived from `updated_at − created_at` ≈ the run's lifespan, so resumed history shows a response time too; `null` when either timestamp is missing).
+> **Turn payload:** each turn (`_turn_payload`) carries `run_id`, `question`, `answer_markdown`, `answer_html`, `iteration_count`, `tokens_input`, `tokens_output`, `status`, `type` (`answer`|`clarification`), `clarification_question`, `steps`, `dataset_ids`, `suggested_questions` (always `[]` on resumed turns — suggestions are live-only, no persisted column; applies to answer follow-ups and C37 clarification candidates alike), `prompt_breakdown`, `charts`, **`fast_mode`** (bool — whether that specific completed run used Fast Mode; persisted on `query_runs.fast_mode` so it survives reload/resume, see `spec/capabilities/fast-mode.md` → "Persistence Amendment"), plus **`created_at`** (ISO string — when the turn was asked) and **`duration_ms`** (integer ms, derived from `updated_at − created_at` ≈ the run's lifespan, so resumed history shows a response time too; `null` when either timestamp is missing).
 
 ### `PATCH /sessions/{id}/name`
 Rename. **404** missing.

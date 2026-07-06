@@ -1,6 +1,6 @@
 # Capabilities Index
 
-> One file per capability, IDs preserved from the source spec (C1–C32) plus C33/C34/C35 added post-source (Phases 5/7/8). The source numbering **skips C5 and C28** — both are intentional gaps in the source list, not missing capabilities; no `C5` or `C28` file exists. The 32 capabilities below are the complete set. Each file states what it does, inputs/outputs, external calls, business rules, the phase that delivers it, and testable success criteria.
+> One file per capability, IDs preserved from the source spec (C1–C32) plus C33/C34/C35/C36/C37 added post-source (Phases 5/7/8/9/10). The source numbering **skips C5 and C28** — both are intentional gaps in the source list, not missing capabilities; no `C5` or `C28` file exists. The 35 capabilities below are the complete set. Each file states what it does, inputs/outputs, external calls, business rules, the phase that delivers it, and testable success criteria.
 
 ---
 
@@ -42,11 +42,13 @@
 | C34 | Theming — dark/light + accent + density | 7 | [theming.md](theming.md) |
 | C35 | Fast Mode — a single latency toggle | 8 | [fast-mode.md](fast-mode.md) |
 | C36 | External database connectors (PostgreSQL, BETA) | 9 | [external-db-connectors.md](external-db-connectors.md) |
+| C37 | Suggested questions — session starters + clarification candidates | 10 | [suggested-questions.md](suggested-questions.md) |
 
 > **C28:** intentionally absent in the source numbering — no capability, no file.
 > **C34** is a new addition (post-source-spec), numbered after the source's C1–C33 range — a pure-frontend capability with no LLM/backend involvement, added via the "add a capability" path.
 > **C35** is a new addition (post-source-spec), numbered after C34 — a per-query latency toggle (backend + frontend), added via the "add a capability" path. See `spec/roadmap.md` → "Future / Backlog" for its origin and the resolved open questions.
 > **C36** is a new addition (post-source-spec), numbered after C35 — a pluggable snapshot-import connector seam (PostgreSQL only, BETA/flag-gated), added via the "add a capability" path. See `spec/roadmap.md` → "Future / Backlog" → "External database connectors" for its origin and design rationale.
+> **C37** is a new addition (post-source-spec), numbered after C36 — session-start "Try asking:" chips (a new session-less `GET /suggestions/starters`) plus refined candidate questions on a C26 clarification turn (same single pre-flight call), added via the "add a capability" path. It gets its OWN file because no existing capability file owns follow-up suggestions (`generate_suggestions` shipped inside Phase 3 and is documented only in `spec/agent.md`/`spec/api.md`); C26's file owns only the clarification gate.
 
 ## How to Add a New Capability
 

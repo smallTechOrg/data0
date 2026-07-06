@@ -13,7 +13,7 @@ Before running the agent, asks a clarifying question if the request is too ambig
 ## Outputs
 | Output | Type | Destination |
 |--------|------|-------------|
-| clarification response | JSON | `{type:"clarification", clarification_question, run_id, session_id}` |
+| clarification response | JSON | `{type:"clarification", clarification_question, suggested_questions, run_id, session_id}` — `suggested_questions` (up to 3 refined candidate questions, `[]` when none) was added by C37 (Phase 10) riding the SAME single pre-flight call; see [suggested-questions.md](suggested-questions.md) for the reply contract and fallback |
 
 ## External Calls
 | System | Operation | On Failure |

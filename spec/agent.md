@@ -24,7 +24,7 @@
 |-------------|----------|----------|-----------|
 | `plan_action` (per-iteration reasoning) | Gemini | `gemini-3.1-flash-lite` (**verified at Phase 2/3 gate**) | Cheapest fast model that follows the ReAct format; called every iteration, so latency/cost dominate. |
 | `force_finalize` (synthesis) | Gemini | same | One synthesis call; quality-over-cost but the same model is sufficient. |
-| `check_clarification` (C26), `generate_suggestions`, `generate_dataset_notes` (C30), `extract_facts` (C31) | Gemini | same | Single-shot helpers outside the graph; same model via `LLMClient`. |
+| `check_clarification` (C26/C37), `generate_suggestions`, `generate_starter_questions` (C37), `generate_dataset_notes` (C30), `extract_facts` (C31) | Gemini | same | Single-shot helpers outside the graph; same model via `LLMClient`. |
 
 All calls go through `LLMClient` — **never the provider SDK directly**. The client exposes two methods (both implemented by every provider, contract in `src/llm/providers/base.py`):
 
@@ -197,7 +197,7 @@ plan_action   (loop)
 
 Runs in the runner, BEFORE the graph, on the FIRST turn of a conversation only (`run_clarification=True`); skipped on follow-ups (the history disambiguates) and when `skip_clarification=true`. Lives in `src/graph/preflight.py`.
 
-1. **C26 clarification** — `check_clarification(question, schemas)` (tag `<node:clarify>`): returns either a clarifying question (the run returns early `type:"clarification"`, status `clarification`, no graph run) or "proceed".
+1. **C26 clarification (+ C37 refined candidates)** — `check_clarification(question, schemas)` (tag `<node:clarify>`): ONE call returns either "proceed" (→ `None`) or a `ClarificationResult` NamedTuple `(question, suggestions)` — the clarifying question PLUS up to 3 refined candidate questions the user could tap instead of typing (the run returns early `type:"clarification"` with `suggested_questions`, status `clarification`, no graph run). The candidates ride the SAME single call — the pre-flight path gains no extra roundtrip. Reply grammar: exactly `proceed`, or a JSON object `{"question": ..., "suggestions": [...]}` parsed via `{...}`-span extraction; ANY parse failure falls back to treating the whole reply as the clarifying question with `suggestions=[]` (the pre-C37 behavior), and an LLM error still fails open to proceed. Full contract in `spec/capabilities/suggested-questions.md`.
 
 **Dataset selection is NOT a pre-flight step.** It is agent-driven inside the graph: `setup` builds a metadata-only *catalog* of ALL datasets (`{id, filename, alias, columns, notes}`, no frames read) into `dataset_context`, and the ReAct loop picks + lazily loads whichever the question needs (see Tools & Tool Calling → Sandbox namespace). There is no `select_datasets` call and no `<node:select>` tag.
 
@@ -206,6 +206,7 @@ Runs in the runner, BEFORE the graph, on the FIRST turn of a conversation only (
 ## Graph-adjacent single LLM calls (not graph nodes)
 
 - `generate_suggestions(question, answer)` (`src/graph/suggestions.py`) → up to 3 short follow-up questions (JSON array; `[]` on failure); tokens added to the run total.
+- `generate_starter_questions(catalog_text)` (`src/graph/suggestions.py`, C37) → up to 3 session-start questions for `GET /suggestions/starters`, from a **metadata-only** catalog (`columns_json` + compressed `context_facts` — no frames loaded, mirroring `setup`'s catalog). Reuses the module's JSON-array parsing + ≤3 cap and injects the SAME `<node:suggest>` tag (identical reply grammar, so the stub needs no new branch). `[]` on any failure; belongs to NO run, so its tokens are not attributed anywhere (accepted gap). Prompt: `src/prompts/starters.md`. See `spec/capabilities/suggested-questions.md`.
 - `generate_dataset_notes()` (`src/graph/describe.py`, C30) → sample 50 rows, ask for ≤300-word plain notes, write to `dataset.context`, track `auto_notes_status`, then trigger C31. The single LLM call is **retried up to 3× with backoff** (transient rate-limit/timeout self-heals instead of a spurious `failed`) and is serialized across datasets by a **process-wide lock** so concurrent upload-time describes (one daemon thread per uploaded file) don't all hit the provider at once; only the API call holds the lock (the backoff sleeps are outside it). Outcome is unchanged — still ONE successful call's notes, still never raises.
 - `extract_facts()` (`src/graph/compress.py`, C31) → one LLM call → JSON array of ≤20 facts; fills `dataset.context_facts` and `settings.global_memory_facts`; async fire-and-forget self-heal variants with an in-flight lock; failures return `[]`.
 
@@ -221,8 +222,8 @@ The stub provider (offline fallback) branches **only on the injected node tag**,
 | `<node:plan>` (1st call) | `df.describe().to_string()` (relies on `df` → first catalog dataset, loaded on reference) |
 | `<node:plan>` (later call) | a `FINAL ANSWER:` markdown summary (iteration inferred from count of `Result:`/`Error:` markers so repeated calls differ) |
 | `<node:plan>` missing | `FINAL ANSWER: [stub] Unable to process` |
-| `<node:clarify>` | "proceed" (no clarification in stub mode) |
-| `<node:suggest>` | `[]` |
+| `<node:clarify>` | "proceed" (no clarification in stub mode — and therefore no C37 refined candidates either; the extended reply grammar is a real-model-only path) |
+| `<node:suggest>` | `[]` (serves BOTH callers of this tag: follow-up suggestions and the C37 starters call — offline starters are empty and the UI hides the block) |
 | `<node:describe>` | no branch — falls through to `_PLAN_FALLBACK`; returns `"FINAL ANSWER: [stub] Unable to process"`. `generate_dataset_notes` still sets `auto_notes_status="done"` but stores placeholder text. Real notes require a live Gemini key. |
 | `<node:compress>` | no branch — falls through to `_PLAN_FALLBACK`; returns non-JSON. `_parse_facts` in both `graph.compress` and `graph.memory` catches the parse failure and returns `[]` gracefully. Used by C31 `extract_facts` (dataset-scoped) and `compress_memory` (global memory). |
 
@@ -243,7 +244,7 @@ The stub provider (offline fallback) branches **only on the injected node tag**,
 
 ## Human-in-the-Loop Checkpoints
 
-The pre-flight **clarification** (C26) is the only pause: an ambiguous question returns `type:"clarification"` with a `clarification_question`; the user re-submits with `skip_clarification:true`. No mid-run pauses.
+The pre-flight **clarification** (C26) is the only pause: an ambiguous question returns `type:"clarification"` with a `clarification_question` plus up to 3 tap-able refined candidate questions (`suggested_questions`, C37 — same single call); the user either re-submits with `skip_clarification:true`, types an answer, or taps a candidate (which fills the composer). No mid-run pauses.
 
 ---
 
@@ -255,7 +256,7 @@ The pre-flight **clarification** (C26) is the only pause: an ambiguous question 
 
 **Resume / retry:** no checkpointer — runs are short and single-shot; a failed run is re-issued as a new `/ask`. (No `SqliteSaver` needed; no long-running pause beyond the synchronous clarification short-circuit.)
 
-**Partial failure:** a failed `save_dataset` or a failed chart capture is recorded as a step error and does not abort the run — the agent continues and finalizes with what it has. A failed `generate_suggestions` returns `[]`.
+**Partial failure:** a failed `save_dataset` or a failed chart capture is recorded as a step error and does not abort the run — the agent continues and finalizes with what it has. A failed `generate_suggestions` or `generate_starter_questions` returns `[]`; an unparseable C37 extended-clarify reply degrades to the plain clarifying question with no candidates (never blocks the clarification).
 
 ---
 
