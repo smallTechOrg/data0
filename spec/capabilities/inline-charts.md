@@ -19,9 +19,10 @@ None (charts rendered client-side with ECharts).
 ## Business Rules
 - The model calls `echart(kind, df, *, x, y, series, title, option, **opts)` in the sandbox. It builds a sensible ECharts `option` dict (`{title, tooltip, xAxis, yAxis, series, legend, grid, ...}`) for `kind ∈ {bar, line, scatter, pie, heatmap}`, or accepts a full raw `option=<dict>` (must contain a `series` key) as an escape hatch. It REGISTERS the option into a per-run accumulator and returns the dict.
 - `execute_action` reads that accumulator, `json.dumps`-es each option, and appends the strings to `state["charts"]` (the `query_runs.charts_json` shape — an array of JSON strings — is unchanged; only the content is now an ECharts option rather than a Plotly figure).
+- **Serialization is a two-layer guarantee — a chart is never dropped for serialization reasons.** Layer 1: `_as_jsonable` in the sandbox coerces every value placed into an option to a JSON-safe form — numpy ints/floats/bools unwrap, NaN/NaT → JSON null, `Timestamp`/`datetime`/`date`/`np.datetime64` → ISO-8601 strings (tz-naive midnights trimmed to a plain date), `Timedelta`/`Period` → their string form (ordering constraint: `np.timedelta64` is checked before `np.integer`, which it subclasses). Layer 2: the `json.dumps` at the capture site passes `default=str`, so any exotic value that slips past Layer 1 degrades to its string form instead of losing the chart.
 - Chart building is defensive: bad input raises a clear `ValueError` the eval loop recovers from (recorded as a step error), and never crashes the run.
 - `finalize` carries the captured chart JSON on the answer's `charts`; the UI renders them inline (ECharts).
-- A chart-capture/serialisation failure is non-fatal (step error, run continues).
+- A chart-capture failure (bad `echart(...)` input) is non-fatal — it surfaces as a step error and the run continues. A pure serialization failure at the capture site is near-unreachable given the two-layer guarantee above; the last-resort guard logs `chart_serialize_failed` and drops only that one chart, without marking the step as an error or affecting the run.
 
 ## Chart Guardrail (deterministic)
 
