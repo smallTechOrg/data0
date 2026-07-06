@@ -137,20 +137,31 @@ def test_generate_suggestions_never_raises(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def test_session_cache_reuses_frame_on_second_load(uploads_dir):
-    """A second lazy load for the same (session_id, dataset_id) returns the SAME
-    DataFrame object (cache hit), proving no re-read from disk."""
+def test_session_cache_reuses_frame_on_second_load(uploads_dir, monkeypatch):
+    """A second lazy load for the same (session_id, dataset_id) is a cache HIT —
+    no re-read from disk, the cached entry is stable, and the returned frames are
+    value-equal per-turn snapshots (never the same object; Phase 11 isolation)."""
     dataset_id = _make_dataset(uploads_dir)
     session_id = "session-xyz"
 
     # First reference: cache MISS -> loads from disk and stores under the session.
     frame1 = nodes_module._session_load_frame(session_id, dataset_id)
     assert session_id in nodes_module._session_cache
-    assert nodes_module._session_cache[session_id]["frames"][dataset_id] is frame1
+    cached = nodes_module._session_cache[session_id]["frames"][dataset_id]
 
-    # Second reference (e.g. a later run of the same session): cache HIT, same object.
+    # Any further disk load would blow up loudly — a HIT is the only way through.
+    def _no_reread(_dataset_id: str) -> pd.DataFrame:
+        raise AssertionError("cache HIT expected — _load_dataframe must not be called")
+
+    monkeypatch.setattr(nodes_module, "_load_dataframe", _no_reread)
+
+    # Second reference (e.g. a later run of the same session): cache HIT.
     frame2 = nodes_module._session_load_frame(session_id, dataset_id)
-    assert frame2 is frame1
+    # The cached entry object is stable across both calls...
+    assert nodes_module._session_cache[session_id]["frames"][dataset_id] is cached
+    # ...and each turn gets a value-equal but distinct per-turn snapshot.
+    pd.testing.assert_frame_equal(frame2, frame1)
+    assert frame2 is not frame1
 
 
 def test_session_cache_separate_sessions_do_not_share(uploads_dir):
@@ -160,9 +171,22 @@ def test_session_cache_separate_sessions_do_not_share(uploads_dir):
     f1 = nodes_module._session_load_frame("s1", dataset_id)
     f2 = nodes_module._session_load_frame("s2", dataset_id)
 
-    assert nodes_module._session_cache["s1"]["frames"][dataset_id] is f1
-    assert nodes_module._session_cache["s2"]["frames"][dataset_id] is f2
+    # Each session holds its OWN cached entry — distinct objects, no sharing.
+    cached_s1 = nodes_module._session_cache["s1"]["frames"][dataset_id]
+    cached_s2 = nodes_module._session_cache["s2"]["frames"][dataset_id]
+    assert cached_s1 is not cached_s2
     assert f1 is not f2
+
+    # Both sessions' returns carry the correct on-disk values.
+    expected = pd.DataFrame(
+        {
+            "product": ["a", "b", "c", "d"],
+            "price": [10.0, 20.0, 30.0, 40.0],
+            "qty": [1, 2, 3, 4],
+        }
+    )
+    pd.testing.assert_frame_equal(f1, expected)
+    pd.testing.assert_frame_equal(f2, expected)
 
 
 def test_single_turn_does_not_populate_session_cache(uploads_dir):

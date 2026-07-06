@@ -190,11 +190,23 @@ def _safe_memory_block() -> str:
 
 
 def _session_load_frame(session_id: str, dataset_id: str) -> pd.DataFrame:
-    """Return the DataFrame for `dataset_id` within `session_id`, using the cache.
+    """Return a per-turn SNAPSHOT of `dataset_id`'s DataFrame within `session_id`.
 
     On a cache HIT: reuse the stored DataFrame and LRU-touch the session. On a
     MISS: load via `_load_dataframe`, store it, and bound the cache to
     `_SESSION_CACHE_MAX` sessions (evict the oldest on overflow).
+
+    Per-turn isolation (Phase 11): BOTH return paths hand back
+    `frame.copy(deep=False)` — never the cached object itself. Under pandas 3.x
+    Copy-on-Write (always on; `pd.options.mode.copy_on_write` is a deprecated
+    no-op that emits `Pandas4Warning` and must NOT be set) the shallow copy is a
+    near-zero-cost lazy snapshot: a turn's in-place mutation (e.g.
+    `df1['Date'] = pd.to_datetime(df1['Date'])`) copies only the mutated
+    columns and never leaks into the cached original, so later turns keep seeing
+    the on-disk dtypes/values until `invalidate_dataset_cache` evicts the entry.
+    Within a single run the returned object still flows through that run's
+    namespace (`_dataframes[run_id]`), so intra-run mutation self-visibility is
+    unchanged — the isolation boundary is per TURN, not per step.
     """
     entry = _session_cache.get(session_id)
     if entry is None:
@@ -208,7 +220,7 @@ def _session_load_frame(session_id: str, dataset_id: str) -> pd.DataFrame:
     frames: dict[str, pd.DataFrame] = entry["frames"]
     if dataset_id in frames:
         logger.info("session_cache_hit", session_id=session_id, dataset_id=dataset_id)
-        return frames[dataset_id]
+        return frames[dataset_id].copy(deep=False)
 
     frame = _load_dataframe(dataset_id)
     frames[dataset_id] = frame
@@ -222,7 +234,7 @@ def _session_load_frame(session_id: str, dataset_id: str) -> pd.DataFrame:
         _session_cache.pop(oldest, None)
         logger.info("session_cache_evict", session_id=oldest)
 
-    return frame
+    return frame.copy(deep=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -874,6 +886,19 @@ def release_loaded_ids(run_id: str) -> None:
 
 def _release_dataframe(run_id: str) -> None:
     _dataframes.pop(run_id, None)
+
+
+def release_dataframe(run_id: str) -> None:
+    """Drop the run's `_dataframes` bundle (catalog + lazily-loaded frames +
+    persisted eval namespace) — public wrapper over `_release_dataframe`.
+
+    Used by the runner's exception-safe `finally` (Phase 11) so an uncaught
+    exception escaping any node cannot leak the bundle for the process lifetime.
+    Idempotent (`pop(run_id, None)`), matching `release_loaded_ids` /
+    `release_derived_created` — the double release on the normal terminal-node
+    path is harmless.
+    """
+    _release_dataframe(run_id)
 
 
 def invalidate_dataset_cache(dataset_id: str) -> None:

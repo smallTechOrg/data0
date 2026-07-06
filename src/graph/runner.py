@@ -33,6 +33,7 @@ from graph.cancellation import discard as discard_cancel
 from graph.nodes import (
     get_derived_created,
     get_loaded_ids,
+    release_dataframe,
     release_derived_created,
     release_loaded_ids,
 )
@@ -318,7 +319,27 @@ def run_agent(
     }
 
     config = {"recursion_limit": cap * 3 + 10}
-    final: dict[str, Any] = agentic_ai.invoke(initial, config=config)
+    try:
+        final: dict[str, Any] = agentic_ai.invoke(initial, config=config)
+
+        # Success-path registry READS — inside the `try`, before the `finally`
+        # releases the registries.
+        # The datasets the agent ACTUALLY loaded this run (used-tracking) — the
+        # run's real dataset set (accurate "Datasets used" + correct C15 cascade
+        # scope).
+        used_ids = get_loaded_ids(run_id)
+        # Derived datasets the agent persisted via save_dataset this run (C25).
+        derived_dataset_ids = get_derived_created(run_id)
+    finally:
+        # Exception-safe release (Phase 11): the three terminal nodes are NOT the
+        # only release path — an uncaught exception escaping any node used to leak
+        # this run's registries (including the persisted eval namespace) for the
+        # process lifetime. All three helpers are idempotent (`pop(run_id, None)`),
+        # so the double release on the success path is harmless. An exception is
+        # NOT swallowed here — it still propagates to the caller unchanged.
+        release_dataframe(run_id)
+        release_loaded_ids(run_id)
+        release_derived_created(run_id)
 
     status = final.get("status", "completed")
     answer = final.get("answer")
@@ -329,15 +350,6 @@ def run_agent(
     error_message = final.get("error_message") or final.get("error")
     selector_reasoning = None  # agent-driven selection: no selector reasoning
     charts = final.get("charts") or []
-    # The datasets the agent ACTUALLY loaded this run (used-tracking) — the run's
-    # real dataset set (accurate "Datasets used" + correct C15 cascade scope). Read
-    # the run-scoped registry, then release it.
-    used_ids = get_loaded_ids(run_id)
-    release_loaded_ids(run_id)
-    # Derived datasets the agent persisted via save_dataset this run (C25). Read
-    # the run-scoped registry, then release it.
-    derived_dataset_ids = get_derived_created(run_id)
-    release_derived_created(run_id)
     is_best_effort = status == "completed" and error_message in (
         "max_iterations",
         "consecutive_errors",

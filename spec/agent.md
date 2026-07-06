@@ -108,7 +108,7 @@ This replaces the skeleton's 4-field `AgentState`. `TypedDict, total=False` per 
 
 **Reads:** `dataset_ids`, `session_id`, `run_id`. **Writes:** `dataset_context`, `error` (on fatal). **LLM:** no.
 
-**Behaviour:** For each `dataset_id`, check the session DataFrame cache (C27) keyed by `session_id` — on hit reuse + LRU-touch; on miss load Parquet (preferred) or CSV (fallback) and cache. Single-turn (no `session_id`) uses a run-scoped `_dataframes[run_id]` dict instead. Build `dataset_context` from each dataset's notes/facts and column schema. A fatal load/lookup error sets `error` → routes to `handle_error`. (Cache logic lands in Phase 3; Phase 2's `setup` is the simple per-run load.)
+**Behaviour:** For each `dataset_id`, check the session DataFrame cache (C27) keyed by `session_id` — on hit reuse + LRU-touch; on miss load Parquet (preferred) or CSV (fallback) and cache. Single-turn (no `session_id`) uses a run-scoped `_dataframes[run_id]` dict instead. Build `dataset_context` from each dataset's notes/facts and column schema. A fatal load/lookup error sets `error` → routes to `handle_error`. (Cache logic lands in Phase 3; Phase 2's `setup` is the simple per-run load.) **Per-turn isolation contract (Phase 11):** the cache never hands out the stored frame object itself — `_session_load_frame` returns a shallow copy (`frame.copy(deep=False)`) on BOTH the hit and miss paths. Under pandas-3 always-on Copy-on-Write that copy is a near-zero-cost lazy snapshot: an in-place mutation by one turn's generated code (e.g. a `to_datetime` dtype change) triggers per-column copy-on-write on the returned copy, so the cached original stays pristine and later turns of the session NEVER see another turn's mutations. Within a single run, the same returned object flows through that run's `_dataframes[run_id]` namespace, so intra-run self-visibility of mutations is unchanged — the isolation boundary is per-turn, not per-step. (`pd.options.mode.copy_on_write` must NOT be set anywhere — it is a deprecated no-op in pandas 3.x, where CoW is always on.)
 
 | System | Operation | On Failure |
 |--------|-----------|------------|
@@ -234,6 +234,7 @@ The stub provider (offline fallback) branches **only on the injected node tag**,
 | Scope | Mechanism | What is stored |
 |-------|-----------|----------------|
 | **Within a run** | LangGraph `AgentState` | question, action_history, charts, tokens, iteration_count |
+| **Within a session (frames)** | session DataFrame cache (C27, `_session_cache` in `src/graph/nodes.py`) | loaded DataFrames reused across turns (LRU-bounded); each turn receives a per-turn shallow-copy snapshot of the cached frame (pandas-3 always-on CoW makes this near-zero cost), so turns never see another turn's in-place mutations — the cached original keeps its on-disk dtypes/values until `invalidate_dataset_cache` evicts it (Phase 11) |
 | **Across runs** | SQLite `settings` (`global_memory`, `global_memory_facts`) | user-authoritative global memory text (≤ 4000 chars, enforced at `PATCH /memory`) + compressed facts; `get_memory_block()` injects FACTS-ONLY into every `plan_action` prompt once facts exist, falling back to the raw text only when there are no facts yet (never both — sending raw text plus a summary of it is pure per-iteration token waste) |
 | **Conversation** | `conversation_sessions` + `query_runs` (`session_id`) | prior turns; loaded into `conversation_history` for multi-turn |
 | **Dataset notes** | `datasets.context` / `context_facts` | per-dataset notes injected into `dataset_context` |
@@ -253,6 +254,8 @@ The pre-flight **clarification** (C26) is the only pause: an ambiguous question 
 **Node-level:** each node catches its own exceptions. Recoverable execution errors are recorded in `action_history` and looped back to `plan_action`. Fatal errors set `state["error"]` and route to `handle_error`.
 
 **Graph-level (`handle_error`):** reads `state.error`, `state.run_id`; updates the `query_runs` row → `status=failed`, `error_message`; logs with `run_id` context; releases the DataFrame; terminates.
+
+**Runner-level (`try/finally` — the exception-safe release guarantee, Phase 11):** the three terminal nodes are NOT the only release path. The runner wraps the graph invoke in a `try/finally` whose `finally` releases all three run-scoped registries — `_dataframes` (via the module-private `_release_dataframe` or a thin public wrapper), `_loaded_ids` (`release_loaded_ids`), and `_derived_created` (`release_derived_created`). All three are idempotent `pop(run_id, None)`, so the double release on the normal path is harmless, and the registries (including the persisted eval namespace) are freed on EVERY exit path from a run — including an uncaught exception escaping any node, which previously leaked them for the process lifetime. The success path's registry READS (`get_loaded_ids`/`get_derived_created`) happen inside the `try`, before the `finally` releases them.
 
 **Resume / retry:** no checkpointer — runs are short and single-shot; a failed run is re-issued as a new `/ask`. (No `SqliteSaver` needed; no long-running pause beyond the synchronous clarification short-circuit.)
 
