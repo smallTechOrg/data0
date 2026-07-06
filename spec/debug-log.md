@@ -47,16 +47,40 @@
   C13+C17 are all SHIPPED, and C11's JSON half was fixed by D9. Remaining: **TXT delimiter
   sniffing** — `.txt` uploads are hardcoded `sep="\t"` in `src/api/upload.py` `_parse_dataframe`,
   so comma/pipe-delimited `.txt` files misparse to a single column.
-- **Free-tier Gemini key = 15 req/min.** Running `tests/integration/ tests/e2e/` back-to-back
-  ALWAYS produces 429 `RESOURCE_EXHAUSTED` noise. Protocol: pace the run (file-by-file or small
-  groups with pauses) and re-run 429-only failures in isolation before calling anything a real
-  failure. Recurred on every full-suite gate since 2026-07-06.
+- **Free-tier Gemini key: 15 req/min AND 500 req/day** (updated 2026-07-07). The per-minute
+  throttle now self-heals via the provider's adaptive 429 retry (`9dd9fa6` — see Log). The
+  DAILY cap does not (retrying is pointless; the retry fail-fasts it by design) — a heavy
+  testing day can brick all real-key work until ~midnight Pacific. Empirically confirmed the
+  key is SERVED as free tier despite the account having paid billing (both quota IDs say
+  `FreeTier`): the key's project isn't linked to billing. Fix in AI Studio (link project to
+  billing, or mint a key under the billed project) — lifts both caps. Pending: one live
+  re-verification of the retry→success path (un-paced full suite) after quota reset.
 - **`ERDiagramPanel.tsx:550`** — pre-existing `react-hooks/exhaustive-deps` lint warning
   (`viewSize` missing from a `useMemo`). Style-tier; fold into the next edit of that file.
 
 ---
 
 ## Log (newest first)
+
+### 2026-07-07 — 429 storms in test gates: fixed adaptively; daily-cap discovered (9dd9fa6)
+
+- **Symptom:** every back-to-back real-key suite run since 2026-07-06 produced 11–12 spurious
+  `429 RESOURCE_EXHAUSTED` failures needing manual paced reruns; the user believed the key was
+  paid tier.
+- **Root cause(s):** (1) the key is SERVED as free tier despite paid billing on the account —
+  burst-tested empirically: exactly 15 rapid calls OK, 16th throttled with quotaId
+  `...FreeTier`; the key's Google Cloud project isn't linked to the billing account. (2) The
+  app had no 429 handling anywhere — a throttle mid-ReAct-loop failed the whole run.
+- **Fix:** adaptive retry in `GeminiProvider` — engages ONLY on an actual 429 (zero cost
+  otherwise), honors the server's suggested `retryDelay` (+0.5s) with 2/8/30s fallback, ≤3
+  retries, 90s total ceiling that fail-fasts a genuinely exhausted key. 6 offline tests with
+  real SDK error shapes. Unit suite 318 green.
+- **Live gate finding (new fact):** the verification run was blocked by a SECOND, previously
+  unknown quota — the free tier's **500-requests/DAY cap**, exhausted by the day's own gate
+  runs. The retry's ceiling fail-fast handled it exactly as designed (observed live 25×), but
+  retry→success under per-minute throttle remains unit-test-proven only until a post-reset
+  re-run. Lesson: heavy same-day gate activity is itself a quota consumer — budget it, and fix
+  the billing linkage.
 
 ### 2026-07-07 — Backlog seeded from stale parity audit without re-verification (corrected same day)
 
