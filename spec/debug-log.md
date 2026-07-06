@@ -29,18 +29,6 @@
 > test-suite pacing). This list remains the technical record of each hazard; when one ships,
 > move it into the Log section above with its fix entry.
 
-- **Session DataFrame cache is mutable-shared across turns.** `_session_cache` hands every turn
-  the SAME frame object, so in-place mutations by the model (e.g. `df1['Date'] =
-  pd.to_datetime(df1['Date'])`) persist for the whole session and change dtypes for later turns.
-  Discovered 2026-07-06 while diagnosing the chart-drop bug (it was the mechanism that put
-  Timestamps into a run that never called `to_datetime` itself). Downstream symptom fixed
-  (`90b9dba`); the shared-mutation behavior itself is unaddressed — a future fix could hand out
-  copies or snapshot dtypes, at a memory cost.
-- **`_dataframes`/`_loaded_ids`/`_derived_created` leak on an uncaught node exception.** The
-  registries are released in `finalize`/`force_finalize`/`handle_error`, but an unanticipated
-  exception inside a node propagates out of `graph.invoke()` with no `try/finally`, skipping
-  release for that run_id (process-lifetime leak). Pre-existing; more consequential now that the
-  persisted eval namespace (4daef94) lives in the same bundle. Known, unfixed.
 - **Parity-gaps: only ONE sliver still open** (corrected 2026-07-07 — the original entry here
   copied five gaps from the stale 2026-06-29 audit without re-verifying; see the Log entry of
   2026-07-07 "Backlog seeded from stale parity audit"). Verified against HEAD: C9, C14, C16, and
@@ -61,6 +49,32 @@
 ---
 
 ## Log (newest first)
+
+### 2026-07-07 — Session cache shared mutable frames across turns (67a4569, Phase 11)
+
+- **Symptom:** an in-place mutation by the model in one turn (e.g. `df1['Date'] =
+  pd.to_datetime(df1['Date'])`) silently persisted for the whole session, changing dtypes for
+  every later turn — the trigger mechanism behind the 2026-07-06 chart outage.
+- **Root cause:** `_session_load_frame` returned the SAME cached frame object to every turn.
+- **Fix:** `frame.copy(deep=False)` on both cache-hit and cache-miss paths. Installed pandas is
+  3.0.3 where Copy-on-Write is always-on (the `copy_on_write` option is a deprecated no-op), so
+  the shallow copy IS the CoW mechanism — a lazy, near-zero-RAM per-turn snapshot. Regression
+  test reproduces the exact outage flow (`tests/unit/test_session_cache_isolation.py`, 5 tests:
+  turn-1 dtype mutation → turn-2 pristine, verified as a genuine cache hit with disk re-read
+  made impossible). Two Phase-3-vintage tests pinning the superseded cache-identity contract
+  were rewritten preserving intent (spec-wins ruling, recorded in roadmap Phase 11).
+
+### 2026-07-07 — Run registries leaked on uncaught node exceptions (67a4569, Phase 11)
+
+- **Symptom:** none observed live — hardening of a diagnosed hazard (flagged during the
+  namespace-persistence exploration): an unanticipated exception inside any graph node
+  propagated out of `graph.invoke()` with no `try/finally`, skipping the three terminal nodes'
+  registry release and leaking that run's `_dataframes` (incl. the persisted eval namespace),
+  `_loaded_ids`, and `_derived_created` for the process lifetime.
+- **Fix:** `run_agent` wraps the invoke in `try/finally` releasing all three registries
+  (idempotent pops); the exception still propagates. `tests/unit/test_runner_registry_release.py`
+  proves a mid-graph crash releases everything while the success path is unchanged. Unit suite:
+  343 passed.
 
 ### 2026-07-07 — 429 storms in test gates: fixed adaptively; daily-cap discovered (9dd9fa6)
 
