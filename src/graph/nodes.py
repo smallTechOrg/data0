@@ -739,7 +739,15 @@ def execute_action(state: AgentState) -> AgentState:
             touched.append(dataset_id)
         return frame
 
-    namespace = build_lazy_namespace(bundle["catalog"], _loader, bundle["derived_frames"])
+    # The namespace is persisted on `bundle` (which itself lives in `_dataframes[run_id]`
+    # for the run's lifetime) and REUSED across iterations, so ordinary variables the
+    # model assigns (e.g. `tmp = df1.head(3)`) carry over to the next step exactly like
+    # cells in the same Jupyter kernel — only `save_dataset`/`echart` below are rebound
+    # each call since their accumulators are inherently per-call.
+    namespace = bundle.get("namespace")
+    if namespace is None:
+        namespace = build_lazy_namespace(bundle["catalog"], _loader, bundle["derived_frames"])
+        bundle["namespace"] = namespace
 
     # Override the module-level stub with a run-aware `save_dataset` that knows the
     # producing run_id + parent dataset_ids and records each created derived id

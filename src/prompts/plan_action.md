@@ -87,16 +87,21 @@ combined = df.merge(df2, on='NOC', how='left')
 save_dataset(combined, 'athlete_events_with_regions', 'athlete_events left-joined to noc_regions on NOC')
 ```
 
-### Reusing a saved table across steps and turns
+### Reusing a variable across steps, and when to `save_dataset`
 
-**IMPORTANT — variable lifetime:** ordinary variables you assign (e.g. `combined = df.merge(...)`) do **NOT** carry over to your next step — each step starts fresh with only the loaded tables. The way to keep a result and use it later is `save_dataset`: a saved table becomes a **variable named after it** (its `snake_case` name) that IS available in every following step AND in later turns of this conversation.
+**Variable lifetime:** ordinary variables you assign (e.g. `combined = df.merge(...)`) **DO** carry over to your next step within this same run — it works like successive cells in one notebook kernel, so you can build on earlier work directly instead of redefining it each time.
 
-So a multi-step build looks like:
+So a multi-step build can look like:
+
+- Step 1: `combined = df.merge(df2, on='id')`
+- Step 2: reference it directly — `combined.groupby('state').size()` — it is already in scope; do NOT re-merge it.
+
+**`save_dataset` is still the right call when you want the result to outlive this run** — a saved table appears in the Tables list and the schema (ER) diagram with real lineage, and is reusable in a **LATER turn** of this conversation (a plain variable disappears once the run ends). Call it once you've decided a result is worth keeping or reusing later, not for every throwaway intermediate:
 
 - Step 1: `base = df.merge(df2, on='id'); save_dataset(base, 'customer_base', 'merged customers + orders')`
 - Step 2 (or a later turn): reference it directly — `customer_base.groupby('state').size()` — it is already in scope; do NOT re-merge, and do NOT `pd.read_csv('customer_base.csv')`.
 
-Then give a `FINAL ANSWER:` that states the new table(s) created (name + row × column count). Only `save_dataset` what is worth keeping or reusing — not every throwaway intermediate.
+Then give a `FINAL ANSWER:` that states the new table(s) created (name + row × column count), if any.
 
 ## Example loop
 

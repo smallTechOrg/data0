@@ -194,6 +194,61 @@ def test_run_releases_dataframe_registry(uploads_dir):
     assert result["run_id"] not in nodes_module._dataframes
 
 
+def test_ordinary_variable_persists_across_dependent_steps(uploads_dir, monkeypatch):
+    """Regression for the rebuilt-namespace bug: an ordinary variable a model
+    assigns in one step (e.g. `tmp = df1.head(2)`) must still be bound in the
+    NEXT step of the same run — the persisted `bundle["namespace"]` (nodes.py's
+    `execute_action`) carries ordinary locals forward exactly like successive
+    cells in one Jupyter kernel, not just `save_dataset`'d frames.
+
+    The stock `StubProvider` always finalizes after exactly one action, so it
+    can never exercise two dependent steps — this test scripts its own
+    sequence of planner replies via a fake `LLMClient` to force two REAL,
+    dependent ReAct iterations.
+    """
+    from graph.runner import run_agent
+    from llm.providers.base import LLMResponse
+
+    dataset_id = _make_dataset(uploads_dir)
+
+    # Step 1 defines `tmp`; step 2 REFERENCES that same name (with no re-load in
+    # between) — this only works if `tmp` is still bound from step 1.
+    scripted_replies = iter(
+        [
+            "tmp = df1.head(2)",
+            "tmp['price'].sum()",
+            "FINAL ANSWER: [stub] done",
+        ]
+    )
+
+    class _ScriptedLLMClient:
+        def complete(self, prompt: str, *, system: str | None = None) -> LLMResponse:
+            text = next(scripted_replies)
+            return LLMResponse(text, max(1, len(text) // 4), max(1, len(text) // 4))
+
+    monkeypatch.setattr(nodes_module, "LLMClient", _ScriptedLLMClient)
+
+    result = run_agent("What is the sum of price for the first two rows?", [dataset_id])
+
+    assert result["status"] == "completed"
+    steps = result["action_history"]
+    assert len(steps) >= 2
+    step1, step2 = steps[0], steps[1]
+    assert step1["action"] == "tmp = df1.head(2)"
+    assert step1["is_error"] is False
+    # The bug: step 2 referencing `tmp` would raise a NameError (the namespace
+    # was rebuilt fresh each iteration, so `tmp` never carried over).
+    assert step2["action"] == "tmp['price'].sum()"
+    assert step2["is_error"] is False, f"expected tmp to persist, got: {step2['result']}"
+    assert "NameError" not in step2["result"]
+    # tmp = df1.head(2) -> price column [10.0, 20.0] -> sum 30.0
+    assert "30" in step2["result"]
+
+    # The release-on-completion invariant must still hold with the persisted
+    # namespace living inside the same released bundle.
+    assert result["run_id"] not in nodes_module._dataframes
+
+
 # --------------------------------------------------------------------------- #
 # Error path: a referenced dataset whose file is missing surfaces as a STEP error
 # --------------------------------------------------------------------------- #
