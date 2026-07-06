@@ -781,8 +781,11 @@ def execute_action(state: AgentState) -> AgentState:
 
     result_str, _ignored_charts, is_error, error_str = eval_expression(expr, namespace)
     for option in captured_options:
+        # Two-layer serialisation: the sandbox coerces values properly
+        # (`_as_jsonable`); `default=str` here is the safety net so any value that
+        # slips past it degrades to its string form instead of dropping the chart.
         try:
-            charts.append(json.dumps(option))
+            charts.append(json.dumps(option, default=str))
         except Exception as exc:  # noqa: BLE001 — a bad option must not crash the run
             logger.warning("chart_serialize_failed", run_id=run_id, error=str(exc))
 

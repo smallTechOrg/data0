@@ -27,6 +27,7 @@ from, and never crashes a run.
 from __future__ import annotations
 
 import ast
+import datetime
 import re
 import traceback
 from typing import Any
@@ -245,8 +246,14 @@ def _as_jsonable(value: Any) -> Any:
 
     ECharts options are `json.dumps`-ed downstream, so every value placed into an
     option must survive `json.dumps`. numpy ints/floats and NaN are the common
-    offenders coming out of a DataFrame.
+    offenders coming out of a DataFrame; datetime-likes (Timestamp/datetime/date/
+    datetime64 -> ISO string, NaT -> None, Timedelta/Period -> str) are the other —
+    a `pd.to_datetime`-ed x-column must never make json.dumps drop the chart.
     """
+    # np.timedelta64 subclasses np.signedinteger, so it must be caught BEFORE the
+    # np.integer branch or it would coerce to a bare int.
+    if isinstance(value, np.timedelta64):
+        return str(value)
     if isinstance(value, (np.integer,)):
         return int(value)
     if isinstance(value, (np.floating,)):
@@ -258,6 +265,21 @@ def _as_jsonable(value: Any) -> Any:
         return None
     if isinstance(value, (np.ndarray,)):
         return [_as_jsonable(v) for v in value.tolist()]
+    # NaT MUST be checked before the datetime branch: pd.NaT IS a datetime
+    # instance and its .isoformat() returns the literal string 'NaT'.
+    if value is pd.NaT:
+        return None
+    if isinstance(value, np.datetime64):
+        # Not a `datetime` subclass — promote to Timestamp (NaT-safe) and recurse.
+        return _as_jsonable(pd.Timestamp(value))
+    if isinstance(value, datetime.datetime):  # covers pd.Timestamp
+        iso = value.isoformat()
+        # A pure date (tz-naive midnight) reads better on an axis without T00:00:00.
+        return iso[: -len("T00:00:00")] if iso.endswith("T00:00:00") else iso
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    if isinstance(value, (pd.Timedelta, pd.Period)):
+        return str(value)
     return value
 
 

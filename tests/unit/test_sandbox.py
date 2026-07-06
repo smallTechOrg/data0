@@ -1,11 +1,14 @@
 """Unit tests for graph.sandbox helpers — no LLM key required."""
 
+import datetime as dt
 import json
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from graph.sandbox import (
+    _as_jsonable,
     _stringify,
     build_lazy_namespace,
     build_namespace,
@@ -287,6 +290,113 @@ def test_eval_expression_echart_registers_one_chart_via_accumulator():
     assert len(captured) == 1
     parsed = json.loads(json.dumps(captured[0]))
     assert "series" in parsed
+
+
+# --- C4: datetime-safe chart serialisation ----------------------------------
+
+
+def test_echart_datetime_x_axis_roundtrips_json():
+    """A datetime x-column (e.g. after pd.to_datetime) must survive json.dumps —
+    x-axis values come out as ISO-like date strings, not pd.Timestamp objects."""
+    df = pd.DataFrame(
+        {"Date": pd.date_range("2024-01-01", periods=3), "Close": [1.0, 2.0, 3.0]}
+    )
+    captured = []
+    echart = make_echart(on_chart=captured.append)
+    echart("line", df, x="Date", y="Close", title="t")
+
+    assert len(captured) == 1
+    parsed = json.loads(json.dumps(captured[0]))  # must not raise TypeError
+    xdata = parsed["xAxis"]["data"]
+    assert xdata == ["2024-01-01", "2024-01-02", "2024-01-03"]
+    assert all(isinstance(v, str) for v in xdata)
+
+
+def test_echart_nat_becomes_json_null():
+    """A pd.NaT in a charted column serialises to JSON null — never the string 'NaT'."""
+    df = pd.DataFrame(
+        {
+            "Date": [pd.Timestamp("2024-01-01"), pd.NaT, pd.Timestamp("2024-01-03")],
+            "Close": [1.0, 2.0, 3.0],
+        }
+    )
+    echart = make_echart()
+    option = echart("line", df, x="Date", y="Close")
+    xdata = json.loads(json.dumps(option))["xAxis"]["data"]
+    assert xdata[1] is None
+    assert "NaT" not in xdata
+
+
+def test_as_jsonable_timestamp_midnight_becomes_plain_date():
+    """A midnight, tz-naive Timestamp renders as the plain date (no T00:00:00)."""
+    assert _as_jsonable(pd.Timestamp("2024-01-01")) == "2024-01-01"
+
+
+def test_as_jsonable_timestamp_with_time_keeps_full_iso():
+    assert _as_jsonable(pd.Timestamp("2024-01-01 09:30:15")) == "2024-01-01T09:30:15"
+
+
+def test_as_jsonable_python_datetime_and_date():
+    assert _as_jsonable(dt.datetime(2024, 3, 5, 14, 0, 1)) == "2024-03-05T14:00:01"
+    assert _as_jsonable(dt.datetime(2024, 3, 5)) == "2024-03-05"  # midnight -> date
+    assert _as_jsonable(dt.date(2024, 3, 5)) == "2024-03-05"
+
+
+def test_as_jsonable_np_datetime64():
+    assert _as_jsonable(np.datetime64("2024-01-02")) == "2024-01-02"
+    assert _as_jsonable(np.datetime64("2024-01-02T10:20:30")) == "2024-01-02T10:20:30"
+
+
+def test_as_jsonable_nat_is_none():
+    """NaT -> None. Trap: pd.NaT IS a datetime instance and isoformat()s to 'NaT',
+    so the missing-value check must win over the datetime branch."""
+    assert _as_jsonable(pd.NaT) is None
+    assert _as_jsonable(np.datetime64("NaT", "ns")) is None
+
+
+def test_as_jsonable_timedelta_and_period_stringify():
+    assert _as_jsonable(pd.Timedelta("1 days 02:00:00")) == "1 days 02:00:00"
+    assert _as_jsonable(np.timedelta64(3, "D")) == "3 days"
+    assert _as_jsonable(pd.Period("2024-01", freq="M")) == "2024-01"
+
+
+def test_as_jsonable_existing_branches_unchanged():
+    """The pre-existing numpy/NaN coercions still behave exactly as before."""
+    assert _as_jsonable(np.int64(7)) == 7
+    assert _as_jsonable(np.float64(1.5)) == 1.5
+    assert _as_jsonable(np.float64("nan")) is None
+    assert _as_jsonable(float("nan")) is None
+    assert _as_jsonable(np.bool_(True)) is True
+    assert _as_jsonable(np.array([1, 2])) == [1, 2]
+    assert _as_jsonable("plain") == "plain"
+
+
+def test_execute_action_capture_degrades_exotic_value_via_default_str():
+    """Belt-and-braces at the nodes-level capture: an option value that slips past
+    `_as_jsonable` (here via the raw-option escape hatch, which is passed through
+    uncoerced) still serialises via json.dumps(..., default=str) — the chart is
+    kept with the value degraded to its string form, never silently dropped."""
+    import graph.nodes as nodes_module
+
+    state = {
+        "run_id": "r-exotic-chart",
+        "llm_response": (
+            "echart('bar', option={"
+            "'xAxis': {'type': 'category', 'data': [pd.Interval(0, 1)]}, "
+            "'yAxis': {'type': 'value'}, "
+            "'series': [{'type': 'bar', 'data': [1]}]})"
+        ),
+        "action_history": [],
+        "charts": [],
+        "iteration_count": 1,
+    }
+    result = nodes_module.execute_action(state)
+
+    assert len(result["charts"]) == 1  # NOT vaporised
+    parsed = json.loads(result["charts"][0])
+    assert parsed["xAxis"]["data"] == [str(pd.Interval(0, 1))]
+    # The executed step itself did not error.
+    assert result["action_history"][-1]["is_error"] is False
 
 
 # --- C19 agent-driven selection: lazy namespace -----------------------------
