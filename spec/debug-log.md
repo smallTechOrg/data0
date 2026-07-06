@@ -41,11 +41,12 @@
   exception inside a node propagates out of `graph.invoke()` with no `try/finally`, skipping
   release for that run_id (process-lifetime leak). Pre-existing; more consequential now that the
   persisted eval namespace (4daef94) lives in the same bundle. Known, unfixed.
-- **Parity-gaps still open (from the 2026-06-29 audit, `spec/parity-gaps.md`):**
-  C11 multi-format parsing shallow + untested (TXT tab-only, bare `pd.read_json`);
-  C14 multi-dataset querying wired but no end-to-end cross-dataset test;
-  C9 session bulk multi-select missing; C16 notes-file-on-upload (re-verify first — a fix commit
-  may already cover it); C13+C17 folder drop + staged upload queue.
+- **Parity-gaps: only ONE sliver still open** (corrected 2026-07-07 — the original entry here
+  copied five gaps from the stale 2026-06-29 audit without re-verifying; see the Log entry of
+  2026-07-07 "Backlog seeded from stale parity audit"). Verified against HEAD: C9, C14, C16, and
+  C13+C17 are all SHIPPED, and C11's JSON half was fixed by D9. Remaining: **TXT delimiter
+  sniffing** — `.txt` uploads are hardcoded `sep="\t"` in `src/api/upload.py` `_parse_dataframe`,
+  so comma/pipe-delimited `.txt` files misparse to a single column.
 - **Free-tier Gemini key = 15 req/min.** Running `tests/integration/ tests/e2e/` back-to-back
   ALWAYS produces 429 `RESOURCE_EXHAUSTED` noise. Protocol: pace the run (file-by-file or small
   groups with pauses) and re-run 429-only failures in isolation before calling anything a real
@@ -56,6 +57,21 @@
 ---
 
 ## Log (newest first)
+
+### 2026-07-07 — Backlog seeded from stale parity audit without re-verification (corrected same day)
+
+- **Symptom:** the newly-promoted "parity-gap closure cluster" backlog item claimed five open
+  gaps (C9/C11/C13+C17/C14/C16, ~5–6.5 hrs of work); the user challenged it — most were already
+  built.
+- **Root cause:** the debug-log seed and the backlog promotion copied `spec/parity-gaps.md`
+  (a 2026-06-29 point-in-time audit) verbatim, ignoring that doc's OWN Step-0 warning to
+  re-verify each item against current HEAD before acting on it.
+- **Fix:** verified each against code — C9 (bulk session select), C14 (multi-dataset e2e test),
+  C16 (notes file), C13+C17 (folder drop + staged queue) all shipped; C11's JSON half fixed by
+  D9. The backlog item shrank to one Tier-3 sliver: TXT delimiter sniffing (~30–45 min).
+  `spec/parity-gaps.md` check-states updated to match. Lesson (same as the 9f926c2 entry):
+  audits and audit-derived docs go stale — re-verify against HEAD before promoting them into
+  plans, especially when the source doc explicitly says to.
 
 ### 2026-07-07 — Ordinary variables vanished between ReAct steps (4daef94)
 

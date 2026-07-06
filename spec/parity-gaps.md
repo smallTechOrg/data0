@@ -34,24 +34,24 @@ This branch is fully pushed to its upstream (`fork/feature/data-analysis-agent-v
 - [x] **C8 — Column cap already implemented (re-verified 2026-07-01).** `_stringify` in `src/graph/sandbox.py` already caps at 20 columns with a "[showing 20 of N columns]" note (explicitly commented `# Cap columns (C8: up to ~20 cols per spec)`), applied before the total-char cap so it isn't defeated by truncation. Landed in `32f2cb2` alongside `tests/unit/test_sandbox.py`'s "D4: column cap" test block (5 green tests) — just never cross-referenced back to this doc.
   - Files: `src/graph/sandbox.py` (`_stringify`), `tests/unit/test_sandbox.py`
 
-- [ ] **C11 — Multi-format parsing is shallow + untested.** TXT is parsed tab-only (no delimiter sniff); JSON uses bare `pd.read_json` (fails on column-keyed / dict-of-lists shapes A handles). No non-CSV format has a test. Deepen parsing and add format tests (TSV / TXT-sniff / JSON-variants / Excel).
-  - Files: `src/api/upload.py` (`_parse_dataframe`), `tests/unit/` + `tests/integration/`
+- [ ] **C11 — Multi-format parsing (MOSTLY CLOSED — re-verified 2026-07-07; one sliver left).** The JSON half was fixed by D9: `_parse_dataframe` explicitly detects the split orientation and falls back across orients (records / column-keyed / split all parse). A TSV upload test exists (`tests/unit/test_api_stub.py`). **Remaining:** TXT is still hardcoded `sep="\t"` — no delimiter sniff, so comma/pipe-delimited `.txt` misparses to a single column. Tracked as its own small Tier-3 roadmap item ("TXT delimiter sniffing").
+  - Files: `src/api/upload.py` (`_parse_dataframe` TXT branch)
 
-- [ ] **C14 — Multi-dataset querying wired but unproven.** Sandbox builds `df` / `df1` / `df2` + filename aliases and `/ask` accepts `dataset_ids`, but no test drives an actual cross-dataset join/answer through the agent. Add an end-to-end multi-dataset test.
-  - Files: `tests/integration/`
+- [x] **C14 — Multi-dataset e2e test shipped (re-verified 2026-07-07).** `tests/integration/test_multi_dataset_real.py` drives a real cross-dataset question through the agent against real Gemini; green in the 2026-07-07 gate runs.
+  - Files: `tests/integration/test_multi_dataset_real.py`
 
 ---
 
 ## Tier 3 — Ingestion UX (one workstream — do C16 + C13 + C17 together)
 
-- [ ] **C9 — Session bulk multi-select.** Sidebar has per-row delete + clear-all, but no checkbox multi-select / bulk-delete (A has `sess-check` + `deleteSelectedSessions`). Add multi-select UI + a bulk-delete-by-ids endpoint.
+- [x] **C9 — Session bulk multi-select shipped (re-verified 2026-07-07).** `SessionSidebar.tsx` has per-row checkboxes, Select all / Deselect all, and "Delete selected (N)" via `api.bulkDeleteSessions` (bulk-delete-by-ids endpoint).
   - Files: `frontend/src/components/analyse/SessionSidebar.tsx`, `src/api/sessions.py`
 
-- [ ] **C16 — Notes file on upload.** ⚠️ **Re-verify first** — a `fix(drift): implement C16 notes_file` commit exists on HEAD; this may already be closed. Audit (pre-fix) found: UI never sends `notes_file`; backend *replaces* context instead of *appending*, no `.txt/.md` validation, no combined 4000-char cap. Confirm current state, then close any remainder.
-  - Files: `frontend/src/components/analyse/UploadCard.tsx`, `frontend/src/lib/api.ts`, `src/api/upload.py`
+- [x] **C16 — Notes file on upload shipped (re-verified 2026-07-07).** `src/api/upload.py` accepts `notes_file` (wins over the form context field) with the 4000-char cap applied.
+  - Files: `src/api/upload.py` (~lines 106–132)
 
-- [ ] **C13 + C17 — Folder drop + staged upload queue.** No folder drop (`webkitGetAsEntry`) and no editable pre-commit staging queue — files upload immediately on select. Add the staged queue (review / annotate / rename / remove before commit) and folder drop; pairs with C16's per-file notes.
-  - Files: `frontend/src/components/analyse/UploadCard.tsx`, `frontend/src/lib/api.ts`
+- [x] **C13 + C17 — Folder drop + staged upload queue shipped (re-verified 2026-07-07).** Documented as a shipped capability in `spec/capabilities/multi-file-folder-drop.md`; the Database tab's merged Upload card carries the drag-and-drop + staged-uploads UI.
+  - Files: `spec/capabilities/multi-file-folder-drop.md`, `frontend/src/components/database/`
 
 ---
 
