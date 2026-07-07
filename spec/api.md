@@ -21,11 +21,60 @@ Multipart `file`; form `context?`, `notes_file?`; query `force=false`. Parses (p
 
 > **Notes truncation:** when `notes_file` is supplied its decoded text is **silently truncated to 4000 characters** before being stored as `context` — no error is returned for oversized notes files. This differs from `PATCH /datasets/{id}/context`, which rejects values exceeding 4000 chars with `400 context_too_long`. The plain `context` form field is stored as-is (no server-side truncation at upload).
 
+> **Multi-sheet Excel workbooks (C38, Phase 12):** an `.xlsx`/`.xls` file whose workbook contains **≥ 2 non-empty sheets** does NOT register a dataset on this call. Instead the workbook's raw bytes are stashed server-side (in-memory, 15-min TTL, ≤4 staged workbooks, oldest evicted) and the response is the **inspect variant** below — the client then imports chosen sheets via `POST /upload/sheets`. No C10 dedup runs on this branch (nothing is persisted; re-dropping the same workbook to fetch another sheet must never 409) and `force` is ignored. A workbook with exactly **one** non-empty sheet keeps today's EXACT one-shot behavior above (no `type` key, filename unchanged, whole-file raw-bytes hash, upload-time dedup); zero non-empty sheets → 400 `empty_file`. Full rules in `spec/capabilities/multi-sheet-excel.md`.
+>
+> ```json
+> {"type": "multi_sheet", "staging_token": "6f2c…", "filename": "sales.xlsx",
+>  "sheets": [
+>    {"sheet_name": "2023", "row_count": 812, "col_count": 9, "empty": false},
+>    {"sheet_name": "2024", "row_count": 1043, "col_count": 9, "empty": false},
+>    {"sheet_name": "Scratch", "row_count": 0, "col_count": 0, "empty": true}
+>  ],
+>  "context": null, "expires_in_seconds": 900}
+> ```
+>
+> Sheets are listed in workbook order; empty sheets (0 rows or 0 cols) are included with `empty: true` so the picker can render them disabled. `context` echoes the C16-resolved workbook-level notes (notes_file wins, 4000-char truncation) that imported sheets will inherit. The single-sheet response is distinguished by the ABSENCE of a `type` key — its shape is byte-identical to the pre-C38 contract.
+
 | Status | Condition |
 |--------|-----------|
-| 409 | `duplicate_dataset` (with `match_type` + `existing_*`); resolvable with `force=true` |
-| 400 | bad extension / unparseable / empty file |
+| 409 | `duplicate_dataset` (with `match_type` + `existing_*`); resolvable with `force=true` — single-sheet path only (the multi-sheet inspect never 409s) |
+| 400 | bad extension / unparseable / empty file (incl. an all-empty-sheets workbook) |
 | 500 | disk write failure |
+
+### `POST /upload/sheets`
+C38 (Phase 12) — import chosen sheets from a staged multi-sheet workbook (the second step after a `type:"multi_sheet"` inspect response). Served by a NEW `src/api/upload_sheets.py` router (also home of the in-memory staging store), registered in `create_app()`. JSON body:
+
+```json
+{"staging_token": "6f2c…",
+ "sheets": [
+   {"sheet_name": "2023"},
+   {"sheet_name": "2024", "context": "optional per-sheet notes override"}
+ ],
+ "force": false}
+```
+
+Re-parses ONLY the requested sheets from the stashed bytes (`.xls` via `engine="xlrd"`, D13 parity), and registers **each sheet independently** (C36's per-item precedent — one sheet's failure never aborts the others) as its own `datasets` row: `filename` = `` `{workbook} — {sheet_name}` ``, `format="excel"`, `origin="uploaded"`, per-sheet `content_hash` (sha256 of the sheet's canonical CSV serialization — NOT the workbook bytes, so sibling sheets never dedup-block each other), context = per-sheet override or the inherited workbook-level context, provenance `source_type="excel"` / `source_uri_display=<workbook filename>` / `source_table_name=<sheet name>` (`source_uri_raw` stays NULL), `auto_notes_status="pending"` + an async C30 notes job per sheet. CSV + Parquet written per sheet as usual. The staging token is NOT consumed (more sheets can be imported until TTL expiry). Returns 200 even if every sheet failed:
+
+```json
+{"filename": "sales.xlsx",
+ "results": [
+   {"sheet_name": "2023", "status": "ok",
+    "dataset": {"dataset_id": "…", "filename": "sales.xlsx — 2023", "format": "excel",
+                "row_count": 812, "col_count": 9, "columns": ["…"],
+                "context": null, "auto_notes_status": "pending"}},
+   {"sheet_name": "2024", "status": "duplicate", "match_type": "content",
+    "existing_dataset_id": "…", "existing_filename": "sales.xlsx — 2024",
+    "message": "This sheet was already imported. Re-import with force=true to keep both."},
+   {"sheet_name": "Scratch", "status": "error", "message": "Sheet is empty."}
+ ]}
+```
+
+Per-sheet `status`: `ok` (with `dataset` in the single-upload response shape) | `duplicate` (C10 fields — `match_type` `content`/`content_and_name`/`name`, `existing_dataset_id`, `existing_filename` — as a per-sheet result, not an HTTP 409; the UI shows the same inline "Use existing / Upload anyway" resolver, retrying that sheet with `force:true`) | `error` (empty sheet, unknown sheet name, parse/disk failure — `message` only).
+
+| Status | Condition |
+|--------|-----------|
+| 404 | `staging_expired` — unknown or expired `staging_token` (re-drop the file) |
+| 400 | `empty_selection` — missing/empty `sheets` list |
 
 ### `GET /datasets`
 List datasets incl. `origin`, `stale`, `derived_*`, `derivation_description`. Always 200.

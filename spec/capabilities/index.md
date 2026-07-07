@@ -1,6 +1,6 @@
 # Capabilities Index
 
-> One file per capability, IDs preserved from the source spec (C1–C32) plus C33/C34/C35/C36/C37 added post-source (Phases 5/7/8/9/10). The source numbering **skips C5 and C28** — both are intentional gaps in the source list, not missing capabilities; no `C5` or `C28` file exists. The 35 capabilities below are the complete set. Each file states what it does, inputs/outputs, external calls, business rules, the phase that delivers it, and testable success criteria.
+> One file per capability, IDs preserved from the source spec (C1–C32) plus C33/C34/C35/C36/C37/C38 added post-source (Phases 5/7/8/9/10/12). The source numbering **skips C5 and C28** — both are intentional gaps in the source list, not missing capabilities; no `C5` or `C28` file exists. The 36 capabilities below are the complete set. Each file states what it does, inputs/outputs, external calls, business rules, the phase that delivers it, and testable success criteria.
 
 ---
 
@@ -43,12 +43,14 @@
 | C35 | Fast Mode — a single latency toggle | 8 | [fast-mode.md](fast-mode.md) |
 | C36 | External database connectors (PostgreSQL, BETA) | 9 | [external-db-connectors.md](external-db-connectors.md) |
 | C37 | Suggested questions — session starters + clarification candidates | 10 | [suggested-questions.md](suggested-questions.md) |
+| C38 | Multi-sheet Excel import (multi-tab workbooks) | 12 | [multi-sheet-excel.md](multi-sheet-excel.md) |
 
 > **C28:** intentionally absent in the source numbering — no capability, no file.
 > **C34** is a new addition (post-source-spec), numbered after the source's C1–C33 range — a pure-frontend capability with no LLM/backend involvement, added via the "add a capability" path.
 > **C35** is a new addition (post-source-spec), numbered after C34 — a per-query latency toggle (backend + frontend), added via the "add a capability" path. See `spec/roadmap.md` → "Future / Backlog" for its origin and the resolved open questions.
 > **C36** is a new addition (post-source-spec), numbered after C35 — a pluggable snapshot-import connector seam (PostgreSQL only, BETA/flag-gated), added via the "add a capability" path. See `spec/roadmap.md` → "Future / Backlog" → "External database connectors" for its origin and design rationale.
 > **C37** is a new addition (post-source-spec), numbered after C36 — session-start "Try asking:" chips (a new session-less `GET /suggestions/starters`) plus refined candidate questions on a C26 clarification turn (same single pre-flight call), added via the "add a capability" path. It gets its OWN file because no existing capability file owns follow-up suggestions (`generate_suggestions` shipped inside Phase 3 and is documented only in `spec/agent.md`/`spec/api.md`); C26's file owns only the clarification gate.
+> **C38** is a new addition (post-source-spec), numbered after C37 — a sheet picker for multi-tab `.xlsx`/`.xls` workbooks with one-dataset-per-sheet registration (a pure data-loading mechanism: zero new LLM calls, no graph changes, no migration), added via the "add a capability" path. It gets its OWN file rather than folding into C1/C11 because it introduces a new two-step API flow (`POST /upload` inspect variant + `POST /upload/sheets`) and a per-sheet dedup semantics that extends C10; the C1/C11 single-file contract is unchanged for single-sheet workbooks. Core model (picker + one-dataset-per-sheet) user-approved 2026-07-07; see `spec/roadmap.md` → Phase 12.
 
 ## How to Add a New Capability
 

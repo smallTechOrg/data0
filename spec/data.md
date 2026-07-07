@@ -32,10 +32,10 @@ A registered data file (uploaded or derived) the agent can query.
 | parquet_path | Text | no | On-disk Parquet path (`uploads/{id}.parquet`) |
 | auto_notes_status | Text | no | `pending` \| `done` \| `failed` \| null (C30) |
 | context_facts | JSON | no | Compressed ≤20 facts (C31) |
-| source_type | Text | no | C36 — the external connector type this dataset was pulled from, e.g. `postgresql`; `null` for `uploaded`/`derived` origins |
-| source_uri_display | Text | no | C36 — credential-free `DatasetURI.display()` rendering of the source connection (e.g. `postgresql://host:5432/mydb`), shown in the Tables/Database tabs as provenance; `null` unless `origin="connected"` |
-| source_table_name | Text | no | C36 — the external table this dataset was pulled from; `null` unless `origin="connected"` |
-| source_uri_raw | Text | no | C36 — **secret-bearing**: the RAW connection URI including credentials, stored ONLY so a manual re-sync (`POST /connections/{id}/resync`) can reconnect. NEVER returned by any API response (every route builds its response dict field-by-field and omits this column), NEVER logged. `null` unless `origin="connected"`. See `spec/capabilities/external-db-connectors.md` → "Credential Hygiene". |
+| source_type | Text | no | C36/C38 — source provenance discriminator: an external connector type (`postgresql`, C36) or `excel` (C38 — imported from a sheet of a multi-sheet workbook, Phase 12). `null` for plain uploads and `derived` origins |
+| source_uri_display | Text | no | C36 — credential-free `DatasetURI.display()` rendering of the source connection (e.g. `postgresql://host:5432/mydb`); **C38 reuses it** as the source workbook's filename (e.g. `sales.xlsx`). Shown in the Tables/Database tabs as provenance; `null` unless `source_type` is set |
+| source_table_name | Text | no | C36 — the external table this dataset was pulled from; **C38 reuses it** as the imported sheet's name. `null` unless `source_type` is set |
+| source_uri_raw | Text | no | C36 — **secret-bearing**: the RAW connection URI including credentials, stored ONLY so a manual re-sync (`POST /connections/{id}/resync`) can reconnect. NEVER returned by any API response (every route builds its response dict field-by-field and omits this column), NEVER logged. `null` unless `origin="connected"` — C38 sheet imports never set it (nothing secret about a workbook; the workbook bytes are not retained, so no re-sync exists). See `spec/capabilities/external-db-connectors.md` → "Credential Hygiene". |
 | created_at | TIMESTAMP(tz) | yes | `_now` default |
 | updated_at | TIMESTAMP(tz) | yes | `_now` default + onupdate |
 
@@ -116,7 +116,7 @@ Enforced in code only (no FK constraints):
 
 ## Data Lifecycle
 
-- **Created:** a `datasets` row on upload (origin=uploaded) or on `save_dataset` (origin=derived). A `query_runs` row per `/ask` (or a thin row for a clarification). A `conversation_sessions` row when a session is started. `settings` rows on first write of a key.
+- **Created:** a `datasets` row on upload (origin=uploaded — incl. one row PER IMPORTED SHEET of a multi-sheet Excel workbook via `POST /upload/sheets`, C38: per-sheet `content_hash` over the sheet's canonical CSV serialization, filename `workbook.xlsx — Sheet`, provenance columns reused from C36, NO new columns/migration) or on `save_dataset` (origin=derived). A `query_runs` row per `/ask` (or a thin row for a clarification). A `conversation_sessions` row when a session is started. `settings` rows on first write of a key.
 - **Updated:** `datasets.context`/`context_facts`/`auto_notes_status` via describe/compress/PATCH; counts on clean/apply and re-derive; `query_runs.iteration_count` per step (live); `updated_at` on touch.
 - **Deleted:** only on explicit user action (DELETE dataset/session/all). **No TTL / no auto-expiry** — datasets persist indefinitely.
 

@@ -30,6 +30,7 @@ Accepts an uploaded data file (CSV/TSV/TXT/JSON/Excel), parses it with pandas, h
 - Compute sha256 of bytes; duplicate-check (see [duplicate-detection.md](duplicate-detection.md)) → 409 unless `force=true`.
 - `format` recorded as csv|tsv|txt|json|excel; `origin=uploaded`.
 - Pre-convert to Parquet on upload for fast loads (C27).
+- **Multi-sheet Excel (C38, Phase 12):** an `.xlsx`/`.xls` with ≥2 non-empty sheets returns a `type:"multi_sheet"` inspect response (nothing persisted) instead of the one-shot flow above; chosen sheets are then imported one-dataset-per-sheet via `POST /upload/sheets`. Single-sheet workbooks keep this file's contract EXACTLY. See [multi-sheet-excel.md](multi-sheet-excel.md).
 
 ## Success Criteria
 - [ ] Uploading a valid CSV returns 200 with correct `row_count`/`col_count` and writes both `.csv` and `.parquet`.
