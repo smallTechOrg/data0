@@ -8,7 +8,7 @@ A single-user, local web app: drop in a CSV / TSV / TXT / JSON / Excel file and 
 
 ## What It Does
 
-- **Upload data** — CSV, TSV, TXT, JSON, and Excel (`.xlsx` / `.xls`). Files are parsed with pandas, deduplicated by content hash, and stored on disk as CSV + Parquet.
+- **Upload data** — CSV, TSV, TXT, JSON, and Excel (`.xlsx` / `.xls`). Files are parsed with pandas, deduplicated by content hash, and stored on disk as CSV + Parquet. Multi-tab Excel workbooks open a sheet picker, and each chosen sheet imports as its own dataset.
 - **Ask in plain English** — a LangGraph `StateGraph` ReAct loop (plan → execute → finalize) reasons over your data with Gemini, runs pandas in a sandbox, and returns a Markdown answer plus a **Steps inspector** showing every action it took.
 - **Inline charts** — Plotly figures the agent produces during analysis render inline in the answer.
 - **Multi-turn sessions** — ask follow-ups in the same session; resume, rename, and manage past sessions; 2–3 suggested follow-up questions per answer.
@@ -95,7 +95,7 @@ The real-key gates are authoritative: a stubbed pass does not count. Tests run a
 
 ```
 src/                ← the agent (FastAPI + LangGraph + SQLite, Gemini/OpenRouter/stub)
-  api/              ← FastAPI routers (upload · datasets · ask · sessions · runs · stats · memory · health)
+  api/              ← FastAPI routers (upload · upload/sheets · datasets · ask · sessions · runs · stats · memory · health)
   config/           ← Pydantic BaseSettings (AGENT_ env prefix)
   db/               ← SQLAlchemy 2.0 models + session
   domain/           ← Pydantic request/response + read models
