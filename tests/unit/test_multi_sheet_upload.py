@@ -445,6 +445,133 @@ def test_token_survives_a_commit(api_client):
     assert second.json()["data"]["results"][0]["status"] == "ok"
 
 
+# --- messy-sheet Parquet write (2026-07-08 regression fix) -------------------
+#
+# Real-world sheets with a title row parse to `Unnamed: N` object columns
+# holding mixed str+int; pyarrow rejected them (ArrowTypeError) and the shared
+# `register_dataset` write path 500'd AND left an orphaned `{id}.csv` behind.
+# The fix: parquet-first, string-coerce (nulls preserved) ONLY on Arrow
+# failure, unlink both files on a terminal failure.
+
+# A sheet whose first row is a report title: pandas takes it as the header,
+# yielding `Unnamed: 1` / `Unnamed: 2` columns; `Unnamed: 1` holds mixed
+# str ("amount") + int (100, 200) with a NaN from the blank spacer row.
+_ROWS_MESSY = [
+    ["Quarterly Report 2024", None, None],
+    [None, None, None],
+    ["region", "amount", "note"],
+    ["north", 100, None],
+    ["south", 200, "ok"],
+]
+
+
+@pytest.fixture
+def _tmp_uploads(tmp_path, monkeypatch):
+    """Redirect dataset file writes to a per-test dir (keeps real uploads/ clean)."""
+    import api.upload as upload_module
+
+    uploads_dir = tmp_path / "uploads"
+    monkeypatch.setattr(upload_module, "UPLOADS_DIR", uploads_dir)
+    return uploads_dir
+
+
+def test_messy_sheet_imports_via_sheet_commit(api_client, _tmp_uploads):
+    """A title-row sheet (mixed-object `Unnamed: N` columns) imports via /upload/sheets."""
+    up = _upload_xlsx(api_client, {"Data": _ROWS_2023, "Messy": _ROWS_MESSY})
+    assert up.status_code == 200, up.text
+    token = up.json()["data"]["staging_token"]
+
+    r = api_client.post(
+        "/upload/sheets",
+        json={"staging_token": token, "sheets": [{"sheet_name": "Messy"}]},
+    )
+    assert r.status_code == 200, r.text
+    result = r.json()["data"]["results"][0]
+    assert result["status"] == "ok", result
+    ds = result["dataset"]
+    assert ds["filename"] == "wb.xlsx — Messy"
+    assert "Unnamed: 1" in ds["columns"]  # the mixed str+int title-row column
+
+    # Registered for real: listed, and BOTH cache files on disk.
+    listed = api_client.get("/datasets").json()["data"]
+    assert ds["dataset_id"] in [d["id"] for d in listed]
+    assert (_tmp_uploads / f"{ds['dataset_id']}.csv").exists()
+    assert (_tmp_uploads / f"{ds['dataset_id']}.parquet").exists()
+
+
+def test_messy_single_sheet_workbook_uploads_ok(api_client, _tmp_uploads):
+    """Regression: this exact shape was a 500 `write_failed` before the fix."""
+    r = _upload_xlsx(api_client, {"Messy": _ROWS_MESSY})
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert "type" not in data  # single-sheet passthrough, no picker
+    assert data["filename"] == "wb.xlsx"
+    assert data["row_count"] == 4
+    assert (_tmp_uploads / f"{data['dataset_id']}.csv").exists()
+    assert (_tmp_uploads / f"{data['dataset_id']}.parquet").exists()
+
+
+def test_coerced_parquet_roundtrip_matches_csv(api_client, _tmp_uploads):
+    """The coerced Parquet reads back strings with REAL nulls (never "nan"),
+    exactly matching what the C27 CSV fallback yields for that column."""
+    r = _upload_xlsx(api_client, {"Messy": _ROWS_MESSY})
+    ds_id = r.json()["data"]["dataset_id"]
+
+    pq = pd.read_parquet(_tmp_uploads / f"{ds_id}.parquet")
+    csv = pd.read_csv(_tmp_uploads / f"{ds_id}.csv")
+    mixed = "Unnamed: 1"
+
+    # Mixed-column values are strings; the NaN cell survives as a real null.
+    assert all(isinstance(v, str) for v in pq[mixed].dropna())
+    assert pq[mixed].isna().any()
+    assert pq[mixed].isna().tolist() == csv[mixed].isna().tolist()
+    assert "nan" not in set(pq[mixed].dropna())
+    assert "None" not in set(pq[mixed].dropna())
+    # Parquet-first read == CSV-fallback read, value for value.
+    assert pq[mixed].dropna().tolist() == csv[mixed].dropna().astype(str).tolist()
+
+
+def test_failed_write_leaves_no_orphan_files(api_client, _tmp_uploads, monkeypatch):
+    """A TERMINAL parquet failure (retry raises too) errors WITHOUT orphaning
+    the already-written `{id}.csv` — on both /upload and /upload/sheets."""
+    from pyarrow import ArrowTypeError
+
+    def _always_fail(self, *args, **kwargs):
+        raise ArrowTypeError("Expected bytes, got a 'int' object")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _always_fail)
+
+    # Plain /upload -> 500 write_failed, nothing left on disk.
+    r = _upload_xlsx(api_client, {"Sheet1": _ROWS_2023})
+    assert r.status_code == 500, r.text
+    assert r.json()["detail"]["code"] == "write_failed"
+    assert list(_tmp_uploads.glob("*")) == []
+
+    # /upload/sheets -> per-sheet error (call stays 200), nothing left on disk.
+    up = _upload_xlsx(api_client, {"2023": _ROWS_2023, "2024": _ROWS_2024})
+    token = up.json()["data"]["staging_token"]
+    r2 = api_client.post(
+        "/upload/sheets",
+        json={"staging_token": token, "sheets": [{"sheet_name": "2023"}]},
+    )
+    assert r2.status_code == 200, r2.text
+    result = r2.json()["data"]["results"][0]
+    assert result["status"] == "error"
+    assert "Failed to write" in result["message"]
+    assert list(_tmp_uploads.glob("*")) == []
+
+
+def test_clean_workbook_parquet_keeps_native_dtypes(api_client, _tmp_uploads):
+    """Happy path is untouched: no coercion, native dtypes survive the Parquet."""
+    r = _upload_xlsx(api_client, {"Sheet1": _ROWS_2023})
+    assert r.status_code == 200, r.text
+    ds_id = r.json()["data"]["dataset_id"]
+    pq = pd.read_parquet(_tmp_uploads / f"{ds_id}.parquet")
+    assert str(pq["value"].dtype) == "int64"  # coercion would have made it object/str
+    assert pq["value"].tolist() == [10, 20]
+    assert pq["label"].tolist() == ["a", "b"]
+
+
 # --- .xls legacy parity (D13) -----------------------------------------------
 
 

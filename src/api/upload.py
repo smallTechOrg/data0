@@ -24,6 +24,7 @@ import io
 from pathlib import Path
 
 import pandas as pd
+from pyarrow import ArrowInvalid, ArrowTypeError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -126,6 +127,66 @@ def _is_empty_frame(df: pd.DataFrame) -> bool:
     return df.shape[0] == 0 or df.shape[1] == 0
 
 
+def _coerce_object_columns_to_string(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a COPY of `df` with object-dtype columns coerced to string.
+
+    Nulls are PRESERVED: a naive `.astype(str)` would turn NaN into the
+    literal string "nan", so each cell is mapped elementwise — null stays
+    null, everything else becomes `str(value)`. Used ONLY for the Parquet
+    cache retry in `_write_dataset_files`; the caller's in-memory frame is
+    never mutated.
+    """
+    coerced = df.copy()
+    for i, dtype in enumerate(coerced.dtypes):
+        if dtype == object:
+            coerced.isetitem(
+                i,
+                coerced.iloc[:, i].map(
+                    lambda v: str(v) if pd.notna(v) else None
+                ),
+            )
+    return coerced
+
+
+def _write_dataset_files(
+    df: pd.DataFrame, csv_path: Path, parquet_path: Path
+) -> None:
+    """Write the CSV + Parquet cache pair for a dataset; no orphans on failure.
+
+    Parquet is attempted on the raw frame FIRST so clean frames keep full
+    dtype fidelity. Real-world Excel sheets with title rows parse to
+    `Unnamed: N` object columns holding mixed str+int, which pyarrow rejects
+    (`ArrowTypeError: Expected bytes, got a 'int' object`) even though the
+    CSV write succeeds. On that failure ONLY, the Parquet write retries with
+    a string-coerced COPY (nulls preserved) — the coerced Parquet then reads
+    back exactly what the C27 CSV fallback would yield for those columns, so
+    the parquet-first read path stays consistent with the CSV. If any write
+    still fails, both files are unlinked before re-raising so a rolled-back
+    dataset row never leaves files behind.
+
+    NOTE: four other call sites still call `df.to_parquet` raw and share the
+    same latent mixed-object bug class — `src/api/connections.py:144,238`,
+    `src/api/datasets_ops.py:284`, `src/graph/derived.py:118`,
+    `src/api/datasets.py:279`. Swapping them onto this helper is a tracked
+    backlog item (spec/roadmap.md, "Safe-parquet-write adoption").
+    """
+    try:
+        df.to_csv(csv_path, index=False)
+        try:
+            df.to_parquet(parquet_path, index=False)
+        except (ArrowInvalid, ArrowTypeError):
+            _coerce_object_columns_to_string(df).to_parquet(
+                parquet_path, index=False
+            )
+    except Exception:
+        for path in (csv_path, parquet_path):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:  # cleanup is best-effort — the write error wins
+                pass
+        raise
+
+
 def find_duplicate(
     session: Session, *, filename: str, content_hash: str
 ) -> dict | None:
@@ -212,8 +273,7 @@ def register_dataset(
     parquet_path = UPLOADS_DIR / f"{dataset_id}.parquet"
     try:
         _ensure_uploads_dir()
-        df.to_csv(csv_path, index=False)
-        df.to_parquet(parquet_path, index=False)
+        _write_dataset_files(df, csv_path, parquet_path)
     except Exception as exc:
         logger.error("upload_write_failed", dataset_id=dataset_id, error=str(exc))
         raise api_error("write_failed", f"Failed to write dataset to disk: {exc}", 500)
