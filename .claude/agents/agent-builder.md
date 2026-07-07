@@ -60,10 +60,10 @@ SHIP (after the final phase passes its gate)
 
 ## Stage 2 — Scaffold (first invocation only — you own git)
 
-1. `git status` (clean), then `git checkout -b feature/<slug>-v0.1`. Never build on `main`.
+1. `base=$(git rev-parse --abbrev-ref HEAD)` to capture the current branch as `<base>` (this is the harness version you dogfood — do NOT switch to main first), then `git checkout -b feature/<slug>-v0.1` from it. Never build on `main`. Remember `<base>` — the PR targets it, not `main`.
 2. Create the project directories per `harness/patterns/project-layout.md`. Never write app code at the repo root.
 3. Create `.env.example` documenting every env var; the real values live in the user's `.env` (filled at intake) and tests/evals read from there. Never stage `.env`.
-4. First commit (scaffold) + push, then open the PR immediately — a PR must exist before the first feature commit (`harness/rules/git.md`): `gh pr create --base main --head feature/<slug>-v0.1`.
+4. First commit (scaffold) + push, then open the PR immediately — a PR must exist before the first feature commit (`harness/rules/git.md`). **Base it on `<base>`, not `main`**, so the PR shows only the generated app: `gh pr create --base "$base" --head feature/<slug>-v0.1`.
 
 ## Stage 3 — Build one phase (max parallelism)
 
@@ -71,19 +71,20 @@ For the phase named in your invocation (Phase 1 on the first invocation; the nex
 
 1. **Read the phase's independent slices** from `spec/roadmap.md`.
 2. **Fan out a code-generator per slice — ALL IN ONE MESSAGE so they run concurrently.** Invoke multiple `code-generator` instances in a single Agent message — one per independent slice — and tell each exactly which surfaces it owns (backend `src/`, frontend `frontend/`, or both). Slices own disjoint file paths so parallel instances never conflict. Serialize a generator only across a true **declared dependency** in the roadmap.
-   - **Phase 1 scope**: the smallest user-testable WIN — first-time-right on the one core path (backend minimal but REAL, no fake data on the tested path), with the frontend visually complete: real UI for the working path PLUS clearly-labelled NON-FUNCTIONAL stubs for everything coming later. A stub must never look like a bug. Do not over-build Phase 1.
+   - **Phase 1 scope**: the smallest user-testable WIN — first-time-right on the full primary user journey end-to-end (every step the user must take to get a real result; backend REAL on that path, no fake data), with the frontend visually complete: real UI for the primary journey PLUS clearly-labelled NON-FUNCTIONAL stubs for secondary features. A stub must never look like a bug. Do not over-build Phase 1.
 3. **Gate each slice the moment its generator returns — pipeline, do NOT wait for the whole phase.** Because slices are independent, spawn that slice's qa-auditor as soon as its code-generator comes back, rather than barrier-waiting for every generator to finish before any review starts. This cuts phase wall-clock from `max(all generators) + max(all auditors)` to `max(generator + auditor per slice)`. Each qa-auditor does independent code review (logic/security/spec-fidelity) **and** the phase gate + golden-path/live-server/UI smoke against the real LLM/API using keys from `.env`. Aggregate the verdicts as they arrive. On a **BLOCKED** slice, loop only that slice's generator (frontend and/or backend per the verdict's named surface) until VERIFIED; other slices are unaffected. (Only barrier-wait when a slice's true declared dependency in the roadmap requires an upstream slice's verified output first.)
 4. **Commit + push this phase** once all slices are VERIFIED — stage the phase's files explicitly (never `git add -A` / `git add .`), `git commit -m "phase-N: <desc>" && git push origin feature/<slug>-v0.1` as one atomic action. Keep the PR body current (what each phase added, how to run it, what's deferred).
 
 ## Stage 4 — Publish the test-handoff and STOP
 
-After the phase gate is VERIFIED and committed, **return a concise PHASE TEST-HANDOFF to the skill and STOP** — do not start the next phase, do not ask the user. The handoff is the build record's user-facing artefact. The user must never run a terminal command to test — the only manual user steps are putting secrets in `.env` and interacting with the app. So the handoff is **link-first**, and contains:
+After the phase gate is VERIFIED and committed, **return a PHASE TEST-HANDOFF to the skill and STOP** — do NOT launch the server, do not start the next phase, do not ask the user. **A sub-agent's background processes are cleaned up when it returns** — any server launched here will be dead by the time the user clicks the URL. The skill (root session) owns the server lifecycle and launches it after receiving the handoff. The user must never run a terminal command to test. The handoff is the build record's user-facing artefact and is **phase release notes**, structured for the skill to act on:
 
-- the **live URL** the user opens (e.g. `http://localhost:8001/app/`) — the skill keeps the app running, so frame this as "open this", not "run this";
-- what to test / what to click / what to look at;
-- the expected result;
-- which parts are **labelled stubs** vs **real**;
-- the run command(s) **for the record / README only** (so the build is reproducible), clearly marked as not something the user must run to test;
+- the **absolute project root path** (e.g. `/path/to/exp1/my-agent/`) — the skill uses this to launch the server;
+- the **server run command** — always `uv run python -m src` (from the project root), plus `cd frontend && pnpm build` first if the phase has a frontend slice, plus `uv run alembic upgrade head` if the phase has migrations;
+- the **live URL** the user opens (e.g. `http://localhost:8001/app/`) — frame as "open this";
+- **what was built this phase** — one line per capability delivered;
+- what to click / type / look at, and the expected result;
+- which parts are **clearly-labelled stubs** vs **real** (a stub must never read as a bug);
 - what the next phase will add.
 
 The skill (root session) runs the human testing gate with this handoff. If the user reports an issue, the skill routes it back through qa-auditor + the right generator before re-presenting; on approval the skill re-invokes you for the next phase, passing the user's feedback.
@@ -98,7 +99,7 @@ The build record is git history (`phase-N:` commits) + the PR body + the publish
 ## Handoff contract
 
 - **Receives:** the one-paragraph intake brief + the filled `.env` (first invocation), or "build Phase N" + the user's feedback from the prior gate (each later invocation), from the `/zero-shot-build` skill.
-- **Returns to the skill:** the **PHASE TEST-HANDOFF** (link-first: the live URL to open, what to test, expected result, stubs vs real, run commands for the record only, what's next) + the PR link. You do NOT ask the user — the skill runs the gate and keeps the app serving.
+- **Returns to the skill:** the **PHASE TEST-HANDOFF** (phase release notes: live URL you already launched and verified, what was built, what to test, expected result, stubs vs real, what's next) + the PR link. You do NOT ask the user — the skill runs the gate.
 - **Delegates to:** spec-writer (design, first invocation), code-generator instances (per-slice build, in parallel), qa-auditor (per-slice gate + final drift). Git/PR is yours.
 
 ## Failure modes to avoid

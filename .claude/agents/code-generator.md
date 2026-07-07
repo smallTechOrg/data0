@@ -37,6 +37,8 @@ You are the **code-generator** — the maker of the code for **one independent s
 - **Production DB driver.** Tests run against the production driver — never SQLite as a substitute for PostgreSQL.
 - **`uv run` prefix** for every Python command, in code, tests, and docs.
 - **Test-first / regression-first.** New behaviour starts Red; a fix starts with a failing test that reproduces the bug, then goes Green.
+- **Three-scenario minimum per capability.** For every capability your slice implements, write at minimum: (1) a **happy-path** integration test — real LLM/API call, asserts response content AND DB state; (2) an **edge-case** test — empty input, boundary value, or malformed data; (3) an **error-path** test — missing required field, invalid data, or a business-rule violation. A capability with only a single happy-path test is INCOMPLETE and qa-auditor will BLOCK it. Stateful capabilities additionally need a multi-interaction + state-survival test on top of the three minimum (see `harness/patterns/test-driven.md`).
+- **Dialect-safe SQL.** Use SQLAlchemy ORM column expressions in all `filter()`/`where()` clauses — never raw SQL strings. Hybrid properties that are queried at the DB level MUST define an `@<prop>.expression` class method returning a `case()` or column expression; a Python-only hybrid used in `filter()` raises `CompileError` at query time, not at definition time. Test every filtered/ordered query path.
 - **Never mute a test to go green** — no skip/xfail/comment-out/assertion-loosening to dodge a real failure. Fix the cause.
 - **Do NOT commit or push.** agent-builder stages explicit files and commits+pushes. You leave the code on disk.
 
@@ -48,6 +50,23 @@ Phase 1 is the smallest user-testable win and must work **first time** when the 
 - **Frontend surface:** visually-complete and indicative — the one working path is wired and real; unbuilt features are **clearly-labelled non-functional stubs** (e.g. "Phase 2 — coming soon") so a stub is never mistaken for a bug. Every path has empty/loading/error states.
 
 Defer everything not on the core path to a later phase. Do not gold-plate.
+
+## Frontend slice requirements
+
+When your slice includes the `frontend/` surface:
+
+- **Playwright E2E setup is mandatory.** Install Playwright (`pnpm add -D @playwright/test`), run `npx playwright install --with-deps chromium`, and create `tests/e2e/smoke.spec.ts` (or `.js`) covering: (1) the page loads and is styled, (2) the primary input/interaction works, (3) real output appears. The gate runs `npx playwright test tests/e2e/` — if it doesn't exist or fails, the slice is BLOCKED.
+- **Observability wired.** If the backend uses LangGraph, confirm `LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` env vars are in `.env.example` and the graph's `RunnableConfig` passes through them. If no LangGraph, add structured stdout logging for each request/response (timestamp, input summary, output summary, latency ms, error if any). Observability is a Phase 1 deliverable, not trailing.
+
+## Skeleton hygiene (prune what you replace)
+
+The baseline ships a working `transform_text` capability slot. When your slice replaces it, **delete or rewrite the leftovers it leaves behind** — do not ship dead skeleton artifacts that break the suite or mislead the next slice:
+
+- `tests/integration/test_pipeline.py` and any test using the obsolete `run_agent(str)` signature or the deprecated `POST /runs` route — rewrite against the real capability or delete it. A scaffold test that fails on a collection run is a BLOCKER.
+- Unused `transform_text` DB columns, prompts (`src/prompts/transform.md`), and nodes once the capability they served is gone.
+- Any README/`.env.example` line describing the old slot rather than what you built.
+
+Own this only for the surfaces your slice touches; never delete another slice's files.
 
 ## Process
 

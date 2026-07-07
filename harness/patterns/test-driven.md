@@ -1,3 +1,4 @@
+
 # Test-Driven Development
 
 How tests are written in this repo. This expands the Testing section of `engineering-practices.md` into a concrete discipline. It applies to every phase and every fix.
@@ -66,6 +67,19 @@ Derive what to test from the phase's **capabilities**, not its endpoints: if the
 
 ---
 
+## Data-Processing Capabilities Need Full-Data Gates
+
+A capability that analyses, aggregates, or computes over a dataset has a silent failure mode: **sampling**. An implementation that sends only the first N rows to the LLM and asks it to describe them looks correct on a gate CSV of exactly N rows — because sample == full dataset. The bug is invisible until a real user uploads a file with N+1 rows.
+
+For every capability that processes a dataset:
+
+- **Gate test must exceed the maximum plausible sample size.** The test dataset must be large enough that a result computed from a sample is observably different from a result computed from the full set. If the implementation could truncate at N, the gate dataset must have significantly more than N items.
+- **Assert the computed value, not a proxy.** Pick a dataset where the correct answer is exactly knowable and can only be produced from the full data — not a value that a partial view would also produce. Avoid test data where the full-data answer and the sample answer are the same.
+- **The spec must name the approach.** "LLM describes a sample" is not "code execution on the full dataset". These two approaches pass different tests; record which one the spec requires so the gate can distinguish them.
+- **For analytical capabilities, assert the correct answer — not just non-empty.** Run a known question against a fixture with a pre-computed answer and assert the response contains it. A wrong answer is BLOCKED at the same severity as a crash.
+
+---
+
 ## The Pyramid
 
 | Level | Count | Speed | Scope |
@@ -74,7 +88,7 @@ Derive what to test from the phase's **capabilities**, not its endpoints: if the
 | Integration | fewer | 100s of ms | real DB and real LLM/API boundary (keys from `.env`) |
 | E2E / smoke | fewest | seconds | a real process, golden-path user journey |
 
-Push assertions **down** the pyramid: if a unit test can catch it, don't wait for the smoke test. The golden-path UI smoke test (Phase 2 gate) runs against the **live provider** and asserts **real response content**, not just status codes — a 200 that renders a broken or stub-looking page is a failing test.
+Push assertions **down** the pyramid: if a unit test can catch it, don't wait for the smoke test. The golden-path UI smoke test runs against the **live provider** and asserts **real response content**, not just status codes — a 200 that renders a broken or unstyled page is a failing test. For any UI, verify the built CSS bundle contains real utility selectors; a passing build is not proof of styling.
 
 ---
 
@@ -91,3 +105,5 @@ Push assertions **down** the pyramid: if a unit test can catch it, don't wait fo
 - Run the **full** suite, not just the test you touched. Show the output.
 - "It should pass" is not a passing test (`rules/ai-agents.md` rule 2). Run it or say you couldn't.
 - A phase is not complete until its gate suite is green against the production DB driver WITH real LLM/API keys from `.env`, including edge-case and E2E/UI tests.
+- For analytical capabilities: assert the correct answer against a fixture with a known result — a non-empty response is not a passing gate.
+- For stateful capabilities: drive at least two interactions in the same session and assert the second sees the first — a single happy-path call proves nothing about state.
