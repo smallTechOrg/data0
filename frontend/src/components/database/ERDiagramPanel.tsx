@@ -547,7 +547,7 @@ export function ERDiagramPanel({
   // knobs; recomputes on resize, dataset/filter change, or a slider move.
   const { cards } = useMemo(
     () => layoutCards(visibleDatasets, viewSize, { stretchMax, ringGap }),
-    [visibleDatasets, viewSize.w, viewSize.h, stretchMax, ringGap],
+    [visibleDatasets, viewSize, stretchMax, ringGap],
   )
   // Auto-layout cards with any session-only drag overrides applied on top —
   // this is what actually renders, drives edge routing, and drives `fit()`'s
