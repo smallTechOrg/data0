@@ -137,6 +137,75 @@ export interface UploadResponse {
   auto_notes_status: string | null
 }
 
+// ---------------------------------------------------------------------------
+// Multi-sheet Excel import (C38, Phase 12)
+// ---------------------------------------------------------------------------
+
+/** One sheet enumerated by the `type:"multi_sheet"` inspect response (workbook order). */
+export interface SheetInfo {
+  sheet_name: string
+  row_count: number
+  col_count: number
+  /** True when the sheet has 0 rows or 0 cols — listed so the picker can render it disabled. */
+  empty: boolean
+}
+
+/**
+ * POST /upload inspect variant (spec/api.md): an `.xlsx`/`.xls` workbook with
+ * ≥2 non-empty sheets registers NOTHING — the raw bytes are stashed server-side
+ * (in-memory, 15-min TTL) and this response carries the staging token + per-sheet
+ * metadata so the client can import chosen sheets via POST /upload/sheets.
+ * A single-sheet workbook returns the plain `UploadResponse` (no `type` key).
+ */
+export interface MultiSheetUploadResponse {
+  type: 'multi_sheet'
+  staging_token: string
+  filename: string
+  sheets: SheetInfo[]
+  /** The C16-resolved workbook-level notes that imported sheets will inherit. */
+  context: string | null
+  expires_in_seconds: number
+}
+
+/** Union returned by `api.upload` — branch with {@link isMultiSheetUpload}. */
+export type UploadResult = UploadResponse | MultiSheetUploadResponse
+
+/** Type guard: the multi-sheet inspect variant is distinguished by its `type` key. */
+export function isMultiSheetUpload(result: UploadResult): result is MultiSheetUploadResponse {
+  return 'type' in result && result.type === 'multi_sheet'
+}
+
+/** One requested sheet in the POST /upload/sheets body. */
+export interface SheetImportRequest {
+  sheet_name: string
+  /** Optional per-sheet notes override; omitted ⇒ the sheet inherits the workbook-level context. */
+  context?: string
+}
+
+/**
+ * Per-sheet outcome of POST /upload/sheets (C36 per-item precedent — one
+ * sheet's failure never aborts the others; the call itself stays 200):
+ *  - `ok`        → `dataset` carries the single-upload response shape
+ *  - `duplicate` → C10 fields (`match_type`, `existing_*`) as a per-sheet
+ *                  result, not an HTTP 409 — retry just that sheet with force
+ *  - `error`     → `message` only (empty sheet, unknown name, parse/disk failure)
+ */
+export interface SheetImportResult {
+  sheet_name: string
+  status: 'ok' | 'duplicate' | 'error'
+  dataset?: UploadResponse
+  match_type?: 'content' | 'content_and_name' | 'name'
+  existing_dataset_id?: string
+  existing_filename?: string
+  message?: string
+}
+
+/** POST /upload/sheets response — 200 even if every sheet failed. */
+export interface SheetsImportResponse {
+  filename: string
+  results: SheetImportResult[]
+}
+
 export interface DatasetSummary {
   id: string
   filename: string
@@ -153,11 +222,11 @@ export interface DatasetSummary {
   derived_from_run_id?: string | null
   /** Plain-language summary of how a derived dataset was produced. */
   derivation_description?: string | null
-  /** C36 — external connector type this dataset was pulled from (e.g. "postgresql"); null unless origin="connected". */
+  /** C36/C38 — source data type: connector name (e.g. "postgresql") for connected datasets, "excel" for Excel imports; null unless origin="connected" or "uploaded". */
   source_type?: string | null
-  /** C36 — credential-free display rendering of the source connection URI; null unless origin="connected". */
+  /** C36/C38 — credential-free source identifier: connection URI for connected datasets, file path for Excel imports; null unless origin="connected" or "uploaded". */
   source_uri_display?: string | null
-  /** C36 — the external table this dataset was pulled from; null unless origin="connected". */
+  /** C36/C38 — source table or sheet name; null unless origin="connected" or "uploaded". */
   source_table_name?: string | null
   [key: string]: unknown
 }
@@ -483,11 +552,17 @@ export const api = {
    * POST /upload — multipart `file`, optional `context`, optional `?force=true`.
    * On a duplicate the server returns 409 with code `duplicate_dataset`; this
    * surfaces as an `ApiError` the caller can branch on.
+   *
+   * C38: an `.xlsx`/`.xls` workbook with ≥2 non-empty sheets returns the
+   * `type:"multi_sheet"` inspect variant instead of registering a dataset —
+   * branch with `isMultiSheetUpload(result)` and follow up with
+   * `api.uploadSheets(...)`. Single-sheet workbooks and every other format
+   * return the plain `UploadResponse` exactly as before.
    */
   async upload(
     file: File,
     opts: { context?: string; force?: boolean } = {},
-  ): Promise<UploadResponse> {
+  ): Promise<UploadResult> {
     const form = new FormData()
     form.append('file', file)
     if (opts.context && opts.context.trim()) {
@@ -495,8 +570,29 @@ export const api = {
     }
     const path = opts.force ? '/upload?force=true' : '/upload'
     const res = await fetch(path, { method: 'POST', body: form })
-    return unwrap<UploadResponse>(res)
+    return unwrap<UploadResult>(res)
   },
+
+  /**
+   * POST /upload/sheets (C38) — import chosen sheets from a staged multi-sheet
+   * workbook (the second step after a `type:"multi_sheet"` inspect response).
+   * Each sheet is registered independently — inspect the per-sheet `results`
+   * (`ok` / `duplicate` / `error`); the call is 200 even if every sheet failed.
+   * Whole-call failures: 404 `staging_expired` (token unknown/expired — re-drop
+   * the file) and 400 `empty_selection`. The token is NOT consumed — more
+   * sheets can be imported from it until the 15-min TTL expires.
+   */
+  uploadSheets: (payload: {
+    staging_token: string
+    sheets: SheetImportRequest[]
+    /** Bypass the per-sheet duplicate check for all sheets in this call. */
+    force?: boolean
+  }): Promise<SheetsImportResponse> =>
+    postJson<SheetsImportResponse>('/upload/sheets', {
+      staging_token: payload.staging_token,
+      sheets: payload.sheets,
+      force: payload.force ?? false,
+    }),
 
   listDatasets: () => getJson<DatasetSummary[]>('/datasets'),
 

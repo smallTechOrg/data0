@@ -1,7 +1,18 @@
 'use client'
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { api, ApiError, type UploadResponse } from '@/lib/api'
+import {
+  api,
+  ApiError,
+  isMultiSheetUpload,
+  type SheetImportResult,
+  type UploadResponse,
+} from '@/lib/api'
+import {
+  SheetPickerRow,
+  isSheetImportable,
+  type SheetSelection,
+} from '@/components/analyse/SheetPickerRow'
 
 /**
  * Upload card (C1, C11, C13, C17) — Staged upload queue with folder drop.
@@ -28,13 +39,38 @@ import { api, ApiError, type UploadResponse } from '@/lib/api'
  *   with ≤3 concurrent. Per-file states: pending → uploading → done / error /
  *   duplicate. Done entries auto-remove from the queue. 409 duplicates surface
  *   an inline "Use existing / Upload anyway" resolver.
+ *
+ * C38 — Multi-sheet Excel picker:
+ *   When POST /upload returns the `type:"multi_sheet"` inspect variant (an
+ *   `.xlsx`/`.xls` workbook with ≥2 non-empty sheets — nothing persisted yet),
+ *   the staged row transitions to `pick_sheets`: an inline sheet checklist
+ *   (SheetPickerRow — the C36 pick-tables pattern; non-empty sheets pre-checked,
+ *   empty sheets disabled with an "empty" tag) + "Import N sheet(s)" →
+ *   POST /upload/sheets. Per-sheet results render inline (ok / duplicate with
+ *   the existing "Use existing / Upload anyway" resolver retrying `force:true` /
+ *   error that never aborts siblings); the row leaves the queue once every
+ *   selected sheet is resolved. Single-sheet workbooks and non-Excel files
+ *   flow through the pre-C38 path unchanged. A 404 `staging_expired` renders
+ *   a message + one-click re-stage (the File object is still staged locally).
  */
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type StagedStatus = 'pending' | 'uploading' | 'done' | 'error' | 'duplicate'
+type StagedStatus = 'pending' | 'uploading' | 'done' | 'error' | 'duplicate' | 'pick_sheets'
+
+/** C38 — per-row state while a multi-sheet workbook's picker is open. */
+interface MultiSheetState {
+  stagingToken: string
+  sheets: SheetSelection[]
+  /** True while any /upload/sheets call for this row is in flight. */
+  importing: boolean
+  /** The staging token expired server-side (404 `staging_expired`). */
+  stagingExpired: boolean
+  /** Whole-call import error (network / unexpected), or undefined. */
+  errorMsg?: string
+}
 
 interface StagedFile {
   id: string
@@ -43,6 +79,8 @@ interface StagedFile {
   status: StagedStatus
   errorMsg?: string
   uploadResult?: UploadResponse
+  /** C38 — present iff status === 'pick_sheets'. */
+  multiSheet?: MultiSheetState
 }
 
 // ---------------------------------------------------------------------------
@@ -374,19 +412,43 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
 
   /**
    * Upload a single staged entry.
-   * Returns true on success, false on failure (status already set in queue).
+   * Returns the resulting status: 'done' (dataset registered), 'pick_sheets'
+   * (C38 — a multi-sheet workbook was staged server-side and the row now shows
+   * the sheet picker), or 'failed' (status already set in queue).
    */
   const uploadOne = useCallback(
-    async (entry: StagedFile, force = false): Promise<boolean> => {
+    async (entry: StagedFile, force = false): Promise<'done' | 'pick_sheets' | 'failed'> => {
       updateEntry(entry.id, { status: 'uploading', errorMsg: undefined })
       try {
         const result = await api.upload(entry.file, {
           context: entry.notes.trim() || undefined,
           force,
         })
+        if (isMultiSheetUpload(result)) {
+          // C38 — ≥2 non-empty sheets: nothing persisted yet; transition the
+          // row to the inline sheet picker. Non-empty sheets are pre-checked;
+          // empty sheets are listed but never checkable.
+          updateEntry(entry.id, {
+            status: 'pick_sheets',
+            uploadResult: undefined,
+            multiSheet: {
+              stagingToken: result.staging_token,
+              sheets: result.sheets.map(info => ({
+                info,
+                checked: !info.empty,
+                importing: false,
+                result: null,
+                dismissed: false,
+              })),
+              importing: false,
+              stagingExpired: false,
+            },
+          })
+          return 'pick_sheets'
+        }
         updateEntry(entry.id, { status: 'done', uploadResult: result })
         onUploaded()
-        return true
+        return 'done'
       } catch (err) {
         if (err instanceof ApiError && err.code === 'duplicate_dataset') {
           updateEntry(entry.id, {
@@ -397,7 +459,7 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
           const msg = err instanceof Error ? err.message : 'Upload failed.'
           updateEntry(entry.id, { status: 'error', errorMsg: msg })
         }
-        return false
+        return 'failed'
       }
     },
     [onUploaded, updateEntry],
@@ -424,8 +486,8 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
   /** Force-upload a duplicate entry (Upload anyway). */
   const handleForceUpload = useCallback(
     async (entry: StagedFile) => {
-      const success = await uploadOne(entry, true)
-      if (success) {
+      const outcome = await uploadOne(entry, true)
+      if (outcome === 'done') {
         setQueue(prev => prev.filter(e => e.id !== entry.id))
       }
     },
@@ -436,6 +498,178 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
   const handleDismissDuplicate = useCallback((id: string) => {
     removeEntry(id)
   }, [removeEntry])
+
+  // ---------------------------------------------------------------------------
+  // C38 — multi-sheet picker actions
+  // ---------------------------------------------------------------------------
+
+  /** Toggle one sheet's checkbox in a pick_sheets row. */
+  const handleToggleSheet = useCallback((entryId: string, sheetName: string) => {
+    setQueue(prev =>
+      prev.map(e => {
+        if (e.id !== entryId || !e.multiSheet) return e
+        return {
+          ...e,
+          multiSheet: {
+            ...e.multiSheet,
+            sheets: e.multiSheet.sheets.map(s =>
+              s.info.sheet_name === sheetName && !s.info.empty
+                ? { ...s, checked: !s.checked }
+                : s,
+            ),
+          },
+        }
+      }),
+    )
+  }, [])
+
+  /**
+   * Merge per-sheet import results into a pick_sheets row and clear in-flight
+   * flags. When every CHECKED sheet is resolved (imported, or its duplicate
+   * dismissed via "Use existing"), the row leaves the queue (spec/ui.md);
+   * unresolved duplicates and errors keep the row so the user can act.
+   */
+  const applySheetResults = useCallback(
+    (entryId: string, results: SheetImportResult[]) => {
+      setQueue(prev =>
+        prev.flatMap(e => {
+          if (e.id !== entryId || !e.multiSheet) return [e]
+          const sheets = e.multiSheet.sheets.map(s => {
+            const r = results.find(x => x.sheet_name === s.info.sheet_name)
+            return r ? { ...s, result: r, importing: false } : { ...s, importing: false }
+          })
+          const allResolved = sheets.every(
+            s => !s.checked || s.info.empty || s.result?.status === 'ok' || s.dismissed,
+          )
+          if (allResolved) return []
+          return [
+            {
+              ...e,
+              multiSheet: {
+                ...e.multiSheet,
+                sheets,
+                importing: false,
+                errorMsg: undefined,
+              },
+            },
+          ]
+        }),
+      )
+    },
+    [],
+  )
+
+  /**
+   * Handle an /upload/sheets failure: 404 `staging_expired` flips the row to
+   * the message + re-stage prompt; anything else surfaces as a whole-call
+   * inline error. Per-sheet in-flight flags are cleared either way.
+   */
+  const failSheetImport = useCallback(
+    (entryId: string, err: unknown) => {
+      setQueue(prev =>
+        prev.map(e => {
+          if (e.id !== entryId || !e.multiSheet) return e
+          const expired = err instanceof ApiError && err.code === 'staging_expired'
+          const msg =
+            err instanceof Error ? err.message : 'Failed to import the selected sheets.'
+          return {
+            ...e,
+            multiSheet: {
+              ...e.multiSheet,
+              sheets: e.multiSheet.sheets.map(s => ({ ...s, importing: false })),
+              importing: false,
+              stagingExpired: expired,
+              errorMsg: expired ? undefined : msg,
+            },
+          }
+        }),
+      )
+    },
+    [],
+  )
+
+  /**
+   * Import sheets from a staged workbook via POST /upload/sheets. With no
+   * `sheetName` every importable (checked, non-empty, unresolved) sheet is
+   * requested with `force:false`; with a `sheetName` just that sheet is
+   * retried with `force:true` (the per-sheet duplicate resolver). Sheets
+   * inherit the workbook-level context stashed at inspect time, so the body
+   * carries no per-sheet context override.
+   */
+  const importSheets = useCallback(
+    async (entry: StagedFile, sheetName?: string) => {
+      const ms = entry.multiSheet
+      if (!ms || ms.importing || ms.stagingExpired) return
+      const targets = sheetName
+        ? ms.sheets.filter(s => s.info.sheet_name === sheetName)
+        : ms.sheets.filter(isSheetImportable)
+      if (targets.length === 0) return
+
+      const targetNames = new Set(targets.map(s => s.info.sheet_name))
+      setQueue(prev =>
+        prev.map(e => {
+          if (e.id !== entry.id || !e.multiSheet) return e
+          return {
+            ...e,
+            multiSheet: {
+              ...e.multiSheet,
+              importing: true,
+              errorMsg: undefined,
+              sheets: e.multiSheet.sheets.map(s =>
+                targetNames.has(s.info.sheet_name) ? { ...s, importing: true } : s,
+              ),
+            },
+          }
+        }),
+      )
+
+      try {
+        const resp = await api.uploadSheets({
+          staging_token: ms.stagingToken,
+          sheets: targets.map(s => ({ sheet_name: s.info.sheet_name })),
+          force: Boolean(sheetName),
+        })
+        if (resp.results.some(r => r.status === 'ok')) onUploaded()
+        applySheetResults(entry.id, resp.results)
+      } catch (err) {
+        failSheetImport(entry.id, err)
+      }
+    },
+    [applySheetResults, failSheetImport, onUploaded],
+  )
+
+  /**
+   * "Use existing" on a per-sheet duplicate — resolve without importing.
+   * The row leaves the queue if this was the last unresolved sheet.
+   */
+  const handleSheetUseExisting = useCallback((entryId: string, sheetName: string) => {
+    setQueue(prev =>
+      prev.flatMap(e => {
+        if (e.id !== entryId || !e.multiSheet) return [e]
+        const sheets = e.multiSheet.sheets.map(s =>
+          s.info.sheet_name === sheetName ? { ...s, dismissed: true } : s,
+        )
+        const allResolved = sheets.every(
+          s => !s.checked || s.info.empty || s.result?.status === 'ok' || s.dismissed,
+        )
+        if (allResolved) return []
+        return [{ ...e, multiSheet: { ...e.multiSheet, sheets } }]
+      }),
+    )
+  }, [])
+
+  /**
+   * Re-stage an expired workbook: the File object is still staged client-side,
+   * so a fresh POST /upload re-runs the inspect step and reopens the picker
+   * with a new staging token (previous per-sheet results are reset; already-
+   * imported sheets simply come back as duplicates on the next import).
+   */
+  const handleRestage = useCallback(
+    (entry: StagedFile) => {
+      void uploadOne(entry)
+    },
+    [uploadOne],
+  )
 
   // ---------------------------------------------------------------------------
   // Derived values
@@ -556,6 +790,11 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
                 onRemove={() => removeEntry(entry.id)}
                 onForceUpload={() => void handleForceUpload(entry)}
                 onDismissDuplicate={() => handleDismissDuplicate(entry.id)}
+                onToggleSheet={sheetName => handleToggleSheet(entry.id, sheetName)}
+                onImportSheets={() => void importSheets(entry)}
+                onSheetUseExisting={sheetName => handleSheetUseExisting(entry.id, sheetName)}
+                onSheetForce={sheetName => void importSheets(entry, sheetName)}
+                onRestage={() => handleRestage(entry)}
               />
             ))}
           </ul>
@@ -576,6 +815,12 @@ interface StagedRowProps {
   onRemove: () => void
   onForceUpload: () => void
   onDismissDuplicate: () => void
+  // C38 — sheet-picker actions (pick_sheets rows only)
+  onToggleSheet: (sheetName: string) => void
+  onImportSheets: () => void
+  onSheetUseExisting: (sheetName: string) => void
+  onSheetForce: (sheetName: string) => void
+  onRestage: () => void
 }
 
 function StagedRow({
@@ -585,6 +830,11 @@ function StagedRow({
   onRemove,
   onForceUpload,
   onDismissDuplicate,
+  onToggleSheet,
+  onImportSheets,
+  onSheetUseExisting,
+  onSheetForce,
+  onRestage,
 }: StagedRowProps) {
   const notesId = useId()
   const notesFileRef = useRef<HTMLInputElement>(null)
@@ -652,6 +902,9 @@ function StagedRow({
               &#10007; {entry.errorMsg ?? 'Upload failed'}
             </span>
           )}
+          {entry.status === 'pick_sheets' && (
+            <span className="text-blue-600">Pick sheets</span>
+          )}
           {entry.status === 'duplicate' && (
             <span className="flex flex-wrap items-center gap-2">
               <span className="text-amber-700">Duplicate</span>
@@ -672,12 +925,13 @@ function StagedRow({
             </span>
           )}
 
-          {/* Remove button — shown when not actively uploading this file */}
+          {/* Remove button — shown when not actively uploading this file;
+              also disabled while a C38 sheet import for this row is in flight. */}
           {entry.status !== 'uploading' && (
             <button
               type="button"
               onClick={onRemove}
-              disabled={uploading}
+              disabled={uploading || entry.multiSheet?.importing === true}
               aria-label={`Remove ${entry.file.name} from queue`}
               className="ml-1 rounded border border-gray-200 bg-white px-2 py-0.5 text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -722,6 +976,22 @@ function StagedRow({
             className="w-full resize-none rounded border border-gray-200 bg-white p-1.5 text-gray-800 placeholder:text-gray-400 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
           />
         </div>
+      )}
+
+      {/* C38 — inline sheet picker for a staged multi-sheet workbook. */}
+      {entry.status === 'pick_sheets' && entry.multiSheet && (
+        <SheetPickerRow
+          workbookName={entry.file.name}
+          sheets={entry.multiSheet.sheets}
+          importing={entry.multiSheet.importing}
+          stagingExpired={entry.multiSheet.stagingExpired}
+          errorMsg={entry.multiSheet.errorMsg}
+          onToggleSheet={onToggleSheet}
+          onImport={onImportSheets}
+          onRestage={onRestage}
+          onUseExisting={onSheetUseExisting}
+          onForceSheet={onSheetForce}
+        />
       )}
     </li>
   )

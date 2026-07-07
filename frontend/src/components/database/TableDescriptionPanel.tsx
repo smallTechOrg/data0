@@ -470,12 +470,15 @@ export function TableDescriptionPanelView({
               {detail.row_count.toLocaleString()} rows × {detail.col_count} cols ·{' '}
               {detail.format?.toUpperCase()}
             </p>
-            {/* C36 (Phase 9, BETA) — provenance readout for a connected dataset.
-                Credential-free: only `source_uri_display` (never the raw URI)
-                and `source_table_name` are shown. */}
+            {/* C36 (Phase 9, BETA) + C38 (Phase 12) — provenance readout for any
+                dataset with a recorded source: connected DB tables ("from
+                PostgreSQL: host/db · table") and Excel-imported sheets ("from
+                Excel workbook: sales.xlsx · 2024"). Credential-free: only
+                `source_uri_display` (never the raw URI) and `source_table_name`
+                are shown. */}
             {detail.source_type && (
               <p className="mt-1 text-[11px] text-gray-500">
-                from {connectorDisplayName(detail.source_type)}:{' '}
+                from {sourceDisplayName(detail.source_type)}:{' '}
                 {detail.source_uri_display && (
                   <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] text-gray-600">
                     {detail.source_uri_display}
@@ -719,8 +722,11 @@ export function TableDescriptionPanelView({
 
             {/* C36 (Phase 9, BETA) — manual re-pull for a connected dataset;
                 there is no automatic staleness flag for these, so this is
-                always available (not gated on a "stale" condition). */}
-            {detail.source_type && (
+                always available (not gated on a "stale" condition). Keyed on
+                `origin === "connected"`, NEVER on `source_type` presence —
+                C38 Excel-imported sheets (origin "uploaded") also carry
+                provenance columns but have no stored source to re-pull. */}
+            {detail.origin === 'connected' && (
               <button
                 type="button"
                 onClick={onResync}
@@ -789,11 +795,15 @@ function Spinner() {
   )
 }
 
-/** Human-readable label for a C36 connector `source_type` (e.g. "postgresql" → "PostgreSQL"). */
-function connectorDisplayName(sourceType: string): string {
-  if (sourceType.toLowerCase() === 'postgresql' || sourceType.toLowerCase() === 'postgres') {
-    return 'PostgreSQL'
-  }
+/**
+ * Human-readable label for a dataset's `source_type` — covers both C36
+ * connectors ("postgresql" → "PostgreSQL") and C38 Excel-imported sheets
+ * ("excel" → "Excel workbook").
+ */
+function sourceDisplayName(sourceType: string): string {
+  const t = sourceType.toLowerCase()
+  if (t === 'postgresql' || t === 'postgres') return 'PostgreSQL'
+  if (t === 'excel') return 'Excel workbook'
   return sourceType.charAt(0).toUpperCase() + sourceType.slice(1)
 }
 
