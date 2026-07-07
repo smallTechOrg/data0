@@ -1,4 +1,4 @@
-"""`POST /upload` — register an uploaded data file as a dataset (Phase 2 + 4).
+"""`POST /upload` — register an uploaded data file as a dataset (Phase 2 + 4 + 12).
 
 Parses the file with pandas by extension, computes a sha256 of the raw bytes,
 duplicate-checks against existing `datasets` rows (C10), persists a CSV + Parquet
@@ -6,6 +6,16 @@ copy under `uploads/`, and creates a `DatasetRow` (origin=uploaded). Phase 4 (C3
 the new row is marked `auto_notes_status="pending"` and an async fire-and-forget
 notes job (`trigger_describe_async`) is started after the dataset is committed —
 it never blocks or fails the upload.
+
+Phase 12 (C38): an `.xlsx`/`.xls` workbook is enumerated with `sheet_name=None`.
+A workbook with >= 2 NON-EMPTY sheets persists nothing here — its raw bytes are
+stashed in the in-memory staging store (`src/api/upload_sheets.py`) and the
+response is the `type:"multi_sheet"` inspect variant (staging token + per-sheet
+metadata); chosen sheets are then imported via `POST /upload/sheets`. A workbook
+with exactly ONE non-empty sheet keeps today's EXACT single-shot contract (no
+`type` key, unchanged filename, whole-file raw-bytes hash, upload-time C10
+dedup); zero non-empty sheets -> 400 `empty_file`. The row-registration logic is
+factored into `register_dataset` so the sheet-commit route reuses it verbatim.
 """
 from __future__ import annotations
 
@@ -47,7 +57,11 @@ def _ensure_uploads_dir() -> None:
 
 
 def _parse_dataframe(raw: bytes, ext: str) -> pd.DataFrame:
-    """Parse raw bytes into a DataFrame by extension. Raises ValueError on failure."""
+    """Parse raw bytes into a DataFrame by extension (non-excel formats).
+
+    Excel is handled separately via `read_excel_sheets` (C38 enumerates ALL
+    sheets, not just sheet 0). Raises ValueError on failure.
+    """
     buf = io.BytesIO(raw)
     if ext == ".csv":
         return pd.read_csv(buf)
@@ -90,13 +104,144 @@ def _parse_dataframe(raw: bytes, ext: str) -> pd.DataFrame:
                 if first_exc is None:
                     first_exc = exc
         raise first_exc  # type: ignore[misc]
-    if ext == ".xlsx":
-        return pd.read_excel(io.BytesIO(raw))
-    if ext == ".xls":
-        # xlrd must be used explicitly for legacy .xls (BIFF) files; pandas
-        # cannot auto-detect the engine from a BytesIO stream. (D13)
-        return pd.read_excel(io.BytesIO(raw), engine="xlrd")
     raise ValueError(f"Unsupported extension: {ext}")
+
+
+def read_excel_sheets(
+    raw: bytes, ext: str, sheet_names: list[str] | None
+) -> dict[str, pd.DataFrame]:
+    """Parse workbook sheets as `{sheet_name: DataFrame}` (C38).
+
+    `sheet_names=None` enumerates ALL sheets (the inspect step); a list parses
+    only the requested sheets (the commit step). `.xls` uses `engine="xlrd"`
+    explicitly — pandas cannot auto-detect the engine from a BytesIO stream
+    (D13). Raises on unparseable bytes / unknown sheet names.
+    """
+    kwargs: dict = {"engine": "xlrd"} if ext == ".xls" else {}
+    return pd.read_excel(io.BytesIO(raw), sheet_name=sheet_names, **kwargs)
+
+
+def _is_empty_frame(df: pd.DataFrame) -> bool:
+    """A sheet/table is empty when it has 0 rows or 0 columns after parse."""
+    return df.shape[0] == 0 or df.shape[1] == 0
+
+
+def find_duplicate(
+    session: Session, *, filename: str, content_hash: str
+) -> dict | None:
+    """C10 duplicate check: content-hash match first, then name-only match.
+
+    Returns `{match_type, existing_dataset_id, existing_filename}` or None.
+    The caller shapes the delivery: a 409 for whole-file uploads, a per-sheet
+    `status:"duplicate"` result for C38 sheet imports.
+    """
+    # --- Pass 1: content-hash match (same bytes / same canonical CSV) ---
+    hash_match = session.execute(
+        select(DatasetRow).where(DatasetRow.content_hash == content_hash)
+    ).scalars().first()
+    if hash_match is not None:
+        same_name = hash_match.filename == filename
+        return {
+            "match_type": "content_and_name" if same_name else "content",
+            "existing_dataset_id": hash_match.id,
+            "existing_filename": hash_match.filename,
+        }
+
+    # --- Pass 2: filename match with different content (name-only duplicate) ---
+    name_match = session.execute(
+        select(DatasetRow).where(
+            DatasetRow.filename == filename,
+            DatasetRow.content_hash != content_hash,
+        )
+    ).scalars().first()
+    if name_match is not None:
+        return {
+            "match_type": "name",
+            "existing_dataset_id": name_match.id,
+            "existing_filename": name_match.filename,
+        }
+    return None
+
+
+def register_dataset(
+    session: Session,
+    df: pd.DataFrame,
+    *,
+    filename: str,
+    fmt: str,
+    content_hash: str,
+    context: str | None,
+    source_type: str | None = None,
+    source_uri_display: str | None = None,
+    source_table_name: str | None = None,
+) -> dict:
+    """Create the `datasets` row, write CSV + Parquet, commit, fire C30 notes.
+
+    Shared by the single-file upload path and the C38 per-sheet commit route
+    (`src/api/upload_sheets.py` — which passes the `source_*` provenance
+    kwargs; direct uploads leave them None). Raises HTTPException 500
+    `write_failed` on a disk failure — per-sheet callers catch and roll back.
+    Returns the single-upload response payload dict.
+    """
+    columns = [str(c) for c in df.columns]
+    columns_json = [
+        {"name": str(c), "dtype": str(df[c].dtype)} for c in df.columns
+    ]
+
+    # Create the row first to get its id (drives the on-disk filenames).
+    row = DatasetRow(
+        filename=filename,
+        file_path="",  # set below once id is known
+        row_count=int(df.shape[0]),
+        col_count=int(df.shape[1]),
+        columns_json=columns_json,
+        content_hash=content_hash,
+        format=fmt,
+        context=context,
+        origin="uploaded",
+        auto_notes_status="pending",  # C30: async notes job is fired below
+        source_type=source_type,
+        source_uri_display=source_uri_display,
+        source_table_name=source_table_name,
+    )
+    session.add(row)
+    session.flush()  # assigns row.id
+    dataset_id = row.id
+
+    csv_path = UPLOADS_DIR / f"{dataset_id}.csv"
+    parquet_path = UPLOADS_DIR / f"{dataset_id}.parquet"
+    try:
+        _ensure_uploads_dir()
+        df.to_csv(csv_path, index=False)
+        df.to_parquet(parquet_path, index=False)
+    except Exception as exc:
+        logger.error("upload_write_failed", dataset_id=dataset_id, error=str(exc))
+        raise api_error("write_failed", f"Failed to write dataset to disk: {exc}", 500)
+
+    row.file_path = str(csv_path)
+    row.parquet_path = str(parquet_path)
+
+    logger.info("upload_ok", dataset_id=dataset_id, rows=row.row_count, cols=row.col_count)
+
+    # C30: commit the dataset NOW so the async notes job (its own DB session) can
+    # see the row, then fire it fire-and-forget. The trigger never raises/blocks;
+    # if it somehow fails, the upload still succeeds.
+    try:
+        session.commit()
+        trigger_describe_async(dataset_id)
+    except Exception as exc:  # noqa: BLE001 — notes trigger must not fail the upload
+        logger.warning("upload_notes_trigger_failed", dataset_id=dataset_id, error=str(exc))
+
+    return {
+        "dataset_id": dataset_id,
+        "filename": filename,
+        "format": fmt,
+        "row_count": row.row_count,
+        "col_count": row.col_count,
+        "columns": columns,
+        "context": context,
+        "auto_notes_status": "pending",
+    }
 
 
 @router.post("/upload")
@@ -131,111 +276,93 @@ async def upload(
         # Truncate at 4000 chars per spec.
         resolved_context = notes_text[:4000]
 
-    # Parse with pandas; an unparseable / empty-table file is a 400.
-    try:
-        df = _parse_dataframe(raw, ext)
-    except Exception as exc:  # pandas raises many shapes; treat all as unparseable
-        raise api_error("unparseable_file", f"Could not parse file: {exc}", 400)
+    if fmt == "excel":
+        # C38: enumerate ALL sheets and branch on the non-empty count.
+        try:
+            sheets = read_excel_sheets(raw, ext, None)
+        except Exception as exc:  # pandas raises many shapes; treat all as unparseable
+            raise api_error("unparseable_file", f"Could not parse file: {exc}", 400)
 
-    if df.shape[0] == 0 or df.shape[1] == 0:
+        non_empty = [name for name, sdf in sheets.items() if not _is_empty_frame(sdf)]
+        if not non_empty:
+            raise api_error("empty_file", "Uploaded file has no data rows/columns.", 400)
+
+        if len(non_empty) >= 2:
+            # Picker path: persist NOTHING, stash the raw bytes, return the
+            # inspect variant. C10 dedup deliberately does NOT run here (there
+            # is nothing to persist yet, and re-dropping the same workbook to
+            # import another sheet must never 409); `force` is ignored.
+            # Lazy import — upload_sheets imports helpers from this module, so
+            # a top-level import here would be circular.
+            from api.upload_sheets import (  # noqa: PLC0415
+                STAGING_TTL_SECONDS,
+                stash_workbook,
+            )
+
+            staging_token = stash_workbook(
+                raw=raw, filename=filename, ext=ext, context=resolved_context
+            )
+            logger.info(
+                "upload_multi_sheet_staged",
+                filename=filename,
+                sheet_count=len(sheets),
+                non_empty_count=len(non_empty),
+            )
+            return ok(
+                {
+                    "type": "multi_sheet",
+                    "staging_token": staging_token,
+                    "filename": filename,
+                    "sheets": [
+                        {
+                            "sheet_name": name,
+                            "row_count": int(sdf.shape[0]),
+                            "col_count": int(sdf.shape[1]),
+                            "empty": _is_empty_frame(sdf),
+                        }
+                        for name, sdf in sheets.items()  # workbook order
+                    ],
+                    "context": resolved_context,
+                    "expires_in_seconds": STAGING_TTL_SECONDS,
+                }
+            )
+
+        # Exactly one non-empty sheet -> today's EXACT single-shot contract:
+        # unchanged filename (no sheet suffix), whole-file raw-bytes hash,
+        # upload-time C10 dedup, no provenance columns.
+        df = sheets[non_empty[0]]
+    else:
+        # Parse with pandas; an unparseable / empty-table file is a 400.
+        try:
+            df = _parse_dataframe(raw, ext)
+        except Exception as exc:  # pandas raises many shapes; treat all as unparseable
+            raise api_error("unparseable_file", f"Could not parse file: {exc}", 400)
+
+    if _is_empty_frame(df):
         raise api_error("empty_file", "Uploaded file has no data rows/columns.", 400)
 
     # Duplicate check (C10): detect by content hash first, then by filename.
     if not force:
-        # --- Pass 1: content-hash match (same bytes) ---
-        hash_matches = session.execute(
-            select(DatasetRow).where(DatasetRow.content_hash == content_hash)
-        ).scalars().all()
-        for row in hash_matches:
-            same_name = row.filename == filename
-            match_type = "content_and_name" if same_name else "content"
+        dup = find_duplicate(session, filename=filename, content_hash=content_hash)
+        if dup is not None:
+            message = (
+                "A file with this name was already uploaded. Re-upload with force=true to keep both."
+                if dup["match_type"] == "name"
+                else "This file was already uploaded. Re-upload with force=true to keep both."
+            )
             # Duplicate carries extra resolution fields beyond {code,message};
             # build the HTTPException directly to keep the same `detail` envelope.
             raise HTTPException(
                 status_code=409,
-                detail={
-                    "code": "duplicate_dataset",
-                    "message": "This file was already uploaded. Re-upload with force=true to keep both.",
-                    "match_type": match_type,
-                    "existing_dataset_id": row.id,
-                    "existing_filename": row.filename,
-                },
+                detail={"code": "duplicate_dataset", "message": message, **dup},
             )
 
-        # --- Pass 2: filename match with different content (name-only duplicate) ---
-        name_match = session.execute(
-            select(DatasetRow).where(
-                DatasetRow.filename == filename,
-                DatasetRow.content_hash != content_hash,
-            )
-        ).scalars().first()
-        if name_match is not None:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "duplicate_dataset",
-                    "message": "A file with this name was already uploaded. Re-upload with force=true to keep both.",
-                    "match_type": "name",
-                    "existing_dataset_id": name_match.id,
-                    "existing_filename": name_match.filename,
-                },
-            )
-
-    columns = [str(c) for c in df.columns]
-    columns_json = [
-        {"name": str(c), "dtype": str(df[c].dtype)} for c in df.columns
-    ]
-
-    # Create the row first to get its id (drives the on-disk filenames).
-    row = DatasetRow(
+    payload = register_dataset(
+        session,
+        df,
         filename=filename,
-        file_path="",  # set below once id is known
-        row_count=int(df.shape[0]),
-        col_count=int(df.shape[1]),
-        columns_json=columns_json,
+        fmt=fmt,
         content_hash=content_hash,
-        format=fmt,
         context=resolved_context,
-        origin="uploaded",
-        auto_notes_status="pending",  # C30: async notes job is fired below
     )
-    session.add(row)
-    session.flush()  # assigns row.id
-    dataset_id = row.id
-
-    csv_path = UPLOADS_DIR / f"{dataset_id}.csv"
-    parquet_path = UPLOADS_DIR / f"{dataset_id}.parquet"
-    try:
-        _ensure_uploads_dir()
-        df.to_csv(csv_path, index=False)
-        df.to_parquet(parquet_path, index=False)
-    except Exception as exc:
-        logger.error("upload_write_failed", dataset_id=dataset_id, error=str(exc))
-        raise api_error("write_failed", f"Failed to write dataset to disk: {exc}", 500)
-
-    row.file_path = str(csv_path)
-    row.parquet_path = str(parquet_path)
-
-    logger.info("upload_ok", dataset_id=dataset_id, rows=row.row_count, cols=row.col_count)
-
-    # C30: commit the dataset NOW so the async notes job (its own DB session) can
-    # see the row, then fire it fire-and-forget. The trigger never raises/blocks;
-    # if it somehow fails, the upload still succeeds.
-    try:
-        session.commit()
-        trigger_describe_async(dataset_id)
-    except Exception as exc:  # noqa: BLE001 — notes trigger must not fail the upload
-        logger.warning("upload_notes_trigger_failed", dataset_id=dataset_id, error=str(exc))
-
-    return ok(
-        {
-            "dataset_id": dataset_id,
-            "filename": filename,
-            "format": fmt,
-            "row_count": row.row_count,
-            "col_count": row.col_count,
-            "columns": columns,
-            "context": resolved_context,
-            "auto_notes_status": "pending",
-        }
-    )
+    return ok(payload)

@@ -31,9 +31,11 @@ def create_app() -> FastAPI:
         stats,
         suggestions,
         upload,
+        upload_sheets,
     )
     app.include_router(health.router)
     app.include_router(upload.router)
+    app.include_router(upload_sheets.router)
     app.include_router(datasets.router)
     app.include_router(datasets_ops.router)
     app.include_router(ask.router)
