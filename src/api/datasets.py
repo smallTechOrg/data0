@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api._common import ok, api_error
+from api._parquet import _safe_to_parquet
 from db.models import ConversationSessionRow, DatasetRow, QueryRunRow
 from db.session import get_session
 from graph.derived import (
@@ -276,7 +277,7 @@ def re_derive_dataset(dataset_id: str, session: Session = Depends(get_session)) 
     parquet_path = base / f"{dataset_id}.parquet"
     try:
         new_df.to_csv(csv_path, index=False)
-        new_df.to_parquet(parquet_path, index=False)
+        _safe_to_parquet(new_df, parquet_path)
     except Exception as exc:  # noqa: BLE001 — disk write failure
         raise api_error("re_derive_error", f"Could not write re-derived files: {exc}", 400)
 

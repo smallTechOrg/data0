@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api._common import ok, api_error
+from api._parquet import _safe_to_parquet
 from db.models import DatasetRow
 from db.session import get_session
 from graph.describe import trigger_describe_async
@@ -281,7 +282,7 @@ def clean_apply(
         if csv_path is not None:
             cleaned.to_csv(csv_path, index=False)
         if parquet_path is not None:
-            cleaned.to_parquet(parquet_path, index=False)
+            _safe_to_parquet(cleaned, parquet_path)
     except Exception as exc:  # noqa: BLE001
         logger.error("clean_apply_write_failed", dataset_id=dataset_id, error=str(exc))
         raise api_error("write_failed", f"Failed to rewrite dataset: {exc}", 500)

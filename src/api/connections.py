@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api._common import ok, api_error
+from api._parquet import _safe_to_parquet
 from api.datasets import _list_item
 from config.settings import get_settings
 from connectors.base import DatasetConnectionError, get_connector
@@ -141,7 +142,7 @@ def _register_pulled_table(
     csv_path = UPLOADS_DIR / f"{dataset_id}.csv"
     parquet_path = UPLOADS_DIR / f"{dataset_id}.parquet"
     df.to_csv(csv_path, index=False)
-    df.to_parquet(parquet_path, index=False)
+    _safe_to_parquet(df, parquet_path)
 
     row.file_path = str(csv_path)
     row.parquet_path = str(parquet_path)
@@ -235,7 +236,7 @@ def connections_resync(dataset_id: str, session: Session = Depends(get_session))
     parquet_path = UPLOADS_DIR / f"{dataset_id}.parquet"
     try:
         df.to_csv(csv_path, index=False)
-        df.to_parquet(parquet_path, index=False)
+        _safe_to_parquet(df, parquet_path)
     except Exception as exc:  # noqa: BLE001 — disk write failure
         raise api_error("resync_error", f"Could not write re-synced files: {exc}", 400)
 

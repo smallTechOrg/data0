@@ -115,7 +115,13 @@ def register_derived_dataset(
         csv_path = base / f"{dataset_id}.csv"
         parquet_path = base / f"{dataset_id}.parquet"
         df.to_csv(csv_path, index=False)
-        df.to_parquet(parquet_path, index=False)
+        # Deferred import: `api/__init__` builds the full router graph at import
+        # time (`app = create_app()`), and this module is imported mid-way
+        # through that chain (nodes->sandbox->derived), so a top-level
+        # `from api._parquet import ...` would form a circular import. Mirrors
+        # the deferred `graph.nodes` import below.
+        from api._parquet import _safe_to_parquet  # noqa: PLC0415
+        _safe_to_parquet(df, parquet_path)
 
         content_hash = hashlib.sha256(csv_path.read_bytes()).hexdigest()
         row.file_path = str(csv_path)
