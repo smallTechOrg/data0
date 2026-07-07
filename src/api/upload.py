@@ -25,12 +25,12 @@ import io
 from pathlib import Path
 
 import pandas as pd
-from pyarrow import ArrowInvalid, ArrowTypeError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api._common import ok, api_error
+from api._parquet import _safe_to_parquet
 from db.models import DatasetRow
 from db.session import get_session
 from graph.describe import trigger_describe_async
@@ -145,57 +145,24 @@ def _is_empty_frame(df: pd.DataFrame) -> bool:
     return df.shape[0] == 0 or df.shape[1] == 0
 
 
-def _coerce_object_columns_to_string(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a COPY of `df` with object-dtype columns coerced to string.
-
-    Nulls are PRESERVED: a naive `.astype(str)` would turn NaN into the
-    literal string "nan", so each cell is mapped elementwise — null stays
-    null, everything else becomes `str(value)`. Used ONLY for the Parquet
-    cache retry in `_write_dataset_files`; the caller's in-memory frame is
-    never mutated.
-    """
-    coerced = df.copy()
-    for i, dtype in enumerate(coerced.dtypes):
-        if dtype == object:
-            coerced.isetitem(
-                i,
-                coerced.iloc[:, i].map(
-                    lambda v: str(v) if pd.notna(v) else None
-                ),
-            )
-    return coerced
-
-
 def _write_dataset_files(
     df: pd.DataFrame, csv_path: Path, parquet_path: Path
 ) -> None:
     """Write the CSV + Parquet cache pair for a dataset; no orphans on failure.
 
-    Parquet is attempted on the raw frame FIRST so clean frames keep full
-    dtype fidelity. Real-world Excel sheets with title rows parse to
-    `Unnamed: N` object columns holding mixed str+int, which pyarrow rejects
-    (`ArrowTypeError: Expected bytes, got a 'int' object`) even though the
-    CSV write succeeds. On that failure ONLY, the Parquet write retries with
-    a string-coerced COPY (nulls preserved) — the coerced Parquet then reads
-    back exactly what the C27 CSV fallback would yield for those columns, so
-    the parquet-first read path stays consistent with the CSV. If any write
-    still fails, both files are unlinked before re-raising so a rolled-back
-    dataset row never leaves files behind.
-
-    NOTE: four other call sites still call `df.to_parquet` raw and share the
-    same latent mixed-object bug class — `src/api/connections.py:144,238`,
-    `src/api/datasets_ops.py:284`, `src/graph/derived.py:118`,
-    `src/api/datasets.py:279`. Swapping them onto this helper is a tracked
-    backlog item (spec/roadmap.md, "Safe-parquet-write adoption").
+    The CSV is written here; the Parquet half is delegated to the shared
+    `_safe_to_parquet` helper (`src/api/_parquet.py`) — the ONE canonical
+    Arrow-coerce-and-retry safe-Parquet writer (parquet-first for full dtype
+    fidelity; on pyarrow's mixed-object rejection `ArrowTypeError`/`ArrowInvalid`
+    — e.g. real-world Excel title rows that parse to `Unnamed: N` object columns
+    of mixed str+int — retry once with a null-preserving string-coerced copy;
+    unlink the parquet on terminal failure). If either write fails, both files
+    are unlinked before re-raising so a rolled-back dataset row never leaves
+    files behind.
     """
     try:
         df.to_csv(csv_path, index=False)
-        try:
-            df.to_parquet(parquet_path, index=False)
-        except (ArrowInvalid, ArrowTypeError):
-            _coerce_object_columns_to_string(df).to_parquet(
-                parquet_path, index=False
-            )
+        _safe_to_parquet(df, parquet_path)
     except Exception:
         for path in (csv_path, parquet_path):
             try:
@@ -259,7 +226,8 @@ def register_dataset(
     Shared by the single-file upload path and the C38 per-sheet commit route
     (`src/api/upload_sheets.py` — which passes the `source_*` provenance
     kwargs; direct uploads leave them None). Raises HTTPException 500
-    `write_failed` on a disk failure — per-sheet callers catch and roll back.
+    `write_failed` on a disk-write OR commit failure (a commit failure means
+    the row was never persisted) — per-sheet callers catch and roll back.
     Returns the single-upload response payload dict.
     """
     columns = [str(c) for c in df.columns]
@@ -302,10 +270,20 @@ def register_dataset(
     logger.info("upload_ok", dataset_id=dataset_id, rows=row.row_count, cols=row.col_count)
 
     # C30: commit the dataset NOW so the async notes job (its own DB session) can
-    # see the row, then fire it fire-and-forget. The trigger never raises/blocks;
-    # if it somehow fails, the upload still succeeds.
+    # see the row. A commit FAILURE means the row was never persisted, so it must
+    # surface HONESTLY as a 500 — never a swallowed warning that returns a false
+    # 200 `ok(...)` for a missing row. `get_session` rolls back the request on this
+    # propagating exception, so the failed row is not persisted; per-sheet callers
+    # (`upload_sheets.py`) catch it, roll back, and degrade to `status:"error"`.
     try:
         session.commit()
+    except Exception as exc:  # noqa: BLE001 — an unpersisted row must not report ok
+        logger.error("upload_commit_failed", dataset_id=dataset_id, error=str(exc))
+        raise api_error("write_failed", f"Failed to persist dataset: {exc}", 500)
+
+    # Fire the C30 notes job fire-and-forget. A trigger failure must NOT fail the
+    # upload — the dataset IS persisted — so warn and continue, returning `ok(...)`.
+    try:
         trigger_describe_async(dataset_id)
     except Exception as exc:  # noqa: BLE001 — notes trigger must not fail the upload
         logger.warning("upload_notes_trigger_failed", dataset_id=dataset_id, error=str(exc))
