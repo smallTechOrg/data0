@@ -7,9 +7,11 @@ provider). Drives `run_agent` directly (precise control over `run_clarification`
 contract (fast_mode echoed, model/provider unaffected).
 
 Asserts REAL, measurable behavior differences driven by the toggle:
-- a Fast Mode run completes in strictly fewer total LLM roundtrips
-  (iteration_count + clarification-call + suggestion-call, summed) than an
-  equivalent non-Fast-Mode run on the same ambiguous question
+- a Fast Mode run makes ZERO non-iteration LLM roundtrips (real calls counted
+  via a spy == iteration_count exactly: no suggestion call, no clarification
+  call), while an equivalent non-Fast-Mode run pays its suggestion roundtrip
+  (calls == iteration_count + 1) — each run checked against its own exact
+  arithmetic, never raced head-to-head (iteration counts are model luck)
 - a Fast Mode run's iteration_count never exceeds 5
 - a question that would normally trigger a clarifying question instead proceeds
   straight to an answer (type:"answer") under Fast Mode
@@ -140,22 +142,56 @@ def test_fast_mode_skips_clarification_normal_mode_would_ask_real_gemini(uploads
 
 
 # --------------------------------------------------------------------------- #
-# Fewer total roundtrips on an equivalent, answerable question (isolates the
-# skip-suggestions + tightened-cap levers from the nondeterministic clarify call)
+# Non-iteration roundtrips eliminated: count REAL LLM calls per run and check
+# each run against its own exact arithmetic. A strict fast-vs-normal roundtrip
+# comparison is racy under real-LLM nondeterminism (the normal run can get
+# lucky on iterations while the fast run self-corrects an execution error —
+# observed live 2026-07-07), so the guaranteed savings are asserted instead:
+# Fast Mode's total calls == its iteration count (zero suggestion/clarification
+# overhead), normal's == iteration count + 1 (the suggestion roundtrip).
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.usefixtures("_require_llm_key")
-def test_fast_mode_fewer_total_roundtrips_real_gemini(uploads_dir):
-    """Ask the SAME unambiguous multi-step question twice (fresh dataset each
-    time), both with clarification skipped so the comparison isolates the OTHER
-    two roundtrip-saving levers Fast Mode applies unconditionally: the tightened
-    5-iteration cap and the skipped post-answer suggestion call.
+@pytest.fixture
+def _count_llm_calls(monkeypatch):
+    """Spy on BOTH LLMClient entry points, counting real provider roundtrips.
 
-    total roundtrips = iteration_count + (1 if suggestions ran else 0); neither
-    run pays a clarification roundtrip here (both explicitly skip it), matching
-    the gate's own metric of "iteration_count + clarification-call +
-    suggestion-call, summed"."""
+    `LLMClient.call_model` delegates to the provider directly (not to
+    `LLMClient.complete`), so wrapping both never double-counts."""
+    from llm.client import LLMClient
+
+    counts = {"n": 0}
+    orig_complete = LLMClient.complete
+    orig_call_model = LLMClient.call_model
+
+    def counting_complete(self, prompt, *, system=None):
+        counts["n"] += 1
+        return orig_complete(self, prompt, system=system)
+
+    def counting_call_model(self, prompt, *, system=None):
+        counts["n"] += 1
+        return orig_call_model(self, prompt, system=system)
+
+    monkeypatch.setattr(LLMClient, "complete", counting_complete)
+    monkeypatch.setattr(LLMClient, "call_model", counting_call_model)
+    return counts
+
+
+@pytest.mark.usefixtures("_require_llm_key")
+def test_fast_mode_eliminates_non_iteration_roundtrips_real_gemini(
+    uploads_dir, _count_llm_calls
+):
+    """Ask the SAME unambiguous multi-step question twice (fresh dataset each
+    time), both with clarification skipped, counting REAL LLM calls per run.
+
+    Per-run call arithmetic (normally-completed run, clarification skipped):
+    plan_action makes exactly one call per iteration and `finalize` makes none
+    (only `force_finalize` would add a synthesis call — excluded by asserting
+    `is_best_effort` is False). So:
+    - normal run: calls == iteration_count + 1  (the always-run suggestion call)
+    - fast run:   calls == iteration_count      (zero non-iteration overhead)
+    Each run is checked against its own arithmetic — iteration counts are model
+    luck and are never compared across runs."""
     df = pd.DataFrame(
         {
             "region": ["north", "south", "east", "west", "north", "south"],
@@ -176,11 +212,19 @@ def test_fast_mode_fewer_total_roundtrips_real_gemini(uploads_dir):
         skip_clarification=True,
         fast_mode=False,
     )
+    normal_calls = _count_llm_calls["n"]
     assert normal_result["type"] == "answer"
-    # generate_suggestions always runs after a completed, non-fast-mode answer.
-    normal_roundtrips = normal_result["iteration_count"] + 1
+    assert normal_result["is_best_effort"] is False, (
+        "fixture question unexpectedly force-finalized — the call arithmetic "
+        "below assumes a normal completion"
+    )
     print(f"\n[normal] iteration_count={normal_result['iteration_count']} "
-          f"roundtrips={normal_roundtrips} suggestions={normal_result['suggested_questions']}")
+          f"llm_calls={normal_calls} suggestions={normal_result['suggested_questions']}")
+    assert normal_calls == normal_result["iteration_count"] + 1, (
+        f"normal mode must pay exactly one non-iteration roundtrip (the "
+        f"suggestion call); calls={normal_calls} "
+        f"iterations={normal_result['iteration_count']}"
+    )
 
     fast_dataset_id = _make_dataset(uploads_dir, "sales_fast.csv", df)
     fast_result = run_agent(
@@ -190,20 +234,24 @@ def test_fast_mode_fewer_total_roundtrips_real_gemini(uploads_dir):
         skip_clarification=True,
         fast_mode=True,
     )
+    fast_calls = _count_llm_calls["n"] - normal_calls
     assert fast_result["type"] == "answer"
+    assert fast_result["is_best_effort"] is False, (
+        "fixture question unexpectedly force-finalized — the call arithmetic "
+        "below assumes a normal completion"
+    )
     assert fast_result["suggested_questions"] == []
-    # No suggestion roundtrip in fast_mode.
-    fast_roundtrips = fast_result["iteration_count"]
     print(f"[fast] iteration_count={fast_result['iteration_count']} "
-          f"roundtrips={fast_roundtrips}")
+          f"llm_calls={fast_calls}")
 
     assert fast_result["iteration_count"] <= 5, (
         f"fast_mode iteration_count must never exceed 5, got "
         f"{fast_result['iteration_count']}"
     )
-    assert fast_roundtrips < normal_roundtrips, (
-        f"expected fast_mode to use strictly fewer total roundtrips; "
-        f"fast={fast_roundtrips} normal={normal_roundtrips}"
+    assert fast_calls == fast_result["iteration_count"], (
+        f"fast_mode must make ZERO non-iteration LLM roundtrips (no suggestion "
+        f"call, no clarification call); calls={fast_calls} "
+        f"iterations={fast_result['iteration_count']}"
     )
 
     answer = fast_result["answer"]
