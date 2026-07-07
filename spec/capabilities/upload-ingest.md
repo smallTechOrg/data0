@@ -23,6 +23,7 @@ Accepts an uploaded data file (CSV/TSV/TXT/JSON/Excel), parses it with pandas, h
 |--------|-----------|------------|
 | pandas | parse file by extension | 400 unparseable/empty |
 | disk | write CSV + Parquet | 500 write fail |
+| DB | commit dataset row | 500 `write_failed` (Phase 13 — surfaced honestly, NOT swallowed as 200 for an unpersisted row; separate from the non-fatal notes trigger) |
 | LLM (async) | trigger C30 notes | non-fatal; `auto_notes_status=failed` |
 
 ## Business Rules

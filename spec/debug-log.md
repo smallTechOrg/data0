@@ -44,6 +44,7 @@
   re-verification of the retry→success path (un-paced full suite) after quota reset.
 - **`ERDiagramPanel.tsx:550`** — pre-existing `react-hooks/exhaustive-deps` lint warning
   (`viewSize` missing from a `useMemo`). Style-tier; fold into the next edit of that file.
+  **Scheduled — see roadmap Phase 13 (slice-13c).**
 
 ---
 
