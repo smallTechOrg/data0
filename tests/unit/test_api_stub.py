@@ -357,7 +357,9 @@ def test_upload_tsv_parses_correctly(api_client):
 
 
 def test_upload_txt_parses_correctly(api_client):
-    """C1/C11: .txt files treated as TSV."""
+    """C1/C11: tab-delimited .txt regression — the sniffer detects tab directly
+    (not merely the fallback path; see test_upload_txt_single_column_sniff_fallback
+    for the sniff-inconclusive fallback case)."""
     tsv_body = "col_a\tcol_b\n1\talpha\n2\tbeta\n"
     files = {"file": ("data.txt", io.BytesIO(tsv_body.encode()), "text/plain")}
     r = api_client.post("/upload", files=files)
