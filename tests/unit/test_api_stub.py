@@ -367,6 +367,55 @@ def test_upload_txt_parses_correctly(api_client):
     assert data["col_count"] == 2
 
 
+def test_upload_txt_comma_delimited_parses_multiple_columns(api_client):
+    """C11: comma-delimited .txt is sniffed, not misparsed into 1 column."""
+    body = "col_a,col_b\n1,alpha\n2,beta\n"
+    files = {"file": ("data_comma.txt", io.BytesIO(body.encode()), "text/plain")}
+    r = api_client.post("/upload", files=files)
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["row_count"] == 2
+    assert data["col_count"] == 2
+
+
+def test_upload_txt_pipe_delimited_parses_multiple_columns(api_client):
+    """C11: pipe-delimited .txt is sniffed, not misparsed into 1 column."""
+    body = "col_a|col_b\n1|alpha\n2|beta\n"
+    files = {"file": ("data_pipe.txt", io.BytesIO(body.encode()), "text/plain")}
+    r = api_client.post("/upload", files=files)
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["row_count"] == 2
+    assert data["col_count"] == 2
+
+
+def test_upload_txt_semicolon_delimited_parses_multiple_columns(api_client):
+    """C11: semicolon-delimited .txt is sniffed, not misparsed into 1 column."""
+    body = "col_a;col_b\n1;alpha\n2;beta\n"
+    files = {"file": ("data_semicolon.txt", io.BytesIO(body.encode()), "text/plain")}
+    r = api_client.post("/upload", files=files)
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["row_count"] == 2
+    assert data["col_count"] == 2
+
+
+def test_upload_txt_single_column_sniff_fallback(api_client):
+    """C11: single-column .txt with no delimiter at all never 500s.
+
+    The sniffer is inconclusive on genuinely single-column content, so this
+    falls back to the historical tab-separated default — which also yields a
+    single column here since there's no tab either. The point is no crash.
+    """
+    body = "col_a\n1\n2\n3\n"
+    files = {"file": ("data_single.txt", io.BytesIO(body.encode()), "text/plain")}
+    r = api_client.post("/upload", files=files)
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["row_count"] == 3
+    assert data["col_count"] == 1
+
+
 def test_upload_json_parses_correctly(api_client):
     """C1/C11: JSON files are parsed correctly."""
     import json as _json

@@ -29,12 +29,11 @@
 > test-suite pacing). This list remains the technical record of each hazard; when one ships,
 > move it into the Log section above with its fix entry.
 
-- **Parity-gaps: only ONE sliver still open** (corrected 2026-07-07 — the original entry here
+- **Parity-gaps: all slivers closed** (corrected 2026-07-07 — the original entry here
   copied five gaps from the stale 2026-06-29 audit without re-verifying; see the Log entry of
   2026-07-07 "Backlog seeded from stale parity audit"). Verified against HEAD: C9, C14, C16, and
-  C13+C17 are all SHIPPED, and C11's JSON half was fixed by D9. Remaining: **TXT delimiter
-  sniffing** — `.txt` uploads are hardcoded `sep="\t"` in `src/api/upload.py` `_parse_dataframe`,
-  so comma/pipe-delimited `.txt` files misparse to a single column.
+  C13+C17 are all SHIPPED, C11's JSON half was fixed by D9, and C11's TXT-delimiter-sniffing half
+  was fixed 2026-07-08 (see Log) — no parity-gap items remain open.
 - **Free-tier Gemini key: 15 req/min AND 500 req/day** (updated 2026-07-07). The per-minute
   throttle now self-heals via the provider's adaptive 429 retry (`9dd9fa6` — see Log). The
   DAILY cap does not (retrying is pointless; the retry fail-fasts it by design) — a heavy
@@ -49,6 +48,22 @@
 ---
 
 ## Log (newest first)
+
+### 2026-07-08 — TXT uploads hardcoded to tab, misparsing other delimiters (pending commit)
+
+- **Symptom:** a comma/pipe/semicolon-delimited `.txt` upload silently misparsed into a single
+  column (no error raised) — the last remaining sliver of the C11 parity gap.
+- **Root cause:** `_parse_dataframe` in `src/api/upload.py` grouped `.tsv` and `.txt` into one
+  branch, both hardcoded to `pd.read_csv(buf, sep="\t")`. `.tsv` is always tab-separated so that's
+  correct for it, but `.txt` is a free-form delimited format with no such guarantee.
+- **Fix:** split `.tsv` and `.txt` into separate branches; `.tsv` keeps `sep="\t"` unconditionally
+  (byte-for-byte unchanged). `.txt` now sniffs the delimiter (comma/tab/pipe/semicolon) via
+  `csv.Sniffer().sniff()` on an 8KB decoded sample, falling back to the historical `sep="\t"`
+  default whenever the sniffer is inconclusive (`csv.Error`, empty/whitespace-only sample, or
+  genuinely single-column content) so no sniffer edge case can turn into an uncaught error. Five
+  tests in `tests/unit/test_api_stub.py` cover comma/pipe/semicolon-delimited `.txt`, the
+  tab-delimited regression case, and the single-column no-delimiter fallback. Unit suite: 369
+  passed (365 baseline + 4 new tests).
 
 ### 2026-07-07 — Session cache shared mutable frames across turns (67a4569, Phase 11)
 

@@ -19,6 +19,7 @@ factored into `register_dataset` so the sheet-commit route reuses it verbatim.
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import io
 from pathlib import Path
@@ -66,8 +67,25 @@ def _parse_dataframe(raw: bytes, ext: str) -> pd.DataFrame:
     buf = io.BytesIO(raw)
     if ext == ".csv":
         return pd.read_csv(buf)
-    if ext in (".tsv", ".txt"):
+    if ext == ".tsv":
         return pd.read_csv(buf, sep="\t")
+    if ext == ".txt":
+        # C11: `.txt` is a free-form delimited format, unlike `.tsv` which is
+        # always tab-separated. Sniff the delimiter (comma/tab/pipe/semicolon)
+        # from a small sample so comma/pipe/semicolon-delimited `.txt` files
+        # don't silently misparse into a single column. If the sniffer can't
+        # make a confident call (empty sample, single column/row, or any other
+        # inconclusive case), fall back to the historical tab-separated default
+        # so existing `.txt` uploads keep working unchanged.
+        sample = raw[:8192].decode("utf-8", errors="replace")
+        sep = "\t"
+        if sample.strip():
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=",\t|;")
+                sep = dialect.delimiter
+            except csv.Error:
+                sep = "\t"
+        return pd.read_csv(buf, sep=sep)
     if ext == ".json":
         # Handle the three JSON shapes the spec requires (D9):
         #   1. records-list: [{col: val, ...}, ...]  — default orient
