@@ -324,6 +324,9 @@ function AnswerView({
               ]),
             )
           }
+          // C39 — payload-level field, threaded as a separate prop; NEVER
+          // merged into the breakdown object (unknown keys render as bars).
+          tokensCached={answer.tokens_cached ?? 0}
         />
       )}
     </div>

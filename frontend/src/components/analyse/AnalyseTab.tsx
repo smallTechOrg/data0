@@ -14,6 +14,11 @@ import { SettingsPanel } from '@/components/analyse/SettingsPanel'
 export interface LastQueryTokens {
   input: number
   output: number
+  /**
+   * C39 — input tokens served from the provider's implicit cache (a SUBSET of
+   * `input`, never additional). Optional so absent payloads degrade to 0.
+   */
+  cached?: number
 }
 
 /**

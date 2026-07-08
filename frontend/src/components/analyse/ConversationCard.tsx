@@ -122,6 +122,7 @@ function turnFromView(v: TurnView): Turn {
     iteration_count: v.iteration_count,
     tokens_input: v.tokens_input,
     tokens_output: v.tokens_output,
+    tokens_cached: v.tokens_cached,
     status: v.status,
     is_best_effort: v.is_best_effort,
     steps: v.steps ?? [],
@@ -299,7 +300,11 @@ export function ConversationCard({
             answeredAt: Date.now(),
             durationMs: typeof res.duration_ms === 'number' ? res.duration_ms : undefined,
           })
-          onAnswered({ input: res.tokens_input ?? 0, output: res.tokens_output ?? 0 })
+          onAnswered({
+            input: res.tokens_input ?? 0,
+            output: res.tokens_output ?? 0,
+            cached: res.tokens_cached ?? 0,
+          })
         }
       } catch (err) {
         // Stop button → the fetch was aborted. Show a calm "Stopped." rather than

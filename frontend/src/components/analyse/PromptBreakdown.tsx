@@ -41,7 +41,20 @@ function barClass(isTotal: boolean): string {
   return isTotal ? 'bg-blue-500' : 'bg-blue-300'
 }
 
-export function PromptBreakdown({ breakdown }: { breakdown: Record<string, number> }) {
+export function PromptBreakdown({
+  breakdown,
+  tokensCached = 0,
+}: {
+  breakdown: Record<string, number>
+  /**
+   * C39 — input tokens served from the provider's implicit cache. Arrives as a
+   * separate payload-level prop, NEVER as a key inside `breakdown` (unknown
+   * breakdown keys render as component bars, which would corrupt the display).
+   * Informational only: cached tokens count at FULL value in `total_prompt`,
+   * so the bars never shrink. No line renders at 0 (cold/stub run — expected).
+   */
+  tokensCached?: number
+}) {
   const [open, setOpen] = useState(false)
 
   // Extract total_prompt for proportional bars. Fall back to summing all
@@ -52,6 +65,10 @@ export function PromptBreakdown({ breakdown }: { breakdown: Record<string, numbe
     Object.entries(breakdown)
       .filter(([k]) => k !== 'total_prompt' && k !== 'tokens_output')
       .reduce((a, [, b]) => a + b, 0)
+
+  // C39 — clamp defensively to 0 ≤ cached ≤ total so "X of Y" can never show
+  // X > Y even on a malformed payload (the invariant holds server-side).
+  const cached = Math.min(Math.max(tokensCached, 0), total)
 
   // Separate total_prompt and tokens_output from the component rows; the six
   // input components sum to total_prompt and are shown as proportional bars.
@@ -105,6 +122,18 @@ export function PromptBreakdown({ breakdown }: { breakdown: Record<string, numbe
             >
               <div className={`h-full w-full ${barClass(true)}`} />
             </div>
+          )}
+
+          {/* C39 — informational cache line: cached tokens are a subset of the
+              input total, billed at a discount. The component bars above/below
+              are UNCHANGED by caching (cached tokens count at full value in
+              total_prompt). Rendered only when cached > 0 — a cold first run
+              shows no line, and "0 of Y" must never render. */}
+          {cached > 0 && (
+            <p className="-mt-1 mb-3 text-[11px] text-gray-500">
+              {cached.toLocaleString()} of {total.toLocaleString()} tokens
+              served from cache
+            </p>
           )}
 
           {/* Per-component rows */}

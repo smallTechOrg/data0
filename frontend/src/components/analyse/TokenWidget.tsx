@@ -66,15 +66,65 @@ function priceFor(model: string | undefined): ModelPrice | null {
   return PRICING_USD_PER_MILLION_TOKENS[model] ?? null
 }
 
-/** Compute a USD cost from token counts, or null when the model has no price. */
+/**
+ * Prompt-cache discount multipliers (C39) — the fraction of the input rate
+ * billed for tokens served from the provider's implicit cache. Keyed by model
+ * id exactly like the pricing table above; **0.25 for Gemini implicit cache**
+ * (Google's published implicit-cache discount). Non-Gemini models make no
+ * cache-control calls this phase, so they always report `tokens_cached = 0`
+ * and never reach a discount entry.
+ *
+ * Documented assumption (spec/capabilities/prompt-cache-accounting.md): a
+ * Settings field for this multiplier is deferred until a second provider
+ * actually reports cached tokens — until then this constant is the whole
+ * requirement. The discount is model-keyed and independent of whether the
+ * rate comes from this file's table or the user-configured Settings price.
+ */
+const GEMINI_IMPLICIT_CACHE_DISCOUNT = 0.25
+
+const CACHE_DISCOUNT_BY_MODEL: Record<string, number> = {
+  'gemini-3.5-flash': GEMINI_IMPLICIT_CACHE_DISCOUNT,
+  'gemini-3.1-pro-preview': GEMINI_IMPLICIT_CACHE_DISCOUNT,
+  'gemini-3.1-flash-lite': GEMINI_IMPLICIT_CACHE_DISCOUNT,
+  'gemini-3-pro-preview': GEMINI_IMPLICIT_CACHE_DISCOUNT,
+  'gemini-2.5-pro': GEMINI_IMPLICIT_CACHE_DISCOUNT,
+  'gemini-2.5-flash': GEMINI_IMPLICIT_CACHE_DISCOUNT,
+  'gemini-2.5-flash-lite': GEMINI_IMPLICIT_CACHE_DISCOUNT,
+  'gemini-2.0-flash': GEMINI_IMPLICIT_CACHE_DISCOUNT,
+  'gemini-2.0-flash-lite': GEMINI_IMPLICIT_CACHE_DISCOUNT,
+}
+
+/**
+ * Resolve a model's cache discount; unknown model → 1 (cached tokens billed at
+ * the full input rate, i.e. no discount — never understates spend).
+ */
+function cacheDiscountFor(model: string | undefined): number {
+  if (!model) return 1
+  return CACHE_DISCOUNT_BY_MODEL[model] ?? 1
+}
+
+/**
+ * Compute a USD cost from token counts, or null when the model has no price.
+ *
+ * Honest discounted formula (C39, rates per-million):
+ *   cost_input = (tokens_input − tokens_cached) × rate_in
+ *              + tokens_cached × rate_in × discount
+ * (output side unchanged). With cachedTokens = 0 this degenerates exactly to
+ * the plain arithmetic. `cachedTokens` is clamped to `0 ≤ cached ≤ input`
+ * defensively (the invariant holds server-side, but never trust it blindly).
+ */
 function costUsd(
   price: ModelPrice | null,
   inputTokens: number,
   outputTokens: number,
+  cachedTokens: number = 0,
+  cacheDiscount: number = 1,
 ): number | null {
   if (!price) return null
+  const cached = Math.min(Math.max(cachedTokens, 0), inputTokens)
   return (
-    (inputTokens * price.inputPerMillion) / 1_000_000 +
+    ((inputTokens - cached) * price.inputPerMillion) / 1_000_000 +
+    (cached * price.inputPerMillion * cacheDiscount) / 1_000_000 +
     (outputTokens * price.outputPerMillion) / 1_000_000
   )
 }
@@ -151,16 +201,33 @@ export function TokenWidgetView({
       ? Math.min(100, (lastPromptTokens / stats.context_limit) * 100)
       : 0
 
+  // Cached tokens (C39): prefer the live answer's count; fall back to the
+  // latest persisted run on reload (mirrors the In/Out fallback above). Absent
+  // fields read 0 — old rows/sessions predate the field. Clamp to the input so
+  // "X of Y" and the discount can never exceed Y even on a bad payload.
+  const lastCachedRaw = lastTokens?.cached ?? stats?.last_tokens_cached ?? 0
+  const lastCached =
+    lastInput != null ? Math.min(Math.max(lastCachedRaw, 0), lastInput) : 0
+  const todayCached = stats
+    ? Math.min(Math.max(stats.tokens_cached ?? 0, 0), stats.tokens_input)
+    : 0
+
   // Cost (C18): user-configured price takes precedence; fall back to hardcoded table.
   const price = userPrice ?? priceFor(stats?.model)
+  // Honest discounted cost (C39): cached input tokens are billed at the
+  // model-keyed discount. The formula is linear, so it applies identically to
+  // the last query (live/persisted counts) and the today aggregate.
+  const cacheDiscount = cacheDiscountFor(stats?.model)
   // Compute from the same live-or-persisted In/Out fallback so the cost shows
   // whenever the last-query token values are available (including on reload).
   const lastQueryCost =
     lastInput != null && lastOutput != null
-      ? formatCost(costUsd(price, lastInput, lastOutput))
+      ? formatCost(costUsd(price, lastInput, lastOutput, lastCached, cacheDiscount))
       : '—'
   const todayCost = stats
-    ? formatCost(costUsd(price, stats.tokens_input, stats.tokens_output))
+    ? formatCost(
+        costUsd(price, stats.tokens_input, stats.tokens_output, todayCached, cacheDiscount),
+      )
     : '—'
 
   return (
@@ -193,6 +260,15 @@ export function TokenWidgetView({
         />
         <Row label="Today (In / Out / Queries)" value={today} live={!!stats} />
       </dl>
+
+      {/* C39 — cache line: only when cached > 0 (a cold run shows no line;
+          "0 of Y" must never render). X ≤ Y by the clamp above. */}
+      {lastCached > 0 && lastInput != null && (
+        <p className="mt-1.5 text-[11px] text-gray-500">
+          {lastCached.toLocaleString()} of {lastInput.toLocaleString()} tokens
+          served from cache
+        </p>
+      )}
 
       {/* C29 context-window bar — last query's prompt size vs the model window. */}
       {stats && stats.context_limit > 0 && (

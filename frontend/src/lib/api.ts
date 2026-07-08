@@ -321,6 +321,12 @@ export interface AskResponse {
   iteration_count?: number
   tokens_input?: number
   tokens_output?: number
+  /**
+   * C39 — input tokens served from Gemini's implicit cache this run (a SUBSET
+   * of `tokens_input`, never additional). 0 on cold/stub runs and on rows that
+   * predate Phase 14; treat absent as 0.
+   */
+  tokens_cached?: number
   status?: string
   is_best_effort?: boolean
   steps?: AskStep[]
@@ -384,6 +390,10 @@ export interface DailyStats {
   last_tokens_input?: number
   /** Output tokens of the most recent run today — for the persisted "Last query (In/Out)" fallback. */
   last_tokens_output?: number
+  /** C39 — today's summed cached input tokens (subset of `tokens_input`); absent → 0. */
+  tokens_cached?: number
+  /** C39 — cached input tokens of the most recent run today (reload fallback); absent → 0. */
+  last_tokens_cached?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +424,8 @@ export interface TurnView {
   iteration_count?: number
   tokens_input?: number
   tokens_output?: number
+  /** C39 — cached input tokens for this persisted turn; pre-Phase-14 rows read 0. */
+  tokens_cached?: number
   status?: string
   is_best_effort?: boolean
   steps?: AskStep[]
