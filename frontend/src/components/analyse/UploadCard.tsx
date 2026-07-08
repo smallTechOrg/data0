@@ -275,13 +275,21 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
    *
    * A `DataTransferItemList` and its items are only valid SYNCHRONOUSLY during
    * the drop event — after the first `await` the browser empties the transfer
-   * store, so `webkitGetAsEntry()`/`getAsFile()` return null for every item read
-   * afterwards (which previously silently dropped every file past the first in a
-   * multi-file batch). We therefore take a fully-synchronous snapshot of all
-   * items FIRST — capturing each item's FileSystemEntry (or File fallback) into
-   * plain arrays — and only then do the async work. FileSystemEntry / File
-   * objects captured synchronously stay valid across awaits; only the
-   * DataTransferItemList itself neuters.
+   * store. Two distinct failures follow from that:
+   *   1. `webkitGetAsEntry()`/`getAsFile()` return null for every item read
+   *      AFTER an await (dropped every file past the first in a batch), and
+   *   2. even when an item's FileSystemFileEntry is captured synchronously, its
+   *      DEFERRED `entry.file()` re-read (fileEntryToFile) still REJECTS once the
+   *      drag data store is released — and does so size-dependently: tiny text
+   *      blobs (CSVs) resolve in time, a larger binary workbook (.xlsx) does not,
+   *      so the workbook was silently swallowed by the loose-file catch.
+   *
+   * Fix: for loose (non-directory) items we materialize the File SYNCHRONOUSLY
+   * in pass 1 via `item.getAsFile()`, which returns a fully-realized Blob
+   * snapshot that survives across awaits regardless of size — then stage it
+   * DIRECTLY in pass 2 with no async re-read. Only genuine directories still use
+   * the async FileSystemDirectoryEntry reader (a directory's inner file entries
+   * come from that reader, not the neutered DataTransfer, so they stay valid).
    */
   const resolveDroppedItems = useCallback(async (items: DataTransferItemList) => {
     // A fresh drop clears any prior folder-README confirmation.
@@ -289,27 +297,35 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
 
     // --- Pass 1: SYNCHRONOUS snapshot of the DataTransfer -----------------
     // No `await` may occur before this loop completes, or subsequent items go
-    // null. We only read entries/files here; all reading (directory contents,
-    // file bytes, notes text) happens in pass 2 over these captured objects.
+    // null. Directories capture their FileSystemDirectoryEntry (folders need the
+    // async reader). Every loose (non-directory) file is materialized RIGHT HERE
+    // via getAsFile() — a fully-realized Blob snapshot that survives across
+    // awaits regardless of size — so pass 2 never re-reads it.
     const dirEntries: FileSystemDirectoryEntry[] = []
-    const fileEntries: FileSystemFileEntry[] = []
-    const fallbackFiles: File[] = []
+    const looseFiles: File[] = []
+    // Last-resort fallback ONLY: an item that yielded neither a synchronous File
+    // (getAsFile() returned null) nor a directory, yet did expose a file entry.
+    // Read async in pass 2; the common path is the synchronous getAsFile() above.
+    const looseFileEntries: FileSystemFileEntry[] = []
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
       const entry = item.webkitGetAsEntry?.()
 
-      if (!entry) {
-        // Fallback: no FileSystemEntry API — use the File directly.
-        const file = item.getAsFile()
-        if (file) fallbackFiles.push(file)
+      if (entry?.isDirectory) {
+        // Folders genuinely need the async FileSystemDirectoryEntry reader.
+        dirEntries.push(entry as FileSystemDirectoryEntry)
         continue
       }
 
-      if (entry.isDirectory) {
-        dirEntries.push(entry as FileSystemDirectoryEntry)
-      } else if (entry.isFile) {
-        fileEntries.push(entry as FileSystemFileEntry)
+      // Every non-directory item (both entry.isFile and the no-entry fallback):
+      // capture a synchronous File snapshot that survives teardown.
+      const file = item.getAsFile()
+      if (file) {
+        looseFiles.push(file)
+      } else if (entry?.isFile) {
+        // No synchronous snapshot — keep the file entry for an async read.
+        looseFileEntries.push(entry as FileSystemFileEntry)
       }
     }
 
@@ -319,8 +335,11 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
     // keyed to the folder it came from. Only the first README found wins.
     let folderReadme: { folderName: string; text: string } | null = null
 
-    // Loose files captured via the getAsFile() fallback (no FileSystemEntry).
-    for (const file of fallbackFiles) {
+    // Loose files captured SYNCHRONOUSLY via getAsFile() — stage directly with
+    // NO async re-read. This is the workbook-loss fix: the previous deferred
+    // fileEntryToFile(entry.file()) re-read rejected for the larger .xlsx binary
+    // once the drag store was released, and the silent catch swallowed it.
+    for (const file of looseFiles) {
       if (isDataFile(file.name)) {
         newEntries.push(makeEntry(file, ''))
       }
@@ -375,19 +394,24 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
           const notes = perFileNotesMap.get(fileStem) ?? ''
           newEntries.push(makeEntry(file, notes))
         } catch {
-          // Skip unreadable files
+          // A data file that failed to materialize is a visible loss — surface
+          // it rather than silently dropping it (folder-content reads come from
+          // the directory reader, so this is rare, but never invisible).
+          console.warn(`Could not read dropped folder file "${fe.name}"; skipping.`)
         }
       }
     }
 
-    // Single-file drops — each captured FileSystemFileEntry read async.
-    for (const fe of fileEntries) {
+    // Last-resort fallback: loose items with no synchronous getAsFile() snapshot
+    // (getAsFile() returned null) — read the file entry async. Rare; the common
+    // loose-file path is the synchronous getAsFile() capture above.
+    for (const fe of looseFileEntries) {
       if (!fe.name.startsWith('.') && isDataFile(fe.name)) {
         try {
           const file = await fileEntryToFile(fe)
           newEntries.push(makeEntry(file, ''))
         } catch {
-          // Skip
+          console.warn(`Could not read dropped file "${fe.name}"; skipping.`)
         }
       }
     }
