@@ -22,6 +22,7 @@ class AgentState(TypedDict, total=False):
     llm_response: str                    # latest raw model reply (action or FINAL ANSWER)
     tokens_input: int                    # accumulated prompt tokens
     tokens_output: int                   # accumulated completion tokens
+    tokens_cached: int                   # C39: accumulated cache-served prompt tokens (subset of tokens_input; plan_action + force_finalize only)
     charts: list[str]                    # ECharts `option` JSON strings captured in execute_action (via echart())
     prompt_component_chars: dict         # C29: CUMULATIVE per-bucket char counts summed across all plan_action calls
 

@@ -83,6 +83,12 @@ class QueryRunRow(Base):
     iteration_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tokens_input: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tokens_output: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # C39 — cache-served subset of tokens_input (0 <= tokens_cached <= tokens_input).
+    # Nullable with server-default '0' so pre-Phase-14 rows read as 0; API reads
+    # use `or 0` defensively (spec/data.md).
+    tokens_cached: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, server_default="0"
+    )
     prompt_breakdown: Mapped[Any | None] = mapped_column(JSON, nullable=True)
     charts_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
     dataset_ids_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)

@@ -77,6 +77,9 @@ def stats_daily(session: Session = Depends(get_session)) -> dict:
     rows = [r for r in completed if _is_today(r)]
     tokens_input = sum(r.tokens_input or 0 for r in rows)
     tokens_output = sum(r.tokens_output or 0 for r in rows)
+    # C39: day's cache-served subset of tokens_input (`or 0`: pre-Phase-14 rows
+    # may carry NULL). Feeds the frontend's discounted "Today" cost.
+    tokens_cached = sum(r.tokens_cached or 0 for r in rows)
     query_count = len(rows)
 
     # The most recent run's input tokens — i.e. the last query's prompt size.
@@ -94,6 +97,9 @@ def stats_daily(session: Session = Depends(get_session)) -> dict:
     # cost) can be reconstructed on reload from a persisted/restored run, not just
     # from the ephemeral in-memory live counts.
     last_tokens_output = (latest.tokens_output or 0) if latest else 0
+    # C39: the latest run's cache-served tokens — the reload fallback for the
+    # "X of Y from cache" line, mirroring last_tokens_input/last_tokens_output.
+    last_tokens_cached = (latest.tokens_cached or 0) if latest else 0
 
     return ok(
         {
@@ -101,6 +107,7 @@ def stats_daily(session: Session = Depends(get_session)) -> dict:
             "model": model,
             "tokens_input": tokens_input,
             "tokens_output": tokens_output,
+            "tokens_cached": tokens_cached,
             "query_count": query_count,
             "context_limit": _context_limit(model),
             "last_prompt_tokens": last_prompt_tokens,
@@ -108,5 +115,6 @@ def stats_daily(session: Session = Depends(get_session)) -> dict:
             # `last_prompt_tokens` (which the context bar reads) — do not remove.
             "last_tokens_input": last_prompt_tokens,
             "last_tokens_output": last_tokens_output,
+            "last_tokens_cached": last_tokens_cached,
         }
     )

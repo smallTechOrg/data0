@@ -196,7 +196,7 @@ def run_agent(
       to 3 refined candidates from the SAME pre-flight call, `[]` on fallback
     - an answer:
       `{"type":"answer", run_id, status, answer, iteration_count, tokens_input,
-        tokens_output, action_history, charts, derived_dataset_ids, dataset_ids,
+        tokens_output, tokens_cached, action_history, charts, derived_dataset_ids, dataset_ids,
         is_best_effort, selector_reasoning, suggested_questions,
         prompt_breakdown, session_id}`
     """
@@ -244,6 +244,7 @@ def run_agent(
                     iteration_count=0,
                     tokens_input=0,
                     tokens_output=0,
+                    tokens_cached=0,
                 )
                 session.add(row)
                 session.flush()
@@ -279,6 +280,7 @@ def run_agent(
             iteration_count=0,
             tokens_input=0,
             tokens_output=0,
+            tokens_cached=0,
             fast_mode=fast_mode,
         )
         session.add(row)
@@ -310,6 +312,7 @@ def run_agent(
         "iteration_count": 0,
         "tokens_input": 0,
         "tokens_output": 0,
+        "tokens_cached": 0,
         "charts": [],
         "status": "running",
         "max_iterations": cap,
@@ -347,6 +350,10 @@ def run_agent(
     iteration_count = final.get("iteration_count", 0)
     tokens_input = final.get("tokens_input", 0)
     tokens_output = final.get("tokens_output", 0)
+    # C39: cache-served subset of tokens_input. The suggestions call below is
+    # deliberately EXCLUDED from cached accumulation (documented scope bound in
+    # spec/capabilities/prompt-cache-accounting.md) — slightly conservative cost.
+    tokens_cached = final.get("tokens_cached", 0)
     error_message = final.get("error_message") or final.get("error")
     selector_reasoning = None  # agent-driven selection: no selector reasoning
     charts = final.get("charts") or []
@@ -388,6 +395,7 @@ def run_agent(
             row.iteration_count = iteration_count
             row.tokens_input = tokens_input
             row.tokens_output = tokens_output
+            row.tokens_cached = tokens_cached
             row.error_message = error_message
             row.selector_reasoning = selector_reasoning
             row.prompt_breakdown = prompt_breakdown
@@ -418,6 +426,7 @@ def run_agent(
         "iteration_count": iteration_count,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
+        "tokens_cached": tokens_cached,
         "action_history": action_history,
         "charts": charts,
         "derived_dataset_ids": derived_dataset_ids,

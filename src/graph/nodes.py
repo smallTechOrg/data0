@@ -593,6 +593,9 @@ def plan_action(state: AgentState) -> AgentState:
     out_toks = resp.tokens_output or _estimate_tokens(reply)
     tokens_input = state.get("tokens_input", 0) + in_toks
     tokens_output = state.get("tokens_output", 0) + out_toks
+    # C39: cached tokens accumulate alongside tokens_input — but with NO
+    # estimation fallback: a provider that reports nothing is honestly 0.
+    tokens_cached = state.get("tokens_cached", 0) + (resp.tokens_cached or 0)
 
     is_final = "final answer:" in reply.lower()
 
@@ -616,6 +619,7 @@ def plan_action(state: AgentState) -> AgentState:
         "iteration_count": iteration + 1,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
+        "tokens_cached": tokens_cached,
         "prompt_component_chars": prompt_component_chars,
         "chart_force_count": chart_force_count,
     }
@@ -998,11 +1002,14 @@ def force_finalize(state: AgentState) -> AgentState:
         out_toks = resp.tokens_output or _estimate_tokens(answer)
         tokens_input = state.get("tokens_input", 0) + in_toks
         tokens_output = state.get("tokens_output", 0) + out_toks
+        # C39: same accumulation as plan_action — no estimation fallback.
+        tokens_cached = state.get("tokens_cached", 0) + (resp.tokens_cached or 0)
     except Exception as exc:  # noqa: BLE001 — fall back to a static message
         logger.warning("force_finalize_llm_failed", run_id=run_id, error=str(exc))
         answer = _static_best_effort(state)
         tokens_input = state.get("tokens_input", 0)
         tokens_output = state.get("tokens_output", 0)
+        tokens_cached = state.get("tokens_cached", 0)
 
     _release_dataframe(run_id)
     logger.info("force_finalize", run_id=run_id, reason=reason)
@@ -1013,6 +1020,7 @@ def force_finalize(state: AgentState) -> AgentState:
         "error_message": reason,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
+        "tokens_cached": tokens_cached,
     }
 
 

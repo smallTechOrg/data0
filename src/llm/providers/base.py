@@ -16,11 +16,19 @@ class LLMResponse(NamedTuple):
     reports them (Gemini `usage_metadata`, Anthropic `usage`, OpenRouter
     `usage`), else `0` — callers fall back to a `chars/4` estimate only when a
     provider reports nothing.
+
+    `tokens_cached` (C39) is how many of `tokens_input` were served from the
+    provider's prompt cache (a SUBSET counted at full value in `tokens_input`,
+    never additional tokens). Gemini reads `usage_metadata.
+    cached_content_token_count`; anthropic/openrouter/stub make no
+    cache-control calls, so the default `0` is honest for them — and unlike
+    `tokens_input` there is NO estimation fallback: unreported cached is `0`.
     """
 
     text: str
     tokens_input: int = 0
     tokens_output: int = 0
+    tokens_cached: int = 0
 
 
 @runtime_checkable

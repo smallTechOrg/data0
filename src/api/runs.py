@@ -72,6 +72,8 @@ def get_run(run_id: str, session: Session = Depends(get_session)) -> dict:
             "iteration_count": row.iteration_count,
             "tokens_input": row.tokens_input,
             "tokens_output": row.tokens_output,
+            # C39: `or 0` — pre-Phase-14 rows may carry NULL.
+            "tokens_cached": row.tokens_cached or 0,
             "answer": row.answer,
             "error_message": row.error_message,
             "dataset_ids": row.dataset_ids_json or [],

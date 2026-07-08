@@ -20,6 +20,9 @@ class QueryRun(BaseModel):
     iteration_count: int
     tokens_input: int
     tokens_output: int
+    # C39: cache-served subset of tokens_input; None on pre-Phase-14 rows
+    # (API surfaces normalise to 0 with `or 0`).
+    tokens_cached: int | None = 0
     prompt_breakdown: dict[str, Any] | None = None
     dataset_ids_json: list[str] | None = None
     selector_reasoning: str | None = None

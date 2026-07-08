@@ -241,6 +241,9 @@ def ask(req: AskRequest, session: Session = Depends(get_session)) -> dict:
             "iteration_count": result.get("iteration_count", 0),
             "tokens_input": result.get("tokens_input", 0),
             "tokens_output": result.get("tokens_output", 0),
+            # C39: payload-level sibling field — NEVER a key inside prompt_breakdown
+            # (the breakdown component renders unknown keys as bars).
+            "tokens_cached": result.get("tokens_cached", 0),
             "status": result.get("status", "completed"),
             "is_best_effort": result.get("is_best_effort", False),
             "steps": result.get("action_history") or [],

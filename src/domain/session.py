@@ -38,6 +38,8 @@ class SessionTurn(BaseModel):
     iteration_count: int
     tokens_input: int
     tokens_output: int
+    # C39: cache-served subset of tokens_input (0 on pre-Phase-14 / stub turns).
+    tokens_cached: int = 0
     status: str
     type: str
     clarification_question: str | None = None

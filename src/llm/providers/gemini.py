@@ -100,10 +100,15 @@ class GeminiProvider:
         response = self._generate_with_retry(prompt, config)
         # Real usage from Gemini's usage_metadata (prompt_token_count =
         # input, candidates_token_count = output). Absent -> 0 (caller estimates).
+        # cached_content_token_count (C39) is how many of prompt_token_count were
+        # served from the implicit prompt cache — absent/None on a cold call -> 0.
         usage = getattr(response, "usage_metadata", None)
         tokens_input = int(getattr(usage, "prompt_token_count", 0) or 0)
         tokens_output = int(getattr(usage, "candidates_token_count", 0) or 0)
-        return LLMResponse(response.text or "", tokens_input, tokens_output)
+        tokens_cached = int(getattr(usage, "cached_content_token_count", 0) or 0)
+        return LLMResponse(
+            response.text or "", tokens_input, tokens_output, tokens_cached
+        )
 
     def call_model(self, prompt: str, *, system: str | None = None) -> str:
         return self.complete(prompt, system=system).text

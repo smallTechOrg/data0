@@ -79,6 +79,9 @@ def _turn_payload(run: QueryRunRow) -> dict:
         "iteration_count": run.iteration_count,
         "tokens_input": run.tokens_input,
         "tokens_output": run.tokens_output,
+        # C39: persisted per turn so the cache line survives reload/resume;
+        # `or 0` because pre-Phase-14 rows may carry NULL.
+        "tokens_cached": run.tokens_cached or 0,
         "status": run.status,
         "type": "clarification" if is_clarification else "answer",
         "clarification_question": answer_markdown if is_clarification else None,
