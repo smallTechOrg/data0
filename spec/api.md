@@ -120,10 +120,13 @@ Dataset selection is AGENT-DRIVEN: every `/ask` hands the agent a metadata-only 
 {"type":"answer","run_id":"...","session_id":"...","dataset_ids":[...],
  "derived_dataset_ids":[...],"datasets_used":[...],"selector_reasoning":null,
  "answer_markdown":"...","answer_html":"...","charts":[...],
- "iteration_count":3,"tokens_input":1234,"tokens_output":567,"status":"completed",
+ "iteration_count":3,"tokens_input":1234,"tokens_output":567,"tokens_cached":812,
+ "status":"completed",
  "is_best_effort":false,"steps":[...],"suggested_questions":[...],
  "prompt_breakdown":{...},"duration_ms":4210,"fast_mode":false}
 ```
+
+> **`tokens_cached` field (C39, Phase 14):** an integer — how many of the run's cumulative `tokens_input` were served from the provider's prompt cache (Gemini `usage_metadata.cached_content_token_count`, accumulated at the same sites as `tokens_input`; the `generate_suggestions` call is deliberately excluded — documented scope bound in `spec/capabilities/prompt-cache-accounting.md`). Invariant: `0 ≤ tokens_cached ≤ tokens_input`. Cached tokens are a SUBSET of `tokens_input` counted at full value — they never reduce `tokens_input`, `prompt_breakdown`, or its exact-sum invariant; they only feed the frontend's discounted cost formula and the "X of Y from cache" line. `0` on a cold single-iteration run, on stub/anthropic/openrouter runs, and on all pre-Phase-14 rows — expected, never an error. NOT a key inside `prompt_breakdown` (payload-level only).
 
 > **`fast_mode` field (C35, request + response):** a boolean, default `false`. When `true` on the request, the run applies a tighter per-request `max_iterations` (`5`, overriding the settings/DB value), SKIPS the C26 pre-flight clarification call outright (no clarifying-question roundtrip, regardless of first-turn status), SKIPS `generate_suggestions` (`suggested_questions` is always `[]`), truncates each `action_history` step's stored `result` to ~500 chars before it re-enters later prompts, adds a prompt-level brevity instruction (no hard output-token cap), and disables the forced-chart-retry guardrail (a chart is still rendered if the model produces one within the tighter budget, but no extra iteration is forced to get one). It never changes model/provider selection (that remains Settings-owned) and is never a settings/DB default applied to future requests — each `/ask` call states its own `fast_mode`. The response echoes the `fast_mode` value that was actually applied; the completed run's value is ALSO persisted on `query_runs.fast_mode` and returned per turn by `GET /sessions/{id}` (see the Turn payload note above), purely so the UI badge survives reload — see `spec/capabilities/fast-mode.md` → "Persistence Amendment".
 
@@ -159,7 +162,7 @@ All sessions, most-recently-updated first; each with `turn_count`, `first_questi
 ### `GET /sessions/{id}`
 Session + `turns[]`. **404** missing.
 
-> **Turn payload:** each turn (`_turn_payload`) carries `run_id`, `question`, `answer_markdown`, `answer_html`, `iteration_count`, `tokens_input`, `tokens_output`, `status`, `type` (`answer`|`clarification`), `clarification_question`, `steps`, `dataset_ids`, `suggested_questions` (always `[]` on resumed turns — suggestions are live-only, no persisted column; applies to answer follow-ups and C37 clarification candidates alike), `prompt_breakdown`, `charts`, **`fast_mode`** (bool — whether that specific completed run used Fast Mode; persisted on `query_runs.fast_mode` so it survives reload/resume, see `spec/capabilities/fast-mode.md` → "Persistence Amendment"), plus **`created_at`** (ISO string — when the turn was asked) and **`duration_ms`** (integer ms, derived from `updated_at − created_at` ≈ the run's lifespan, so resumed history shows a response time too; `null` when either timestamp is missing).
+> **Turn payload:** each turn (`_turn_payload`) carries `run_id`, `question`, `answer_markdown`, `answer_html`, `iteration_count`, `tokens_input`, `tokens_output`, `tokens_cached` (C39 — persisted, so the cache line survives reload/resume; `0` on pre-Phase-14 rows), `status`, `type` (`answer`|`clarification`), `clarification_question`, `steps`, `dataset_ids`, `suggested_questions` (always `[]` on resumed turns — suggestions are live-only, no persisted column; applies to answer follow-ups and C37 clarification candidates alike), `prompt_breakdown`, `charts`, **`fast_mode`** (bool — whether that specific completed run used Fast Mode; persisted on `query_runs.fast_mode` so it survives reload/resume, see `spec/capabilities/fast-mode.md` → "Persistence Amendment"), plus **`created_at`** (ISO string — when the turn was asked) and **`duration_ms`** (integer ms, derived from `updated_at − created_at` ≈ the run's lifespan, so resumed history shows a response time too; `null` when either timestamp is missing).
 
 ### `PATCH /sessions/{id}/name`
 Rename. **404** missing.
@@ -183,7 +186,7 @@ Most recent run `{run_id, status, iteration_count, max_iterations}` (status `idl
 ### `GET /runs/{run_id}`
 
 Returns the run row by id.
-Response: `ok({ run_id, status, iteration_count, tokens_input, tokens_output, answer, error_message, dataset_ids })`.
+Response: `ok({ run_id, status, iteration_count, tokens_input, tokens_output, tokens_cached, answer, error_message, dataset_ids })`.
 404 if not found.
 
 ### `POST /runs/{run_id}/cancel`
@@ -192,7 +195,7 @@ Cooperatively cancel an in-flight run — the UI **Stop** button. Flags the run 
 > **Active runs routes:** `GET /runs/current`, `GET /runs/{run_id}`, and `POST /runs/{run_id}/cancel` are active. The boilerplate `POST /runs` route from the skeleton was removed — analysis runs are created exclusively via `POST /ask`.
 
 ### `GET /stats/daily`
-`{date, model, tokens_input, tokens_output, query_count, context_limit, last_prompt_tokens, last_tokens_input, last_tokens_output}` aggregated over today's completed runs (server-local day); `context_limit` from a hard-coded model table (unknown → 128000). Always 200.
+`{date, model, tokens_input, tokens_output, tokens_cached, query_count, context_limit, last_prompt_tokens, last_tokens_input, last_tokens_output, last_tokens_cached}` aggregated over today's completed runs (server-local day); `context_limit` from a hard-coded model table (unknown → 128000). Always 200.
 
 > **`last_prompt_tokens`:** an integer — the MOST RECENT completed run's input (`tokens_input`) tokens, i.e. the last query's prompt size (not the cumulative daily total). This is the per-request value the C29 context-window bar plots against `context_limit`; `0` when there are no completed runs today.
 

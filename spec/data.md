@@ -56,6 +56,7 @@ One analysis run (one question → one answer), with its full step history.
 | iteration_count | Integer | yes | Steps taken (live-polled, C22) |
 | tokens_input | Integer | yes | Accumulated prompt tokens (C7) |
 | tokens_output | Integer | yes | Accumulated completion tokens (C7) |
+| tokens_cached | Integer | no | C39 — of `tokens_input`, how many were served from the provider's prompt cache (Gemini `cached_content_token_count`, accumulated like `tokens_input`). `nullable`, server-default `0` — pre-Phase-14 rows read as `0`. Invariant `0 ≤ tokens_cached ≤ tokens_input`; a SUBSET of `tokens_input` (never reduces it). Added by the Phase 14 Alembic migration. |
 | prompt_breakdown | JSON | no | C29 token breakdown: five components scaled to sum to `total_prompt` (= cumulative `tokens_input`), plus `tokens_output` |
 | charts_json | JSON | no | Persisted chart array from the run; reloaded as `charts[]` in `GET /sessions/{id}` turns so charts survive server restarts |
 | dataset_ids_json | JSON | no | The datasets the agent actually LOADED this run (C14); scopes the C15 cascade |

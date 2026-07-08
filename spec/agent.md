@@ -31,7 +31,7 @@ All calls go through `LLMClient` — **never the provider SDK directly**. The cl
 - `complete(prompt, *, system=None) -> LLMResponse` — returns the text plus REAL provider-reported token usage (`tokens_input`/`tokens_output` from the provider's usage metadata; `0` when a provider reports none, so the caller falls back to a `chars/4` estimate). The per-iteration `plan_action` and `force_finalize` use `complete()` so the run's token totals are accurate.
 - `call_model(prompt, *, system=None) -> str` — the text-only convenience wrapper over `complete()`. Most graph-adjacent single-shot helpers (`check_clarification`, `generate_dataset_notes`/describe, `extract_facts`/compress, clean) use `call_model`; `generate_suggestions` (and `generate_starter_questions`) use `complete()` directly, because their real provider token usage is added to the run/display totals.
 
-`LLMResponse` is a `NamedTuple(text, tokens_input=0, tokens_output=0)`. Provider is auto-detected (Anthropic key → anthropic; else Gemini → gemini; else OpenRouter; else stub). Model override via `AGENT_LLM_MODEL`.
+`LLMResponse` is a `NamedTuple(text, tokens_input=0, tokens_output=0, tokens_cached=0)` — `tokens_cached` (C39, Phase 14) is how many of `tokens_input` were served from the provider's prompt cache (Gemini reads `usage_metadata.cached_content_token_count`, absent/None → 0; anthropic/openrouter/stub leave the default 0 — honest, they make no cache-control calls). Provider is auto-detected (Anthropic key → anthropic; else Gemini → gemini; else OpenRouter; else stub). Model override via `AGENT_LLM_MODEL`.
 
 **Fallback behaviour:** No key → stub provider auto-engages (yellow UI banner). A Gemini API/network error inside `execute_action`'s recoverable path or a `plan_action` transient error routes back to `plan_action` to retry the reasoning; a fatal load/setup error routes to `handle_error` (run `failed`, clear message). `force_finalize` falls back to a static best-effort message if its single LLM call fails. This is production resilience — tests call the real Gemini with keys from `.env`.
 
@@ -78,6 +78,7 @@ class AgentState(TypedDict, total=False):
     llm_response: str                    # latest raw model reply (action or FINAL ANSWER)
     tokens_input: int                    # accumulated prompt tokens
     tokens_output: int                   # accumulated completion tokens
+    tokens_cached: int                   # C39: accumulated cache-served prompt tokens (subset of tokens_input; plan_action + force_finalize only)
     charts: list[str]                    # ECharts `option` JSON strings captured in execute_action (via echart())
     prompt_component_chars: dict         # C29: CUMULATIVE per-bucket char counts summed across all plan_action calls (used to build the prompt_breakdown)
 
@@ -117,7 +118,7 @@ This replaces the skeleton's 4-field `AgentState`. `TypedDict, total=False` per 
 
 ### `plan_action`
 
-**Reads:** `question`, `action_history`, `conversation_history`, `dataset_context`, `iteration_count`. **Writes:** `llm_response`, `iteration_count` (+1), `tokens_input`, `tokens_output`, `prompt_component_chars` (C29: accumulates this iteration's per-bucket char counts into the cumulative dict). **LLM:** yes — `plan_action.md` system prompt + assembled context + injected `<node:plan>` tag.
+**Reads:** `question`, `action_history`, `conversation_history`, `dataset_context`, `iteration_count`. **Writes:** `llm_response`, `iteration_count` (+1), `tokens_input`, `tokens_output`, `tokens_cached` (C39: accumulated alongside `tokens_input` from `resp.tokens_cached`; also accumulated in `force_finalize`, NOT in `generate_suggestions` — documented scope bound), `prompt_component_chars` (C29: accumulates this iteration's per-bucket char counts into the cumulative dict). **LLM:** yes — `plan_action.md` system prompt + assembled context + injected `<node:plan>` tag.
 
 **Behaviour:** Assemble the prompt (question + Action/Result/Error transcript + conversation history + dataset context + persistent memory + column schema), call the LLM, store the reply, increment `iteration_count`, add token counts. When `iteration_count >= max_iterations - 2`, append a wrap-up instruction telling the model to produce `FINAL ANSWER:` now from its best findings (no extra LLM call). A fatal LLM error sets `error`.
 
@@ -268,7 +269,7 @@ The pre-flight **clarification** (C26) is the only pause: an ambiguous question 
 | Signal | What | Where |
 |--------|------|-------|
 | **Trace** | one logical run per `run_id`, one log line per node | structlog (stdout, JSON) |
-| **LLM calls** | accumulated `tokens_input`/`tokens_output`, model | `query_runs` row + structured log |
+| **LLM calls** | accumulated `tokens_input`/`tokens_output`/`tokens_cached` (C39), model | `query_runs` row + structured log |
 | **Tool calls** | each pandas action: expression, result/error | `query_runs.action_history` + log |
 | **Run outcome** | status, iteration_count, error if any | `query_runs` row + log |
 
