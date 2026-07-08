@@ -39,7 +39,7 @@ Multipart `file`; form `context?`, `notes_file?`; query `force=false`. Parses (p
 |--------|-----------|
 | 409 | `duplicate_dataset` (with `match_type` + `existing_*`); resolvable with `force=true` — single-sheet path only (the multi-sheet inspect never 409s) |
 | 400 | bad extension / unparseable / empty file (incl. an all-empty-sheets workbook) |
-| 500 | disk write failure |
+| 500 | `write_failed` — disk write OR `session.commit()` failure (the row is rolled back; never a phantom `ok` for an unpersisted dataset) |
 
 ### `POST /upload/sheets`
 C38 (Phase 12) — import chosen sheets from a staged multi-sheet workbook (the second step after a `type:"multi_sheet"` inspect response). Served by a NEW `src/api/upload_sheets.py` router (also home of the in-memory staging store), registered in `create_app()`. JSON body:
@@ -69,7 +69,7 @@ Re-parses ONLY the requested sheets from the stashed bytes (`.xls` via `engine="
  ]}
 ```
 
-Per-sheet `status`: `ok` (with `dataset` in the single-upload response shape) | `duplicate` (C10 fields — `match_type` `content`/`content_and_name`/`name`, `existing_dataset_id`, `existing_filename` — as a per-sheet result, not an HTTP 409; the UI shows the same inline "Use existing / Upload anyway" resolver, retrying that sheet with `force:true`) | `error` (empty sheet, unknown sheet name, parse/disk failure — `message` only).
+Per-sheet `status`: `ok` (with `dataset` in the single-upload response shape) | `duplicate` (C10 fields — `match_type` `content`/`content_and_name`/`name`, `existing_dataset_id`, `existing_filename` — as a per-sheet result, not an HTTP 409; the UI shows the same inline "Use existing / Upload anyway" resolver, retrying that sheet with `force:true`) | `error` (empty sheet, unknown sheet name, parse/disk failure, or a per-sheet `session.commit()` failure — that sheet is rolled back and never poisons its siblings — `message` only).
 
 | Status | Condition |
 |--------|-----------|

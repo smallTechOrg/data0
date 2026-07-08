@@ -42,13 +42,15 @@
   `FreeTier`): the key's project isn't linked to billing. Fix in AI Studio (link project to
   billing, or mint a key under the billed project) — lifts both caps. Pending: one live
   re-verification of the retry→success path (un-paced full suite) after quota reset.
-- **`ERDiagramPanel.tsx:550`** — pre-existing `react-hooks/exhaustive-deps` lint warning
-  (`viewSize` missing from a `useMemo`). Style-tier; fold into the next edit of that file.
-  **Scheduled — see roadmap Phase 13 (slice-13c).**
 
 ---
 
 ## Log (newest first)
+
+### 2026-07-08 — ERDiagramPanel exhaustive-deps lint warning fixed (Phase 13 slice-13c, `801c91e`)
+
+- **Was:** a pre-existing `react-hooks/exhaustive-deps` warning at `ERDiagramPanel.tsx:550` (`viewSize` missing from a `useMemo` dep array) — the last open lint warning in the frontend.
+- **Fix:** added `viewSize` to the dependency array (the correct exhaustive-deps fix, not an eslint-disable silence). `npm run lint` is now fully clean. Shipped in the Phase 13 Tier-3 hardening bundle.
 
 ### 2026-07-08 — TXT uploads hardcoded to tab, misparsing other delimiters (pending commit)
 
