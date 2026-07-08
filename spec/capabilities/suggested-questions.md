@@ -80,7 +80,7 @@ Phase 10 (see `spec/roadmap.md` → "### Phase 10 — Suggested questions at ses
 ## Success Criteria
 
 ### Offline (stub / unit — the authoritative gate TODAY)
-> The real-key gate is temporarily blocked by the Gemini free-tier **500-requests/day quota being exhausted** (see `spec/roadmap.md` → Backlog → "Real-key test-suite pacing"). These offline criteria alone gate the Phase 10 build; the real-key criteria below are deferred-verification, to be run after the daily reset (or on a properly billed key).
+> The real-key gate is temporarily blocked by the Gemini free-tier **500-requests/day quota being exhausted** (see `spec/roadmap.md` → Backlog → "Gemini key billing linkage", formerly "Real-key test-suite pacing"). These offline criteria alone gate the Phase 10 build; the real-key criteria below are deferred-verification, to be run after the daily reset (or on a properly billed key).
 
 - [ ] (unit/stub) `GET /suggestions/starters` with ≥1 dataset present returns **200** `{questions: []}` under the stub provider (the `<node:suggest>` tag branch), envelope `ok(...)`.
 - [ ] (unit/stub) `GET /suggestions/starters` on an EMPTY workspace returns **200** `{questions: []}` WITHOUT making any LLM call (asserted via a spy).
