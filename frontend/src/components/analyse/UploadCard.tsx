@@ -272,92 +272,122 @@ export function UploadCard({ onUploaded }: { onUploaded: () => void }) {
   /**
    * Resolve a dropped DataTransfer item list into staged entries.
    * Handles folders (via FileSystemDirectoryEntry) and plain files.
+   *
+   * A `DataTransferItemList` and its items are only valid SYNCHRONOUSLY during
+   * the drop event — after the first `await` the browser empties the transfer
+   * store, so `webkitGetAsEntry()`/`getAsFile()` return null for every item read
+   * afterwards (which previously silently dropped every file past the first in a
+   * multi-file batch). We therefore take a fully-synchronous snapshot of all
+   * items FIRST — capturing each item's FileSystemEntry (or File fallback) into
+   * plain arrays — and only then do the async work. FileSystemEntry / File
+   * objects captured synchronously stay valid across awaits; only the
+   * DataTransferItemList itself neuters.
    */
   const resolveDroppedItems = useCallback(async (items: DataTransferItemList) => {
     // A fresh drop clears any prior folder-README confirmation.
     setReadmeBanner(null)
 
-    const newEntries: StagedFile[] = []
-    // Folder README text to route to Project notes after staging (best-effort),
-    // keyed to the folder it came from. Only the first README found wins.
-    let folderReadme: { folderName: string; text: string } | null = null
+    // --- Pass 1: SYNCHRONOUS snapshot of the DataTransfer -----------------
+    // No `await` may occur before this loop completes, or subsequent items go
+    // null. We only read entries/files here; all reading (directory contents,
+    // file bytes, notes text) happens in pass 2 over these captured objects.
+    const dirEntries: FileSystemDirectoryEntry[] = []
+    const fileEntries: FileSystemFileEntry[] = []
+    const fallbackFiles: File[] = []
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
       const entry = item.webkitGetAsEntry?.()
 
       if (!entry) {
-        // Fallback: no FileSystemEntry API — use the File directly
+        // Fallback: no FileSystemEntry API — use the File directly.
         const file = item.getAsFile()
-        if (file && isDataFile(file.name)) {
-          newEntries.push(makeEntry(file, ''))
-        }
+        if (file) fallbackFiles.push(file)
         continue
       }
 
       if (entry.isDirectory) {
-        // --- Folder drop (C13) -------------------------------------------
-        const dir = entry as FileSystemDirectoryEntry
-        const fileEntries = await readDirectoryEntries(dir)
+        dirEntries.push(entry as FileSystemDirectoryEntry)
+      } else if (entry.isFile) {
+        fileEntries.push(entry as FileSystemFileEntry)
+      }
+    }
 
-        // Separate notes files from data files
-        const perFileNotesMap = new Map<string, string>() // stem → notes text
-        const dataFileEntries: FileSystemFileEntry[] = []
+    // --- Pass 2: ASYNC processing over the captured snapshot --------------
+    const newEntries: StagedFile[] = []
+    // Folder README text to route to Project notes after staging (best-effort),
+    // keyed to the folder it came from. Only the first README found wins.
+    let folderReadme: { folderName: string; text: string } | null = null
 
-        for (const fe of fileEntries) {
-          const name = fe.name
-          if (name.startsWith('.')) continue
+    // Loose files captured via the getAsFile() fallback (no FileSystemEntry).
+    for (const file of fallbackFiles) {
+      if (isDataFile(file.name)) {
+        newEntries.push(makeEntry(file, ''))
+      }
+    }
 
-          if (isFolderNotesFile(name)) {
-            // Folder-level README/notes → routed to global Project notes below,
-            // NOT pre-filled into each file's notes (only the first match wins).
-            if (!folderReadme) {
-              try {
-                const f = await fileEntryToFile(fe)
-                const text = await readFileAsText(f)
-                folderReadme = { folderName: dir.name || name, text }
-              } catch {
-                // Non-critical — skip bad notes files
-              }
-            }
-          } else if (name.toLowerCase().endsWith(PER_FILE_NOTES_SUFFIX)) {
-            // Per-file notes: `sales.notes.txt` → key = `sales`
-            const notesFileStem = name.slice(0, name.length - PER_FILE_NOTES_SUFFIX.length).toLowerCase()
+    // Folder drops (C13) — read each captured directory's contents async.
+    for (const dir of dirEntries) {
+      const dirFileEntries = await readDirectoryEntries(dir)
+
+      // Separate notes files from data files
+      const perFileNotesMap = new Map<string, string>() // stem → notes text
+      const dataFileEntries: FileSystemFileEntry[] = []
+
+      for (const fe of dirFileEntries) {
+        const name = fe.name
+        if (name.startsWith('.')) continue
+
+        if (isFolderNotesFile(name)) {
+          // Folder-level README/notes → routed to global Project notes below,
+          // NOT pre-filled into each file's notes (only the first match wins).
+          if (!folderReadme) {
             try {
               const f = await fileEntryToFile(fe)
               const text = await readFileAsText(f)
-              perFileNotesMap.set(notesFileStem, text)
+              folderReadme = { folderName: dir.name || name, text }
             } catch {
-              // Non-critical
+              // Non-critical — skip bad notes files
             }
-          } else if (isDataFile(name)) {
-            dataFileEntries.push(fe)
           }
+        } else if (name.toLowerCase().endsWith(PER_FILE_NOTES_SUFFIX)) {
+          // Per-file notes: `sales.notes.txt` → key = `sales`
+          const notesFileStem = name.slice(0, name.length - PER_FILE_NOTES_SUFFIX.length).toLowerCase()
+          try {
+            const f = await fileEntryToFile(fe)
+            const text = await readFileAsText(f)
+            perFileNotesMap.set(notesFileStem, text)
+          } catch {
+            // Non-critical
+          }
+        } else if (isDataFile(name)) {
+          dataFileEntries.push(fe)
         }
+      }
 
-        // Build staged entries for each data file. Per-file `<stem>.notes.txt`
-        // attaches as that file's notes; the folder README does NOT pre-fill
-        // here (it goes to Project notes instead).
-        for (const fe of dataFileEntries) {
-          try {
-            const file = await fileEntryToFile(fe)
-            const fileStem = stemOf(file.name)
-            const notes = perFileNotesMap.get(fileStem) ?? ''
-            newEntries.push(makeEntry(file, notes))
-          } catch {
-            // Skip unreadable files
-          }
+      // Build staged entries for each data file. Per-file `<stem>.notes.txt`
+      // attaches as that file's notes; the folder README does NOT pre-fill
+      // here (it goes to Project notes instead).
+      for (const fe of dataFileEntries) {
+        try {
+          const file = await fileEntryToFile(fe)
+          const fileStem = stemOf(file.name)
+          const notes = perFileNotesMap.get(fileStem) ?? ''
+          newEntries.push(makeEntry(file, notes))
+        } catch {
+          // Skip unreadable files
         }
-      } else if (entry.isFile) {
-        // --- Single file drop --------------------------------------------
-        const fe = entry as FileSystemFileEntry
-        if (!fe.name.startsWith('.') && isDataFile(fe.name)) {
-          try {
-            const file = await fileEntryToFile(fe)
-            newEntries.push(makeEntry(file, ''))
-          } catch {
-            // Skip
-          }
+      }
+    }
+
+    // Single-file drops — each captured FileSystemFileEntry read async.
+    for (const fe of fileEntries) {
+      if (!fe.name.startsWith('.') && isDataFile(fe.name)) {
+        try {
+          const file = await fileEntryToFile(fe)
+          newEntries.push(makeEntry(file, ''))
+        } catch {
+          // Skip
         }
       }
     }
