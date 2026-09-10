@@ -1,0 +1,50 @@
+name: Deploy to Cloud Run
+
+# Push to `main` builds this repo's Dockerfile and deploys it to the
+# `data-analysis-agent` Cloud Run service. SQLite is the production DB
+# (spec/architecture.md) and lives at /tmp/agent.db inside the container —
+# ephemeral per instance, matching the pre-CI manual deploy this replaces.
+# Migrations run at container startup (see Dockerfile CMD), so there is no
+# separate migrate job.
+#
+# Required repo config (Settings -> Secrets and variables -> Actions):
+#   Secrets:   GCP_SA_KEY (service-account JSON key), AGENT_GEMINI_API_KEY
+#   Variables: PROJECT_ID, REGION, SERVICE_NAME, AGENT_LLM_MODEL
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and deploy
+        run: |
+          gcloud run deploy "${{ vars.SERVICE_NAME }}" \
+            --source . \
+            --region="${{ vars.REGION }}" \
+            --project="${{ vars.PROJECT_ID }}" \
+            --update-env-vars="AGENT_GEMINI_API_KEY=${{ secrets.AGENT_GEMINI_API_KEY }},AGENT_DATABASE_URL=sqlite:////tmp/agent.db,AGENT_LLM_MODEL=${{ vars.AGENT_LLM_MODEL }}" \
+            --quiet
+
+      # A green deploy only means the gcloud command exited 0 — it says nothing
+      # about whether the container actually came up (bad env var, crash on
+      # boot, etc). This catches that in CI instead of someone finding a 502
+      # by hand. --retry-connrefused rides out the cold-start gap.
+      - name: Smoke test
+        run: |
+          URL=$(gcloud run services describe "${{ vars.SERVICE_NAME }}" \
+            --region="${{ vars.REGION }}" --project="${{ vars.PROJECT_ID }}" \
+            --format='value(status.url)')
+          curl --fail --silent --show-error \
+            --retry 5 --retry-delay 5 --retry-connrefused \
+            "$URL/health" -o /dev/null
