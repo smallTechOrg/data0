@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from api._common import ok
+from config.settings import get_settings
 
 router = APIRouter()
 
@@ -22,4 +23,5 @@ def _provider_and_model() -> tuple[str, str]:
 @router.get("/health")
 def health() -> dict:
     provider, model = _provider_and_model()
-    return ok({"status": "ok", "provider": provider, "model": model})
+    version = get_settings().git_sha[:7]
+    return ok({"status": "ok", "provider": provider, "model": model, "version": version})

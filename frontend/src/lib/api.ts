@@ -124,6 +124,8 @@ export interface HealthResponse {
   provider: string
   /** The model id the active provider will actually call (may be "" in stub). */
   model?: string
+  /** Short git SHA of the deployed build ("" in local dev). */
+  version?: string
 }
 
 export interface UploadResponse {

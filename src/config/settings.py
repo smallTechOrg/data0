@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # /connections/status` returns 403 `connectors_disabled`.
     enable_db_connectors: bool = Field(default=False)
 
+    # Deploy version marker — set to the git SHA by CI (.github/workflows/deploy.yml)
+    # so the running build is identifiable from /health. Empty in local dev.
+    git_sha: str = Field(default="")
+
 
 _settings: Settings | None = None
 
