@@ -33,6 +33,9 @@ export function AppShell() {
   const [provider, setProvider] = useState<string | undefined>(undefined)
   // The model the provider will actually call (drives the header badge).
   const [model, setModel] = useState<string | undefined>(undefined)
+  // Short git SHA of the running deploy ("" in local dev) — lets us confirm
+  // a CI deploy actually landed without reading Cloud Run logs.
+  const [version, setVersion] = useState<string | undefined>(undefined)
   // Global-memory ("Project notes") modal — REAL in Phase 3.
   const [memoryOpen, setMemoryOpen] = useState(false)
   // Theme/accent/density — client-only visual preference, never sent to the
@@ -61,6 +64,7 @@ export function AppShell() {
       .then(h => {
         setProvider(h.provider)
         setModel(h.model || undefined)
+        setVersion(h.version || undefined)
       })
       .catch(() => {
         // Health failed (e.g. server not reachable yet) — leave provider
@@ -98,6 +102,11 @@ export function AppShell() {
               </div>
               <p className="text-xs font-normal text-indigo-200">
                 Ask questions, get explainable answers.
+                {version && (
+                  <span className="ml-2 text-indigo-400" title={`Build ${version}`}>
+                    v{version}
+                  </span>
+                )}
               </p>
             </div>
 

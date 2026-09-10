@@ -33,7 +33,7 @@ jobs:
             --source . \
             --region="${{ vars.REGION }}" \
             --project="${{ vars.PROJECT_ID }}" \
-            --update-env-vars="AGENT_GEMINI_API_KEY=${{ secrets.AGENT_GEMINI_API_KEY }},AGENT_DATABASE_URL=sqlite:////tmp/agent.db,AGENT_LLM_MODEL=${{ vars.AGENT_LLM_MODEL }}" \
+            --update-env-vars="AGENT_GEMINI_API_KEY=${{ secrets.AGENT_GEMINI_API_KEY }},AGENT_DATABASE_URL=sqlite:////tmp/agent.db,AGENT_LLM_MODEL=${{ vars.AGENT_LLM_MODEL }},AGENT_GIT_SHA=${{ github.sha }}" \
             --quiet
 
       # A green deploy only means the gcloud command exited 0 — it says nothing
