@@ -21,6 +21,7 @@ def create_app() -> FastAPI:
     from api import (
         ask,
         connections,
+        dashboards,
         datasets,
         datasets_ops,
         health,
@@ -46,6 +47,7 @@ def create_app() -> FastAPI:
     app.include_router(runs.router)
     app.include_router(connections.router)
     app.include_router(suggestions.router)
+    app.include_router(dashboards.router)
 
     # Serve the built Next.js static export at /app
     # Run `cd frontend && pnpm build` to generate frontend/out/ before starting.
