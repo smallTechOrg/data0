@@ -521,3 +521,40 @@ html {
 .left-column-stack > section + section {
   border-top: 1px solid var(--border);
 }
+
+/* ---------------------------------------------------------------------------
+   Dashboard tab (C40, Phase 15) — 12-column widget grid. Each widget sets
+   --gc / --gr (grid-column / grid-row values); at <=960px the grid collapses to
+   one column in layout order (row spans kept so charts keep their height).
+   --------------------------------------------------------------------------- */
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: 72px;
+  gap: 12px;
+}
+.dash-widget {
+  grid-column: var(--gc);
+  grid-row: var(--gr);
+  min-width: 0;
+}
+@media (max-width: 960px) {
+  .dash-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dash-widget {
+    grid-column: auto;
+    grid-row: span var(--gh);
+  }
+}
+.dash-layout {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 960px) {
+  .dash-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

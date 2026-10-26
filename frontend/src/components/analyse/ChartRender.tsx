@@ -96,7 +96,7 @@ function parseOptions(charts?: string[]): EChartsOption[] {
 }
 
 /** A single chart drawn into a responsive div via ECharts' imperative API. */
-function EChart({ option, index }: { option: EChartsOption; index: number }) {
+export function EChart({ option, index }: { option: EChartsOption; index: number }) {
   const ref = useRef<HTMLDivElement>(null)
   // Captured once the chart is initialised, so the toolbar can export it.
   const chartRef = useRef<echarts.ECharts | null>(null)
