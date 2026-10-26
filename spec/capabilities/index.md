@@ -1,6 +1,6 @@
 # Capabilities Index
 
-> One file per capability, IDs preserved from the source spec (C1–C32) plus C33/C34/C35/C36/C37/C38/C39 added post-source (Phases 5/7/8/9/10/12/14). The source numbering **skips C5 and C28** — both are intentional gaps in the source list, not missing capabilities; no `C5` or `C28` file exists. The 37 capabilities below are the complete set. Each file states what it does, inputs/outputs, external calls, business rules, the phase that delivers it, and testable success criteria.
+> One file per capability, IDs preserved from the source spec (C1–C32) plus C33/C34/C35/C36/C37/C38/C39/C40 added post-source (Phases 5/7/8/9/10/12/14/15). The source numbering **skips C5 and C28** — both are intentional gaps in the source list, not missing capabilities; no `C5` or `C28` file exists. The 38 capabilities below are the complete set. Each file states what it does, inputs/outputs, external calls, business rules, the phase that delivers it, and testable success criteria.
 
 ---
 
@@ -45,6 +45,7 @@
 | C37 | Suggested questions — session starters + clarification candidates | 10 | [suggested-questions.md](suggested-questions.md) |
 | C38 | Multi-sheet Excel import (multi-tab workbooks) | 12 | [multi-sheet-excel.md](multi-sheet-excel.md) |
 | C39 | Prompt-cache token accounting (honest discounted cost) | 14 | [prompt-cache-accounting.md](prompt-cache-accounting.md) |
+| C40 | Agent-built dashboard (KPIs + charts + tables from a data file + NL command; drag-to-rearrange) | 15 | [dashboard-builder.md](dashboard-builder.md) |
 
 > **C28:** intentionally absent in the source numbering — no capability, no file.
 > **C34** is a new addition (post-source-spec), numbered after the source's C1–C33 range — a pure-frontend capability with no LLM/backend involvement, added via the "add a capability" path.
@@ -53,6 +54,7 @@
 > **C37** is a new addition (post-source-spec), numbered after C36 — session-start "Try asking:" chips (a new session-less `GET /suggestions/starters`) plus refined candidate questions on a C26 clarification turn (same single pre-flight call), added via the "add a capability" path. It gets its OWN file because no existing capability file owns follow-up suggestions (`generate_suggestions` shipped inside Phase 3 and is documented only in `spec/agent.md`/`spec/api.md`); C26's file owns only the clarification gate.
 > **C38** is a new addition (post-source-spec), numbered after C37 — a sheet picker for multi-tab `.xlsx`/`.xls` workbooks with one-dataset-per-sheet registration (a pure data-loading mechanism: zero new LLM calls, no graph changes, no migration), added via the "add a capability" path. It gets its OWN file rather than folding into C1/C11 because it introduces a new two-step API flow (`POST /upload` inspect variant + `POST /upload/sheets`) and a per-sheet dedup semantics that extends C10; the C1/C11 single-file contract is unchanged for single-sheet workbooks. Core model (picker + one-dataset-per-sheet) user-approved 2026-07-07; see `spec/roadmap.md` → Phase 12.
 > **C39** is a new addition (post-source-spec), numbered after C38 — Phase A ("Lever 1") of the "Token economics" backlog entry: capture Gemini's `cached_content_token_count`, persist per-run `tokens_cached`, and show "X of Y from cache" plus an honest cache-discounted cost, added via the "add a capability" path. It gets its OWN file rather than folding into C7/C18/C29 because it spans all three (provider → state → DB → API → both widgets) and carries its own measured ground truth (the 2026-07-08 Step-0 spike: implicit caching already active, ~74% cache hit on iterations 2+). C7/C18/C29 are amended to reference it; Lever 2 (adaptive identity-only catalog) explicitly stays in the backlog. See `spec/roadmap.md` → Phase 14.
+> **C40** is a new addition (post-source-spec), numbered after C39 — an agent that profiles one dataset and, from a natural-language command, emits a VALIDATED dashboard spec (KPI cards, charts, tables) rendered by the frontend as a drag-to-rearrange grid, added via the "add a capability" path. It gets its OWN file because it introduces a new table (`dashboards`), a new route family (`/datasets/{id}/dashboards`, `/dashboards/*`), a new UI tab, and a new agent pipeline (deterministic profile → one structured LLM call → strict validation → repair/fallback; widget data from a safe aggregation engine, NOT sandbox code). It reuses C1/C11/C38 ingest, the Phase 4 ECharts option builder, `LLMClient`, and the C15 cascade. Field-drag reconfigure, multi-dataset dashboards and export are deferred to Phase 16+. See `spec/roadmap.md` → Phase 15.
 
 ## How to Add a New Capability
 

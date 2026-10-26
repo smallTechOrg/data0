@@ -14,7 +14,7 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 [Next.js UI (frontend/, served single-origin on :8001 /app)]
         │  fetch (JSON / multipart)
         ▼
-[FastAPI routers: upload · datasets · ask · sessions · runs · stats · memory · health]
+[FastAPI routers: upload · datasets · ask · sessions · runs · stats · memory · health · dashboards (C40)]
         │                                   │
         ▼                                   ▼
 [graph.runner.run_agent()]          [direct SQLAlchemy (no repository layer)]
@@ -33,7 +33,7 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 
 | Layer | Responsibility |
 |-------|----------------|
-| **UI** (`frontend/`) | Two-tab SPA (Analyse + Database). Calls the REST API. Renders Markdown answers, charts, ER diagram. |
+| **UI** (`frontend/`) | Three-tab SPA (Database + Analyse + Dashboard, C40). Calls the REST API. Renders Markdown answers, charts, ER diagram, and the drag-to-rearrange dashboard grid. |
 | **API** (`src/api/`) | FastAPI routers; `ok()`/`api_error()` envelope; single-origin static mount of the built Next.js app; lifespan `init_db()`. |
 | **Agent** (`src/graph/`) | LangGraph ReAct `StateGraph`, nodes, edges, runner, sandbox (incl. the lazy catalog namespace), pre-flight clarification (C26), graph-adjacent one-shot LLM calls (suggestions/describe/compress). |
 | **LLM** (`src/llm/`) | `LLMClient` + provider factory; uniform `call_model(prompt, *, system)` over Gemini / OpenRouter / stub. |
@@ -105,11 +105,13 @@ This design **extends the existing skeleton in place** — the flat `src/` packa
 
 - `src/graph/`: `sandbox.py` (eval namespace + lazy catalog namespace + `save_dataset`), `preflight.py` (C26 clarification), `suggestions.py` (follow-up questions), `describe.py` (C30 notes), `compress.py` (C31 fact extraction), `derived.py` (derived-dataset registration / lineage / staleness), `memory.py` (global-memory block). `state.py`/`nodes.py`/`edges.py`/`agent.py`/`runner.py` are REWRITTEN in place for the ReAct loop.
 - `src/llm/providers/`: `base.py` (provider protocol), `stub.py` (node-tag-branching offline provider), `openrouter.py`. `gemini.py` keeps its shape (default-model note only).
-- `src/api/`: `upload.py`, `datasets.py`, `datasets_ops.py` (clean/describe/re-derive), `ask.py`, `sessions.py`, `stats.py`, `memory.py`, `settings.py` (`GET`/`PATCH /settings`), `connections.py` (NEW, Phase 9 — C36 connector routes); `health.py` + `runs.py` extended.
+- `src/api/`: `upload.py`, `datasets.py`, `datasets_ops.py` (clean/describe/re-derive), `ask.py`, `sessions.py`, `stats.py`, `memory.py`, `settings.py` (`GET`/`PATCH /settings`), `connections.py` (NEW, Phase 9 — C36 connector routes), `dashboards.py` (NEW, Phase 15 — C40); `health.py` + `runs.py` extended.
 - `src/domain/`: `dataset.py`, `query_run.py`, `session.py`, `setting.py` (NEW); `run.py` kept.
 - `src/config/`: `db_overrides.py` (NEW) — `get_runtime_model()` / `get_runtime_max_iterations()` read the `settings` table so a Settings-panel choice overrides the `.env` default; consumed by `LLMClient._make_provider()` and `runner.run_agent()`.
 - `src/prompts/`: `plan_action.md`, `finalize.md`, `clarify.md`, `suggest.md`, `describe.md`, `compress.md`, `clean.md` (NEW). The boilerplate `transform.md` is removed when the ReAct graph replaces `transform_text`.
 - `src/connectors/` (NEW, Phase 9): `base.py` (`DatasetConnector` ABC + registry `get_connector()`), `uri.py` (`DatasetURI` — `.raw()`/`.display()`), `parquet.py` (`ParquetConnector`, internal, wraps the existing upload store), `postgres.py` (`PostgresConnector` — `connection_check`/`discover_tables`/`discover_relationships`/`pull_table`, all via `psycopg2`). This is a data-LOADING seam only — no MCP server, no live query tool, no graph/agent involvement. See `spec/capabilities/external-db-connectors.md`.
+
+**Dashboard builder (C40, Phase 15):** a graph-adjacent pipeline, not a graph node — new `src/graph/dashboard_profile.py` (deterministic data profile), `src/graph/dashboard.py` (one structured `LLMClient` call → `validate_spec` → ≤1 repair → deterministic fallback → layout assignment), `src/graph/dashboard_data.py` (the safe pandas aggregation engine that computes widget data from the spec — no LLM-written code, no sandbox), `src/domain/dashboard.py` (Pydantic spec models), `src/api/dashboards.py`, `src/prompts/dashboard.md`, `DashboardRow` in `src/db/models.py`. Reuses `LLMClient`, `_build_echart_option`/`_as_jsonable` (sandbox), the Parquet-first loader, and the C15 cascade. Details and the rejected alternatives: `spec/agent.md` → "Dashboard builder pipeline (C40)". **Frontend:** a new `frontend/src/components/dashboard/` folder and a third tab; drag-and-drop uses the browser's **native HTML5 drag-and-drop (+ keyboard move buttons) over a CSS 12-column grid — NO new npm dependency** (decision: `react-grid-layout` would add a dependency, a CSS import and React-19 peer-dep risk to buy free-form pixel positioning that this auto-packed layout does not need; revisit only if Phase 16 needs free resize/overlap-free collision handling). Charts reuse the existing tree-shaken `echarts` renderer. No new Python dependency.
 
 **Avoid:** LangChain (LangGraph only); the repository pattern (use SQLAlchemy directly in routers/nodes per skeleton convention); Pydantic/dataclass for `AgentState` (use `TypedDict`); calling a provider SDK directly in a node (always go through `LLMClient`); a second top-level package or any rename of `agent`/`src/`; `duckdb` as a dependency (C36 uses native `psycopg2` + `pd.read_sql` only, no DuckDB `ATTACH`); an MCP server or live SQL `query` tool exposed to the agent (C36 is snapshot-import only — a connector never becomes a graph node or a new agent action).
 

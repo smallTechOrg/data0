@@ -6,7 +6,7 @@
 
 ## UI Type
 
-Web dashboard (single-page, two tabs), served single-origin by FastAPI.
+Web dashboard (single-page, three tabs — Database, Analyse, Dashboard), served single-origin by FastAPI.
 
 ## Tech Stack
 
@@ -16,7 +16,7 @@ Next.js 15 + React 19 + TypeScript (existing `frontend/`), static-exported to `f
 
 - **Header:** app name + tagline; a **Project notes** button opens the global-memory modal (memory/C29); a **yellow stub-mode banner** is shown when `GET /health` reports `provider == "stub"` (so demo output is never mistaken for real output); a **theme toggle** (C34, Phase 7) — a single light/dark icon button — sits in the header's right-hand utility area alongside the Live badge and Project-notes button. Accent (indigo) and density (compact) are fixed product decisions with no picker UI — see [capabilities/theming.md](capabilities/theming.md).
 - **Layout:** two-panel responsive shell; ≤960px stacks panels, ≤640px stacks cards.
-- **Tabs:** `[Database]` (default) and `[Analyse]`.
+- **Tabs:** `[Database]` (default), `[Analyse]`, and `[Dashboard]` (C40, Phase 15 — a third pill after Analyse; `Tab = 'analyse' | 'database' | 'dashboard'` in `AppShell.tsx`). Like Analyse, the Dashboard panel stays MOUNTED across tab switches (hidden, not unmounted) so the open dashboard and an in-flight build survive a trip to another tab.
 
 ## Views / Screens
 
@@ -45,6 +45,31 @@ Next.js 15 + React 19 + TypeScript (existing `frontend/`), static-exported to `f
 - **Dataset strip:** horizontal chips (uploaded / derived + stale), uploaded first; click = `selectDataset`.
 
 **Actions available:** select dataset, pan/zoom/fit the diagram, edit/generate notes, clean, re-derive, delete, clear database.
+
+### Screen: Dashboard tab (C40, Phase 15)
+
+**Purpose:** turn a data file + a plain-English command into an agent-built dashboard, then arrange it by drag-and-drop. Components in `frontend/src/components/dashboard/`.
+
+**Layout:** two-panel responsive shell like the other tabs — a left column (≈340px; stacks above the canvas at ≤960px) holding **Create** + **Saved dashboards**, and the main **canvas**.
+
+**Key elements:**
+- **Create dashboard card** (real): (1) **Data** — a dataset `<select>` of all datasets (`filename · rows×cols`, from `GET /datasets`) PLUS the existing **`<UploadCard onUploaded>`** embedded under an "or upload a file" disclosure (drag-drop CSV/TSV/TXT/JSON/Excel; the multi-sheet picker (C38) and 409 resolver work unchanged). When `onUploaded` fires, the card re-fetches `GET /datasets` and **auto-selects the newest dataset(s)** (set-difference against the previous id list; with several new sheets it selects the first and the rest remain in the select). (2) **Command** — a textarea ("e.g. Show revenue by region, a monthly trend and my top 10 customers"; Cmd/Ctrl+Enter submits; ≤1000 chars with a counter). (3) **Build dashboard** button → `POST /datasets/{id}/dashboards`; while in flight: spinner + "Profiling your data and designing the dashboard… (usually 5–20 s)" and the button disabled (no cancel in this phase). Errors (400/404/500) render as an inline banner; the form keeps its values. With zero datasets: "Upload a file to get started" and the button is disabled.
+- **Saved dashboards list** (real): `GET /dashboards` rows — title, dataset filename, relative time, widget count; click opens (fetches `GET /dashboards/{id}` + `/data`); trash icon with inline confirm → `DELETE /dashboards/{id}`. The newest build is opened automatically.
+- **Canvas header** (real): the dashboard title (click-to-edit inline → `PATCH {title}` on blur/Enter), the original command as a quiet subtitle, the dataset filename, a **save-state pill** ("Layout saved ✓" / "Saving…" / "Couldn't save — retry"), and — when `generation.used_fallback` — an amber badge **"Automatic dashboard — the AI response couldn't be used"** (never silent). If `generation.dropped_widgets` is non-empty, a collapsible "N suggested widgets were skipped" note lists the reasons.
+- **Widget grid** (real): a CSS grid of 12 equal columns (`grid-template-columns: repeat(12, 1fr)`, `grid-auto-rows: 72px`, gap 12px); each widget is placed with `grid-column: x+1 / span w; grid-row: y+1 / span h`. At ≤960px the grid collapses to ONE column in layout order (reading order = row-major by `y` then `x`); drag still works and reorders. Widget card chrome: header = **drag handle** (⠿, `draggable`, `cursor: grab`, `aria-label="Move widget: <title>"`) + title + a small **size** control (S / M / L → `w` = 3 / 6 / 12, KPI keeps `h`, chart/table keep `h`; resize is deliberately minimal) ; body by kind:
+  - **KPI** — large formatted value, caption ("sum of revenue"), empty value shows "—".
+  - **Chart** — the ECharts `option` rendered by the existing `EChart` renderer (exported from `ChartRender.tsx`; theme-aware, includes its Copy/PNG/JPEG toolbar), re-sizes with the card.
+  - **Table** — scrollable, sticky header, right-aligned numerics, "Showing N rows" footer (and "(truncated)" when `truncated`).
+  - A widget with `status:"error"` renders its `message` in a red inline panel; siblings are unaffected. Loading: skeleton cards while `/data` is in flight.
+- **Drag-to-rearrange** (real, native HTML5 DnD — no library): dragging a widget's handle over another widget highlights a drop slot (outline); **drop = move the dragged widget to the target's position in the ordering** (insert before the target), then the client **re-packs** the whole layout with `packLayout` (the same algorithm as the backend's `assign_layout`, `frontend/src/lib/dashboardLayout.ts`) and applies it optimistically; ONE `PATCH /dashboards/{id} {layout}` is sent per drop (failure → revert to the last saved layout + the save-state pill shows the error). The size control re-packs and PATCHes the same way. **Keyboard alternative** (a11y): with the handle focused, ArrowLeft/ArrowUp = move earlier, ArrowRight/ArrowDown = move later in the ordering (same re-pack + PATCH), each announced through `announce()` ("Moved Monthly revenue to position 3 of 7"). Layout persists across reload (reopen the dashboard from the list; the last-opened dashboard id is remembered in `sessionStorage`).
+- **Fields panel (LABELLED STUB):** a collapsed-by-default "Fields" card listing the dataset's columns as chips (name + dtype dot) with a visible tag **"Drag fields onto widgets to reconfigure — coming in a later phase"**; chips are NOT draggable and have `aria-disabled="true"`.
+- **Other LABELLED STUBS (disabled, tooltip "Coming in a later phase"):** **+ Add widget**, widget **⋯ / Edit** menu, **Export** (PNG / PDF / HTML), **Regenerate** with a new command. They render the intended layout and are never mistaken for bugs.
+
+**Actions available:** pick or upload a dataset, type a command, build, open/delete saved dashboards, rename, drag-rearrange (mouse or keyboard), change widget width, copy/download a chart image (existing toolbar).
+
+**States:** empty (no dashboards yet → helper text "Pick a dataset, describe the dashboard you want, press Build"), building, ready, fallback badge, per-widget error, save error. Network/5xx → inline banner "is the server running?" (same convention as other cards).
+
+**Frontend contract notes:** `frontend/src/lib/api.ts` gains `createDashboard(datasetId, {command,title?})`, `listDashboards(datasetId?)`, `getDashboard(id)`, `getDashboardData(id)`, `patchDashboard(id,{title?,layout?})`, `deleteDashboard(id)` and the TS types `DashboardSpec`, `DashboardWidget` (discriminated union on `kind`), `WidgetLayout`, `DashboardRecord`, `DashboardData`, `WidgetData` mirroring `spec/api.md` → "Dashboard spec v1". `dashboardLayout.ts` is a pure module (no React): the "ordering" is widgets sorted by `(y, x)`; `packLayout(widgets)` (identical first-fit algorithm to the backend `assign_layout`, honoring each widget's existing `w`/`h`, but NOT re-sorting by kind — re-packing keeps the given order; the KPI→chart→table hoist applies only on creation), `moveWidget(widgets, fromId, toId)`, `setWidth(widgets, id, w)`, `toLayoutPayload(widgets)` — unit-tested with `node --test` (the `starters.test.mjs` pattern).
 
 ## Modals
 
@@ -77,5 +102,7 @@ All `.modal-overlay`, backdrop + Escape close, focus first element: `memory-moda
 | Database tab (ER diagram, description) | labelled stub | labelled stub | labelled stub | **real** |
 | Clean / Re-derive / Generate notes | labelled stub | labelled stub | labelled stub | **real** |
 | Theme toggle (C34; accent/density are fixed, not live controls) | n/a (not built yet) | n/a | n/a | n/a — ships fully real in **Phase 7**, no stub stage |
+
+**Phase 15 (C40):** the Dashboard tab ships real (create/build/open/delete/rename/drag-rearrange/width) with the labelled stubs listed in its section above (Fields panel, + Add widget, Edit menu, Export, Regenerate); it has no earlier-phase stub stage (new surface, like Phase 7).
 
 A labelled stub renders the intended layout with a visible "coming in a later phase" tag so it is never mistaken for a bug. Phase 7 (theming, C34) is the one exception to the phased stub-to-real pattern above: it has no earlier phases to appear in, and ships fully functional the moment it lands — see [capabilities/theming.md](capabilities/theming.md) and `spec/roadmap.md` → Phase 7.

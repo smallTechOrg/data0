@@ -294,6 +294,115 @@ Manual re-sync (mirrors the Phase 4 `/datasets/{id}/re-derive` pattern — see `
 | 400 | `not_connected` — dataset's `origin` is not `connected` |
 | 400 | `resync_error` — the pull failed (credential-free message) |
 
+### Agent-built Dashboards (C40, Phase 15)
+
+> Routes live in a NEW `src/api/dashboards.py` router, registered in `create_app()`. A dashboard belongs to exactly ONE dataset; the dashboard row stores the validated spec (incl. layout) and is re-computed against the dataset on every data fetch. Mechanism, fallback rules and the no-LLM-code decision: `spec/capabilities/dashboard-builder.md` + `spec/agent.md` → "Dashboard builder pipeline (C40)". All responses use the standard `ok()` / `api_error()` envelopes.
+
+#### Dashboard spec v1 (the validated contract — `dashboards.spec_json`)
+
+```json
+{
+  "version": 1,
+  "title": "Sales overview",
+  "description": "Revenue, units and top customers (optional, ≤300 chars)",
+  "widgets": [
+    {"id": "w1", "kind": "kpi", "title": "Total revenue",
+     "layout": {"x": 0, "y": 0, "w": 3, "h": 2},
+     "filters": [],
+     "kpi": {"field": "revenue", "agg": "sum", "format": "currency"}},
+    {"id": "w2", "kind": "chart", "title": "Revenue by region",
+     "layout": {"x": 0, "y": 2, "w": 6, "h": 5},
+     "chart": {"type": "bar", "x": "region",
+               "y": {"field": "revenue", "agg": "sum"},
+               "series_by": null, "time_grain": null, "sort": "y_desc", "limit": 10}},
+    {"id": "w3", "kind": "chart", "title": "Monthly revenue",
+     "layout": {"x": 6, "y": 2, "w": 6, "h": 5},
+     "chart": {"type": "line", "x": "order_date",
+               "y": {"field": "revenue", "agg": "sum"},
+               "series_by": null, "time_grain": "month", "sort": "x_asc", "limit": 50}},
+    {"id": "w4", "kind": "table", "title": "Top 10 customers by revenue",
+     "layout": {"x": 0, "y": 7, "w": 12, "h": 6},
+     "table": {"group_by": ["customer_id"],
+               "aggs": [{"field": "revenue", "agg": "sum", "alias": "revenue"}],
+               "sort_by": "revenue", "sort_dir": "desc", "limit": 10}}
+  ]
+}
+```
+
+| Element | Rule |
+|---------|------|
+| top level | `version` = `1`; `title` 1–80 chars; `description` ≤300 chars optional; `widgets` 1–12 items |
+| widget common | `id` unique, `^[a-z][a-z0-9_-]{0,31}$` (server assigns `w1…wN` when missing/duplicate); `kind` ∈ `kpi`\|`chart`\|`table`; `title` 1–80 chars; exactly the ONE config block matching `kind` (`kpi`/`chart`/`table`), other blocks absent; `filters` ≤5 items (optional, default `[]`); `layout` `{x,y,w,h}` integers on a **12-column grid** |
+| filter | `{field, op, value}`; `op` ∈ `eq ne gt gte lt lte in not_null`; `in` takes a list (≤50), `not_null` takes no `value`; `field` must exist; a filter whose `value` can't be coerced to the field's dtype is a validation error |
+| `kpi` | `{field: string\|null, agg, format?, prefix?, suffix?}`; `agg` ∈ `sum mean median min max count nunique`; `field: null` allowed only with `agg:"count"` (row count); `format` ∈ `number\|integer\|currency\|percent` (default `number`); `prefix`/`suffix` ≤8 chars |
+| `chart` | `{type, x, y?, series_by?, time_grain?, sort?, limit?, bins?}`; `type` ∈ `bar line area pie scatter histogram`; `x` = a field; `y` = `{field: string\|null, agg}` — required except for `histogram`; `agg` ∈ the KPI set, or `none` (scatter only; raw points, ≤2000 sampled evenly); `series_by` = optional categorical field (bar/line/area only; ≤8 distinct values kept, rest → "Other"); `time_grain` ∈ `day week month quarter year` — only when `x` is datetime (default chosen from the date span if omitted); `sort` ∈ `x_asc x_desc y_asc y_desc` (default `y_desc` for bar/pie, `x_asc` for line/area); `limit` 1–50 (default 20) = max categories/points after sort; `bins` 5–50 (default 20) for `histogram` (x numeric) |
+| `table` | RAW mode: `{columns: [field…]}` (1–12 fields, first `limit` rows after `sort_by`); GROUPED mode: `{group_by: [field…] (1–3), aggs: [{field, agg, alias?}…] (1–6)}`; the modes are mutually exclusive; `sort_by` = a column/alias name (optional); `sort_dir` ∈ `asc\|desc` (default `desc` when grouped, `asc` raw); `limit` 1–50 (default 10) |
+| field binding | a **real column name** of the dataset. Validation snaps a unique case/whitespace-insensitive match to the exact name; otherwise error `unknown_field`. dtype classes come from the `columns_schema` aliases (`integer/float` = numeric, `datetime`, `text/category/boolean` = categorical; object columns that parse as dates ≥95% are treated as `datetime`) |
+| dtype rules | `sum mean median` → numeric only; `min max` → numeric or datetime; `count nunique` → any; `line/area` x → datetime (or numeric, ordered); `histogram` x → numeric; `pie` x → categorical; `scatter` x,y → numeric |
+| `layout` | `x ≥ 0`, `1 ≤ w ≤ 12`, `x + w ≤ 12`, `1 ≤ h ≤ 12`, `y ≥ 0`; widgets must not overlap (rectangles `[x,x+w)×[y,y+h)` pairwise disjoint) |
+
+**Validation error codes** (used in the repair prompt and in `generation.dropped_widgets[].reason`): `bad_json`, `bad_shape`, `unknown_kind`, `unknown_field`, `bad_agg`, `agg_dtype_mismatch`, `bad_chart_type`, `axis_dtype_mismatch`, `bad_filter`, `bad_table_mode`, `duplicate_id`, `too_many_widgets`, `out_of_range` (clamped where possible instead of rejected: `limit`, `bins`, `title` length).
+
+**Default layout assignment** (backend `assign_layout`; the frontend `packLayout` MUST implement the identical algorithm — contract vector below): order widgets KPI → chart → table (stable within a kind); default sizes kpi `3×2`, chart `6×5`, table `12×6` (a widget keeps its `w`/`h` if it already has one); for each widget in order pick the smallest `y`, then smallest `x`, at which `[x,x+w)×[y,y+h)` is inside `0…12` columns and overlaps no already-placed widget. Contract vector: widgets `[kpi,kpi,kpi,kpi,chart,chart,table]` → `kpi(0,0) kpi(3,0) kpi(6,0) kpi(9,0) chart(0,2) chart(6,2) table(0,7)` (all as `w×h` above).
+
+#### Dashboard record (the response object, `dashboard`)
+
+```json
+{"id": "…", "dataset_id": "…", "dataset_filename": "sales.csv",
+ "title": "Sales overview", "command": "revenue by region and a monthly trend…",
+ "spec": { "...Dashboard spec v1..." },
+ "generation": {"used_fallback": false, "repaired": false, "supplemented": [],
+                "dropped_widgets": [{"title": "Churn rate", "reason": "unknown_field: churn"}],
+                "notes": [], "model": "gemini-3.1-flash-lite",
+                "tokens_input": 2210, "tokens_output": 640, "duration_ms": 6120},
+ "created_at": "…", "updated_at": "…"}
+```
+
+#### Widget data (the `data` object)
+
+```json
+{"dashboard_id": "…", "dataset_id": "…", "row_count": 1200, "computed_at": "…",
+ "widgets": {
+   "w1": {"kind": "kpi", "status": "ok", "label": "Total revenue", "value": 1234567.8,
+          "formatted": "$1,234,568", "format": "currency", "caption": "sum of revenue"},
+   "w2": {"kind": "chart", "status": "ok", "option": { "...ECharts option with a series key..." }},
+   "w4": {"kind": "table", "status": "ok", "columns": ["customer_id","revenue"],
+          "rows": [["C-1042", 83211.5]], "truncated": false},
+   "w9": {"kind": "chart", "status": "error", "message": "Column 'discount' no longer exists."}}}
+```
+
+KPI `value` is `null` (with `status:"ok"`, `formatted:"—"`) when the filtered frame is empty. Table cells follow the preview formatting (floats rounded to 4 dp, whole floats → int, NaN → null). Chart `option` values go through the same JSON-safe coercion as the sandbox `echart` helper (NaN → null, Timestamp → ISO string).
+
+### `POST /datasets/{id}/dashboards`
+Body `{command, title?}`. Runs the dashboard-builder pipeline synchronously (profile → one LLM call → validate/repair → assign layout; deterministic fallback on any LLM/parse failure) and persists a new `dashboards` row. Returns `ok({dashboard, data})` — the record AND the computed widget data in one round trip (HTTP 200). A degraded run (`generation.used_fallback=true`) is still a 200. Typically 5–20 s with a live provider (one call, +1 on repair) — no progress polling; the UI shows a spinner. Never Fast-Mode-gated.
+
+| Status | Condition |
+|--------|-----------|
+| 404 | `dataset_not_found` |
+| 400 | `empty_command` (blank/whitespace) / `command_too_long` (>1000 chars) / `empty_dataset` (0 rows or 0 columns) |
+| 500 | `dashboard_failed` (dataset file unreadable) / `write_failed` (`session.commit()` failure — rolled back, no phantom dashboard) |
+
+### `GET /dashboards`
+Optional query `dataset_id`. Summaries, most-recently-updated first: `[{id, dataset_id, dataset_filename, title, command, widget_count, used_fallback, created_at, updated_at}]`. Always 200 (empty list when none; entries whose dataset row is gone cannot exist — the cascade removes them).
+
+### `GET /dashboards/{id}`
+Returns `ok(dashboard)` (the record above). **404** `dashboard_not_found`.
+
+### `GET /dashboards/{id}/data`
+Recomputes every widget from the dataset's CURRENT file (safe pandas aggregation — `spec/agent.md`) and returns `ok(data)`. Per-widget failures are `status:"error"` entries, not HTTP errors. **404** `dashboard_not_found` / **404** `dataset_not_found` (defensive; cascade normally prevents it) / **500** `dashboard_failed` (dataset file unreadable).
+
+### `PATCH /dashboards/{id}`
+Body (all optional, at least one required): `{title?: string (1–80), layout?: [{id, x, y, w, h}, …]}`. `layout` must list EVERY widget id exactly once with integer coordinates satisfying the `layout` rules above (bounds + no overlap); it replaces `spec.widgets[].layout` atomically and bumps `updated_at`. Widget definitions (kind/bindings/filters) are NOT editable in this phase — only `title` and layout (field-drag reconfigure is Phase 16+). Returns `ok(dashboard)`.
+
+| Status | Condition |
+|--------|-----------|
+| 404 | `dashboard_not_found` |
+| 400 | `empty_patch` (no recognised field) / `invalid_title` / `invalid_layout` (unknown/missing/duplicate widget id, out of bounds, or overlap — stored layout unchanged) |
+| 500 | `write_failed` |
+
+### `DELETE /dashboards/{id}`
+Deletes the dashboard row only (the dataset is untouched). Returns `ok({deleted: true})`. **404** `dashboard_not_found`. Deleting a dataset (`DELETE /datasets/{id}` / `DELETE /datasets`) also deletes its dashboards (C15 extension).
+
 ## Authentication
 
 None — single local user. No API keys, sessions, or tokens for callers. Provider keys live in `.env` and never leave the server. Database connection URIs (C36) follow the same never-returned-by-any-API discipline as provider keys — see `spec/capabilities/external-db-connectors.md` → "Credential Hygiene".
