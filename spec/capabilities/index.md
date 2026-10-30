@@ -1,6 +1,6 @@
 # Capabilities Index
 
-> One file per capability, IDs preserved from the source spec (C1–C32) plus C33/C34/C35/C36/C37/C38/C39/C40 added post-source (Phases 5/7/8/9/10/12/14/15). The source numbering **skips C5 and C28** — both are intentional gaps in the source list, not missing capabilities; no `C5` or `C28` file exists. The 38 capabilities below are the complete set. Each file states what it does, inputs/outputs, external calls, business rules, the phase that delivers it, and testable success criteria.
+> One file per capability, IDs preserved from the source spec (C1–C32) plus C33/C34/C35/C36/C37/C38/C39/C40 added post-source (Phases 5/7/8/9/10/12/14/15), and C41–C47 (Phases 16–19). The source numbering **skips C5 and C28** — both are intentional gaps in the source list, not missing capabilities; no `C5` or `C28` file exists. The 45 capabilities below are the complete set. Each file states what it does, inputs/outputs, external calls, business rules, the phase that delivers it, and testable success criteria.
 
 ---
 
@@ -46,6 +46,15 @@
 | C38 | Multi-sheet Excel import (multi-tab workbooks) | 12 | [multi-sheet-excel.md](multi-sheet-excel.md) |
 | C39 | Prompt-cache token accounting (honest discounted cost) | 14 | [prompt-cache-accounting.md](prompt-cache-accounting.md) |
 | C40 | Agent-built dashboard (KPIs + charts + tables from a data file + NL command; drag-to-rearrange) | 15 | [dashboard-builder.md](dashboard-builder.md) |
+| C41 | Priority-ranked dashboard insights (ranked KPIs/widgets, why-it-matters descriptions, chart-type rationale, spec v2) | 16 | [dashboard-insights-priority.md](dashboard-insights-priority.md) |
+| C42 | Dashboard widget editing, field rebinding, regenerate | 17 | [dashboard-widget-editing.md](dashboard-widget-editing.md) |
+| C43 | Dashboard-level filters | 17 | [dashboard-filters.md](dashboard-filters.md) |
+| C44 | Dashboard templates + schema-bound reuse | 18 | [dashboard-templates.md](dashboard-templates.md) |
+| C45 | External dashboard read API (spec + data) | 18 | [dashboard-external-api.md](dashboard-external-api.md) |
+| C46 | REST API data source | 19 | [api-data-source.md](api-data-source.md) |
+| C47 | SQL database data source | 19 | [sql-data-source.md](sql-data-source.md) |
+
+> **C41–C47** extend C40 into a Power-BI-grade builder (Phases 16–19; the consolidated "Assumed decisions" for the whole series live in [dashboard-insights-priority.md](dashboard-insights-priority.md)). Power BI / Tableau export is explicitly out of scope. Capability count is now 45 (C1–C47 minus the C5/C28 gaps).
 
 > **C28:** intentionally absent in the source numbering — no capability, no file.
 > **C34** is a new addition (post-source-spec), numbered after the source's C1–C33 range — a pure-frontend capability with no LLM/backend involvement, added via the "add a capability" path.

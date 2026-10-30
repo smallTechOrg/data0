@@ -403,6 +403,77 @@ Body (all optional, at least one required): `{title?: string (1–80), layout?: 
 ### `DELETE /dashboards/{id}`
 Deletes the dashboard row only (the dataset is untouched). Returns `ok({deleted: true})`. **404** `dashboard_not_found`. Deleting a dataset (`DELETE /datasets/{id}` / `DELETE /datasets`) also deletes its dashboards (C15 extension).
 
+### Power-BI-grade dashboard extensions (C41–C47, Phases 16–19)
+
+> Each subsection is tagged with its delivering phase. All routes use `ok()` / `api_error()`. Capability rules: `spec/capabilities/dashboard-insights-priority.md` (series assumptions), `dashboard-widget-editing.md`, `dashboard-filters.md`, `dashboard-templates.md`, `dashboard-external-api.md`, `api-data-source.md`, `sql-data-source.md`.
+
+#### Dashboard spec v2 (Phase 16, C41) — supersedes v1; v1 specs are read as v2 (lazy upgrade, see C41)
+
+Same as v1 plus (all new fields optional on input; server always emits them):
+
+| Element | Rule |
+|---------|------|
+| top level | `version` = `2`; `summary` ≤200 chars (one-line headline of the dashboard); `filters` (Phase 17, C43) `[{id, field, control: select\|multiselect\|range\|date_range, value?}]` ≤5 |
+| widget | `priority` int, dense unique 1..N (1 = most important); `description` ≤200 chars (why it matters); `description_source` ∈ `agent\|auto\|user`; `chart_rationale` ≤140 chars (charts only: why this chart type for this data); `ignore_dashboard_filters` bool (Phase 17) |
+| LLM reply grammar | `{title, summary, description, widgets:[{kind, title, priority, description, chart_rationale?, …config}]}` — still NO coordinates |
+| `assign_layout` v2 | order = `kpi` by priority asc, then `chart`+`table` merged by priority asc (stable); sizes/first-fit identical to v1. **Contract vector v2:** widgets `[kpi p2, kpi p1, chart p4, table p3, chart p5]` → order `kpi p1 (0,0), kpi p2 (3,0), table p3 (0,2), chart p4 (0,8), chart p5 (6,8)` (kpi 3×2, table 12×6, chart 6×5). The v1 vector holds when all priorities are equal/absent. |
+
+New validation codes: `invalid_priority`, `invalid_widget`, `invalid_filter`, `too_many_widgets` (existing), `last_widget`, `nothing_to_restore`, `binding_mismatch`.
+
+**Phase 16 changes to existing routes**
+- `POST /datasets/{id}/dashboards`: returns spec v2; `data.insights` added. `data` object gains `insights: [{rank, widget_id, title, headline, why}]` (KPI widgets in priority order, ≤6).
+- `PATCH /dashboards/{id}` body additionally accepts `priority_order: [widget_id…]` (every id once) and `rearrange: bool` (default true). Errors: `400 invalid_priority`. Response `ok(dashboard)`; the client refetches `/data` for `insights`.
+
+#### Phase 17 (C42 + C43)
+
+| Route | Body | Result / errors |
+|-------|------|-----------------|
+| `POST /dashboards/{id}/widgets` | `{kind, title, kpi\|chart\|table, description?, filters?, ignore_dashboard_filters?}` | `ok({dashboard, widget_id, widget_data})`; `400 invalid_widget` (errors[]), `400 too_many_widgets` |
+| `PATCH /dashboards/{id}/widgets/{wid}` | `{title?, description?, kpi?\|chart?\|table? (shallow merge), filters?, ignore_dashboard_filters?, bind?: {slot, field, agg?}}` | `ok({dashboard, widget_data})`; `400 invalid_widget` `{errors[], suggested_chart_types[]}`; `404 widget_not_found`. **No LLM.** Slots: `kpi.field chart.x chart.y chart.series_by table.group_by table.agg table.columns` |
+| `DELETE /dashboards/{id}/widgets/{wid}` | — | `ok({dashboard})`; `400 last_widget`; `404 widget_not_found` |
+| `GET /dashboards/{id}/widgets/{wid}/chart-suggestions` | — | `ok([{type, score, rationale, valid}])` (deterministic rule table) |
+| `POST /dashboards/{id}/regenerate` | `{command, mode?: "replace"\|"add", keep_title?: bool}` | `ok({dashboard, data})`; LLM pipeline as create (fallback never 5xx); stores `previous_spec_json`; errors as create (`empty_command`, `command_too_long`, `500 dashboard_failed`/`write_failed`) |
+| `POST /dashboards/{id}/restore-previous` | — | swaps spec ↔ previous; `ok({dashboard, data})`; `400 nothing_to_restore` |
+| `PATCH /dashboards/{id}` | adds `filters: [...]` (persisted defaults) | `400 invalid_filter` |
+| `GET /dashboards/{id}/data?filters=<json>` | `[{id, value}]` ≤2000 chars, non-persistent override | `data` gains `filters_applied`, `filter_options`, `row_count_filtered` |
+
+#### Phase 18 (C44 templates + C45 external API)
+
+| Route | Body | Result / errors |
+|-------|------|-----------------|
+| `POST /dashboards/{id}/template` | `{name, description?}` | `ok(template)` (201-style 200); `404 dashboard_not_found`; `400 invalid_name` |
+| `GET /templates` · `GET /templates/{id}` | — | summaries `[{id, name, description, required_columns:int, updated_at}]` / full template `{…, spec, required_schema[]}` |
+| `PATCH /templates/{id}` · `DELETE /templates/{id}` | `{name?, description?}` | `404 template_not_found` |
+| `POST /templates/{id}/validate` | `{dataset_id, mapping?}` | `ok(binding_report)` (always 200 when the dataset exists) |
+| `POST /templates/{id}/apply` | `{dataset_id, mapping?, title?, replace_dashboard_id?}` | `ok({dashboard, data, binding_report})`; `422 binding_mismatch` body = `{code, message, report}`; `400 empty_dataset`; `404 template_not_found`/`dataset_not_found`/`dashboard_not_found`; **no LLM call** |
+
+`required_schema[]` item: `{name, dtype_class: "numeric"|"datetime"|"categorical", roles: ["kpi.field", …]}`. `binding_report` shape: see C44.
+
+**External read API (C45)** — prefix `/external/v1`, GET only, `Authorization: Bearer <AGENT_EXTERNAL_API_KEY>` or `X-API-Key`:
+
+| Route | Returns |
+|-------|---------|
+| `GET /external/v1/dashboards` | `[{id, title, summary, widget_count, dataset_filename, updated_at}]` |
+| `GET /external/v1/dashboards/{id}` | `{id, title, spec (v2), required_schema[], updated_at}` |
+| `GET /external/v1/dashboards/{id}/data[?filters=]` | the `data` object (as `GET /dashboards/{id}/data`); supports `ETag`/`If-None-Match` → `304` |
+| `GET /external/v1/templates/{id}` | `{id, name, spec, required_schema[]}` |
+
+Errors: `403 external_api_disabled` (key env unset), `401 unauthorized`, `404 …_not_found`, `405` on non-GET. Never returned: `generation`, token counts, `command`, file paths, any source/credential data.
+
+#### Phase 19 (C46 REST API source + C47 SQL source)
+
+Gates: `AGENT_ENABLE_API_SOURCES` (API) / `AGENT_ENABLE_DB_CONNECTORS` (SQL) → else `403 sources_disabled` / `403 connectors_disabled`. `GET /data-sources/status` → `{api_enabled, sql_enabled, secrets_persisted: bool}` (true iff `AGENT_SECRET_KEY` set).
+
+| Route | Body | Result / errors |
+|-------|------|-----------------|
+| `POST /data-sources/check` | API: `{kind:"api", url, headers?, bearer_token?, query_params?, records_path?}`; SQL: `{kind:"sql", type:"postgresql", uri, table? \| query?}` | `ok(preview)`; nothing persisted; `400 url_blocked`/`not_json`/`response_too_large`/`source_fetch_failed`/`connection_failed`/`query_rejected`/`query_failed` |
+| `POST /data-sources` | check body + `{name, save_secret?}` | `ok({source, dataset})` — `source` = `{id, kind, name, dataset_id, config (non-secret), secret_stored, last_refreshed_at, last_status}`; `dataset` = the `_list_item` shape |
+| `GET /data-sources` · `GET /data-sources/{id}` | — | sources (never any secret/URI-with-credentials); `404 source_not_found` |
+| `POST /data-sources/{id}/refresh` | `{secret?}` | `ok({dataset, schema_diff, dashboards_affected[]})`; `400 secret_required`; previous snapshot kept on any failure |
+| `DELETE /data-sources/{id}` | — | removes source + encrypted secret, KEEPS the dataset; `ok({deleted:true})` |
+
+Datasets created this way appear in `GET /datasets` with `origin` = `api` (API) or `connected` (SQL), `source_type`, and `source_uri_display` (no credentials, no query string); `source_id` is exposed, secrets never.
+
 ## Authentication
 
-None — single local user. No API keys, sessions, or tokens for callers. Provider keys live in `.env` and never leave the server. Database connection URIs (C36) follow the same never-returned-by-any-API discipline as provider keys — see `spec/capabilities/external-db-connectors.md` → "Credential Hygiene".
+None for the application API — single local user. No API keys, sessions, or tokens for callers. **Exception (Phase 18, C45):** the `/external/v1/*` read-only surface is protected by a shared secret `AGENT_EXTERNAL_API_KEY` (disabled when unset); it is the only surface intended to be reachable by other applications. Provider keys live in `.env` and never leave the server. Data-source credentials (C46/C47: API tokens/headers, DB URIs) are secrets: never returned by any route, never logged; stored only Fernet-encrypted when `AGENT_SECRET_KEY` is set (otherwise not stored). Database connection URIs (C36) follow the same never-returned-by-any-API discipline as provider keys — see `spec/capabilities/external-db-connectors.md` → "Credential Hygiene".

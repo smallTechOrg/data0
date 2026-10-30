@@ -25,7 +25,7 @@ A registered data file (uploaded or derived) the agent can query.
 | content_hash | Text | yes | sha256 of file bytes (duplicate detection, C10) |
 | format | Text | yes | `csv` \| `tsv` \| `txt` \| `json` \| `excel` |
 | context | Text | no | User/auto notes, ≤ 4000 chars (C12) |
-| origin | Text | yes | `uploaded` \| `derived` \| `connected` (C36 — pulled from an external database, Phase 9) |
+| origin | Text | yes | `uploaded` \| `derived` \| `connected` (C36 — pulled from an external database, Phase 9; also C47 SQL sources) \| `api` (C46 — REST API snapshot, Phase 19) |
 | derived_from_run_id | Text | no | The `query_runs.id` that produced this derived dataset |
 | derived_from_dataset_ids | JSON | no | Parent dataset IDs (lineage, C25) |
 | derivation_code | Text | no | The pandas code that produced it (re-derive, C25) |
@@ -111,11 +111,49 @@ C40 (Phase 15) — an agent-built dashboard over ONE dataset: the validated spec
 
 **Migration:** one new Alembic revision creating the `dashboards` table (down-revision = the CURRENT head at build time — `f7a8b9c0d1e2` as of this spec; the builder must confirm by content with `uv run alembic heads`, since earlier roadmap text cites older heads). Index on `dataset_id`. No FK constraints (repo convention). Model added to `src/db/models.py` extending `Base`, so the `_isolated_db` fixture picks it up automatically.
 
+**Extensions to `dashboards` (C41–C47):**
+- `spec_json` holds **Dashboard spec v2** from Phase 16 (per-widget `priority`, `description`, `description_source`, `chart_rationale`; top-level `summary`, and from Phase 17 `filters`) — no schema change; v1 JSON is lazily upgraded on read (`spec/api.md`).
+- `previous_spec_json` (JSON, nullable) — **Phase 17 migration**: one-level undo snapshot written by `regenerate` and `apply … replace_dashboard_id`.
+- `template_id` (Text, nullable) — **Phase 18 migration**: the template a dashboard was applied from (→ `dashboard_templates.id`, code-enforced; not cascaded — deleting a template leaves the dashboard).
+
+### Entity: `dashboard_templates` (`DashboardTemplateRow`) — Phase 18 (C44)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | Text (uuid) | yes | Primary key |
+| name | Text | yes | ≤80 chars |
+| description | Text | no | ≤300 chars |
+| spec_json | JSON | yes | Dashboard spec v2 copy (with layout and priorities) |
+| schema_json | JSON | yes | `required_schema[]` = `[{name, dtype_class, roles[]}]` |
+| source_dashboard_id | Text | no | Informational; no cascade |
+| created_at / updated_at | TIMESTAMP(tz) | yes | `_now` default / + onupdate |
+
+### Entity: `data_sources` (`DataSourceRow`) — Phase 19 (C46/C47)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | Text (uuid) | yes | Primary key |
+| kind | Text | yes | `api` \| `sql` |
+| name | Text | yes | ≤80 chars |
+| dataset_id | Text | yes | The dataset this source feeds (→ `datasets.id`; cascade-deleted with it) |
+| config_json | JSON | yes | NON-secret config only: `api` → `{url (no query secrets), records_path, header_names[], param_names[]}`; `sql` → `{type, uri_display, table?, query?}` |
+| secret_enc | Text | no | Fernet-encrypted JSON blob of secrets (header values, bearer token, secret query params, or DB URI). `null` when `AGENT_SECRET_KEY` unset or `save_secret=false`; NEVER serialised in any API response or log |
+| secret_stored | Boolean | yes | Whether `secret_enc` is populated |
+| last_refreshed_at | TIMESTAMP(tz) | no | Last successful pull |
+| last_status | Text | no | `ok` \| `error` |
+| last_error | Text | no | Credential-free message |
+| truncated | Boolean | yes | Last snapshot hit the row cap; default false |
+| created_at / updated_at | TIMESTAMP(tz) | yes | as above |
+
+`datasets` gains **`source_id`** (Text, nullable, → `data_sources.id`) and a new `origin` value **`api`** (Phase 19 migration). SQL sources reuse `origin="connected"` and `source_type="postgresql"` (C36) with `source_uri_raw` left NULL (the secret lives in `data_sources`). One Alembic revision per phase as stated in the series assumptions (17, 18, 19; Phase 16 has none).
+
 ### Relationships
 
 Enforced in code only (no FK constraints):
 
 - `dashboards.dataset_id` → `datasets.id` (cascade-deleted with the dataset, C15 extension)
+- `data_sources.dataset_id` → `datasets.id` (cascade: deleting a dataset deletes its `data_sources` row; deleting a data source keeps the dataset)
+- `dashboards.template_id` → `dashboard_templates.id` (no cascade)
 
 - `query_runs.dataset_id` → `datasets.id`
 - `query_runs.session_id` → `conversation_sessions.id`
