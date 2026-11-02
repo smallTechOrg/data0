@@ -16,7 +16,7 @@ A single-user, local web app: drop in a CSV / TSV / TXT / JSON / Excel file and 
 - **Natural-language cleaning** — describe a cleanup in plain English; preview the generated pandas (before/after counts) before applying it.
 - **On-demand notes** — generate plain-language context notes for any dataset.
 - **Database tab** — an ER diagram (SVG) of your data universe with inferred foreign-key edges, per-table schema, lineage, and a data preview.
-- **Dashboard tab (agent-built dashboards)** — pick a dataset, describe a dashboard in plain English, and the agent returns validated KPI cards, charts and tables on a draggable 12-column grid whose layout is saved (`POST /datasets/{id}/dashboards`, `GET/PATCH/DELETE /dashboards/{id}`, `GET /dashboards/{id}/data`); widget data is computed server-side from a JSON spec (no LLM-written code), with an automatic fallback dashboard when the AI reply is unusable.
+- **Dashboard tab (agent-built dashboards)** — pick a dataset, describe a dashboard in plain English, and the agent returns validated KPI cards, charts and tables on a draggable 12-column grid whose layout is saved (`POST /datasets/{id}/dashboards`, `GET/PATCH/DELETE /dashboards/{id}`, `GET /dashboards/{id}/data`); widget data is computed server-side from a JSON spec (no LLM-written code), with an automatic fallback dashboard when the AI reply is unusable. Widgets are ranked by importance: a numbered "Key insights" row shows the top KPIs, every widget explains why it matters, every chart explains its type, and the **Priority** panel reorders them (`PATCH /dashboards/{id}` with `priority_order`).
 - **Offline stub mode** — with no LLM key set, a stub provider auto-engages (yellow banner, canned answers) so the whole app runs offline.
 
 ---

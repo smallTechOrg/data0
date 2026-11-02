@@ -1,4 +1,4 @@
-"""Dashboard builder pipeline (C40, Phase 15) — graph-adjacent, NOT a ReAct graph.
+"""Dashboard builder pipeline (C40 Phase 15, C41 Phase 16) — graph-adjacent, NOT a ReAct graph.
 
 `build_dashboard(dataset_id, command, title=None)` is a fixed linear pipeline:
 profile -> ONE structured LLM call (<= 1 repair) -> strict `validate_spec` against
@@ -21,7 +21,16 @@ from typing import Any
 import pandas as pd
 from pydantic import ValidationError
 
-from domain.dashboard import GRID_COLUMNS, MAX_WIDGETS, DashboardSpec, Widget
+from domain.dashboard import (
+    DESCRIPTION_MAX,
+    GRID_COLUMNS,
+    MAX_WIDGETS,
+    RATIONALE_MAX,
+    SUMMARY_MAX,
+    DashboardSpec,
+    Widget,
+)
+from graph.dashboard_charts import clamp_chart_type, find_column, is_ordered, rationale_for
 from graph.dashboard_profile import columns_schema_for, profile_dataframe
 from llm.client import LLMClient
 from observability.events import get_logger
@@ -42,6 +51,16 @@ _FORMATS = ("number", "integer", "currency", "percent")
 _ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 _DEFAULT_SIZE = {"kpi": (3, 2), "chart": (6, 5), "table": (12, 6)}
 _KIND_ORDER = {"kpi": 0, "chart": 1, "table": 2}
+_DESCRIPTION_SOURCES = ("agent", "auto", "user")
+_AGG_WORDS = {
+    "sum": "Total",
+    "mean": "Average",
+    "median": "Median",
+    "min": "Minimum",
+    "max": "Maximum",
+    "count": "Count",
+    "nunique": "Distinct count",
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -259,7 +278,103 @@ def _clean_layout(raw: Any) -> dict[str, int] | None:
     return vals
 
 
-def _validate_widget(raw: Any, schema: dict[str, str]) -> dict[str, Any]:
+def _clean_text(value: Any, limit: int) -> str | None:
+    """Plain one-line text, truncated (never rejected); None when empty/non-string."""
+    if not isinstance(value, str):
+        return None
+    return " ".join(value.split())[:limit] or None
+
+
+def _measure_text(field_name: Any, agg: Any) -> str:
+    if field_name is None:
+        return "Row count"
+    return f"{_AGG_WORDS.get(agg, agg)} of {field_name}"
+
+
+def auto_caption(widget: dict[str, Any], profile: dict[str, Any] | None = None) -> str:
+    """Deterministic description for a widget the agent left undescribed (C41)."""
+    kind = widget.get("kind")
+    if kind == "kpi":
+        cfg = widget["kpi"]
+        rows = (profile or {}).get("row_count")
+        scope = "the filtered rows" if widget.get("filters") else (f"all {rows:,} rows" if rows else "all rows")
+        text = f"{_measure_text(cfg.get('field'), cfg.get('agg'))} across {scope}."
+    elif kind == "chart":
+        cfg = widget["chart"]
+        y = cfg.get("y") or {}
+        if cfg.get("type") == "histogram":
+            text = f"Distribution of {cfg.get('x')}."
+        elif cfg.get("type") == "scatter":
+            text = f"{y.get('field')} plotted against {cfg.get('x')}."
+        else:
+            text = f"{_measure_text(y.get('field'), y.get('agg'))} by {cfg.get('x')}"
+            if cfg.get("series_by"):
+                text += f", split by {cfg['series_by']}"
+            col = find_column(profile, cfg.get("x"))
+            limit = cfg.get("limit")
+            if col and limit and int(col.get("nunique") or 0) > limit and not is_ordered(col):
+                text += f", top {limit}"
+            text += "."
+    else:
+        cfg = widget["table"]
+        if cfg.get("group_by"):
+            first = (cfg.get("aggs") or [{}])[0]
+            text = (
+                f"{_measure_text(first.get('field'), first.get('agg'))} by "
+                f"{', '.join(cfg['group_by'])}, up to {cfg.get('limit')} rows."
+            )
+        else:
+            text = f"Rows of {', '.join((cfg.get('columns') or [])[:4])}, up to {cfg.get('limit')} rows."
+    return text[:DESCRIPTION_MAX]
+
+
+def _auto_summary(profile: dict[str, Any]) -> str:
+    return f"Overview of {profile['row_count']:,} rows across {profile['col_count']:,} columns."[:SUMMARY_MAX]
+
+
+def _clamp_chart(
+    cfg: dict[str, Any], profile: dict[str, Any], notes: list[str] | None
+) -> tuple[dict[str, Any], bool]:
+    """Hard chart clamps (pie > 8 categories, line/area on unordered x -> bar)."""
+    ctype = cfg.get("type")
+    new_type, note = clamp_chart_type(
+        ctype, find_column(profile, cfg.get("x")), limit=_clamp(cfg.get("limit"), 1, 50, 20)
+    )
+    if new_type == ctype:
+        return cfg, False
+    if notes is not None and note:
+        notes.append(note)
+    out = {**cfg, "type": new_type}
+    if ctype == "pie" and not out.get("sort"):
+        out["sort"] = "y_desc"
+    return out, True
+
+
+def normalize_priorities(widgets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Dense unique ranks 1..N. Widgets keep their list position; only `priority` changes.
+
+    Sorted by the given priority; missing/non-int/out-of-range values rank after
+    valid ones, and reply order breaks every tie (so duplicates stay deterministic).
+    """
+
+    def given(w: dict[str, Any]) -> int | None:
+        p = w.get("priority")
+        return p if isinstance(p, int) and not isinstance(p, bool) and p >= 1 else None
+
+    order = sorted(
+        range(len(widgets)),
+        key=lambda i: (given(widgets[i]) is None, given(widgets[i]) or 0, i),
+    )
+    ranks = {i: rank for rank, i in enumerate(order, start=1)}
+    return [{**w, "priority": ranks[i]} for i, w in enumerate(widgets)]
+
+
+def _validate_widget(
+    raw: Any,
+    schema: dict[str, str],
+    profile: dict[str, Any] | None = None,
+    notes: list[str] | None = None,
+) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise _Err("bad_shape", "widget must be an object")
     kind = raw.get("kind")
@@ -271,11 +386,14 @@ def _validate_widget(raw: Any, schema: dict[str, str]) -> dict[str, Any]:
     if not isinstance(filters_raw, list):
         raise _Err("bad_filter", "filters must be a list")
     filters = [_validate_filter(f, schema) for f in filters_raw[:5]]
+    raw_cfg, clamped = raw[kind], False
+    if kind == "chart" and profile is not None:
+        raw_cfg, clamped = _clamp_chart(raw_cfg, profile, notes)
     cfg = {
         "kpi": _validate_kpi,
         "chart": _validate_chart,
         "table": _validate_table,
-    }[kind](raw[kind], schema)
+    }[kind](raw_cfg, schema)
     title = raw.get("title")
     title = " ".join(title.split())[:80] if isinstance(title, str) and title.strip() else ""
     if not title:
@@ -291,18 +409,38 @@ def _validate_widget(raw: Any, schema: dict[str, str]) -> dict[str, Any]:
         "table": None,
     }
     widget[kind] = cfg
+    description = _clean_text(raw.get("description"), DESCRIPTION_MAX)
+    source = raw.get("description_source")
+    widget.update(
+        priority=raw.get("priority"),  # made dense by normalize_priorities
+        description=description or auto_caption(widget, profile),
+        description_source=(
+            "auto" if description is None else source if source in _DESCRIPTION_SOURCES else "agent"
+        ),
+        ignore_dashboard_filters=raw.get("ignore_dashboard_filters") is True,
+    )
+    if kind == "chart":
+        # A clamped type invalidates the agent's justification, so it is re-derived.
+        rationale = None if clamped else _clean_text(raw.get("chart_rationale"), RATIONALE_MAX)
+        widget["chart_rationale"] = rationale or rationale_for(cfg, profile)
     return widget
 
 
 def validate_spec(
-    spec: Any, columns_schema: dict[str, str]
+    spec: Any,
+    columns_schema: dict[str, str],
+    *,
+    profile: dict[str, Any] | None = None,
+    notes: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Validate a (possibly LLM-written) spec against the dataset's real columns.
 
     Returns `(clean_widgets, errors)`; errors are `{widget_index, code, detail}`
     (`widget_index` is None for whole-reply errors). Widget-by-widget: an invalid
     widget is an error entry and is NOT in `clean_widgets`. Field names are snapped
-    (unique case/whitespace-insensitive), ranges clamped, ids made unique.
+    (unique case/whitespace-insensitive), ranges clamped, ids made unique,
+    priorities made dense, missing text filled deterministically. With `profile`,
+    the chart-type clamps also run (they need cardinalities) and record `notes`.
     """
     if not isinstance(spec, dict):
         return [], [{"widget_index": None, "code": "bad_shape", "detail": "reply must be a JSON object"}]
@@ -319,7 +457,7 @@ def validate_spec(
             )
             continue
         try:
-            clean.append(_validate_widget(raw, columns_schema))
+            clean.append(_validate_widget(raw, columns_schema, profile, notes))
         except _Err as exc:
             errors.append({"widget_index": i, "code": exc.code, "detail": exc.detail})
         except (TypeError, ValueError, AttributeError) as exc:  # defensive: odd shapes
@@ -343,12 +481,12 @@ def validate_spec(
 
     # Final shape gate through the Pydantic models (belt and braces).
     final: list[dict[str, Any]] = []
-    for i, w in enumerate(clean):
+    for i, w in enumerate(normalize_priorities(clean)):
         try:
             final.append(Widget.model_validate(w).model_dump(mode="json"))
         except ValidationError as exc:
             errors.append({"widget_index": i, "code": "bad_shape", "detail": str(exc)[:200]})
-    return final, errors
+    return normalize_priorities(final), errors
 
 
 def validate_layout(
@@ -395,12 +533,21 @@ def validate_layout(
 
 
 def assign_layout(widgets: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Order KPI -> chart -> table (stable) and first-fit pack on the 12-col grid.
+    """Order KPIs by priority, then charts + tables merged by priority, and
+    first-fit pack on the 12-col grid (equal/absent priorities: chart before table).
 
     A widget keeps its `w`/`h` if it already has a valid layout; otherwise the
-    default size for its kind. Contract vector in `spec/api.md`.
+    default size for its kind. Contract vectors in `spec/api.md`.
     """
-    ordered = sorted(widgets, key=lambda w: _KIND_ORDER.get(w.get("kind"), 9))
+
+    def rank(w: dict[str, Any]) -> float:
+        p = w.get("priority")
+        return p if isinstance(p, int) and not isinstance(p, bool) else float("inf")
+
+    ordered = sorted(
+        widgets,
+        key=lambda w: (w.get("kind") != "kpi", rank(w), _KIND_ORDER.get(w.get("kind"), 9)),
+    )
     occupied: set[tuple[int, int]] = set()
     placed: list[dict[str, Any]] = []
     for w in ordered:
@@ -484,11 +631,17 @@ def fallback_spec(profile: dict[str, Any], command: str = "") -> dict[str, Any]:
             "table": {"columns": names, "limit": 10},
         }
     )
-    clean, _errors = validate_spec({"widgets": widgets}, profile["columns_schema"])
+    # Ranking: measure KPIs -> charts -> table -> the Rows KPI.
+    ranked = sorted(widgets, key=lambda w: (w["id"] == "k1", _KIND_ORDER[w["kind"]]))
+    for rank, w in enumerate(ranked, start=1):
+        w["priority"] = rank
+    clean, _errors = validate_spec({"widgets": widgets}, profile["columns_schema"], profile=profile)
     return {
-        "version": 1,
+        "version": 2,
         "title": "Automatic dashboard",
+        "summary": _auto_summary(profile),
         "description": None,
+        "filters": [],
         "widgets": clean,
     }
 
@@ -548,7 +701,8 @@ def _build_prompt(command: str, profile_text: str, notes: str) -> str:
     if notes:
         parts.append(f"## Dataset notes\n{notes}\n")
     parts.append(
-        "Reply with ONLY a JSON object {\"title\": ..., \"description\": ..., \"widgets\": [...]}. "
+        "Reply with ONLY a JSON object {\"title\": ..., \"summary\": ..., \"description\": ..., \"widgets\": [...]}. "
+        "Every widget has a unique priority (1 = most important) and a description; charts also have chart_rationale. "
         "NO layout coordinates. 4-10 widgets; at least one kpi and one chart unless the data cannot support them."
     )
     return "\n".join(parts)
@@ -568,6 +722,17 @@ def _repair_prompt(prompt: str, previous: str, errors: list[dict[str, Any]]) -> 
         + "\n".join(lines)
         + "\n\nReturn the corrected FULL JSON object only (fix or remove the invalid widgets)."
     )
+
+
+def _agent_reply(reply: Any) -> Any:
+    """Drop fields only the server may set from an LLM reply."""
+    if not isinstance(reply, dict) or not isinstance(reply.get("widgets"), list):
+        return reply
+    widgets = [
+        {k: v for k, v in w.items() if k != "description_source"} if isinstance(w, dict) else w
+        for w in reply["widgets"]
+    ]
+    return {**reply, "widgets": widgets}
 
 
 def _call_llm(client: Any, prompt: str, system: str) -> tuple[str, int, int]:
@@ -616,6 +781,8 @@ def build_dashboard(
     errors: list[dict[str, Any]] = []
     agent_title: str | None = None
     agent_desc: str | None = None
+    agent_summary: str | None = None
+    clamp_notes: list[str] = []
     reply_used: Any = None
 
     system = _PROMPT_PATH.read_text(encoding="utf-8").strip()
@@ -632,10 +799,11 @@ def build_dashboard(
         if reply is _NOPARSE:
             clean, errors = [], [{"widget_index": None, "code": "bad_json", "detail": "reply was not valid JSON"}]
         else:
-            clean, errors = validate_spec(reply, schema)
+            clean, errors = validate_spec(_agent_reply(reply), schema, profile=profile, notes=clamp_notes)
             reply_used = reply
             if isinstance(reply, dict):
                 agent_title, agent_desc = reply.get("title"), reply.get("description")
+                agent_summary = reply.get("summary")
         logger.info("dashboard_validate", attempt=1, errors=[e["code"] for e in errors])
 
         if errors:  # ONE repair call
@@ -650,13 +818,15 @@ def build_dashboard(
                     errors = [{"widget_index": None, "code": "bad_json", "detail": "repair reply was not valid JSON"}]
                 # else: keep the first attempt's valid widgets + its error list
             else:
-                clean2, errors2 = validate_spec(reply2, schema)
+                notes2: list[str] = []
+                clean2, errors2 = validate_spec(_agent_reply(reply2), schema, profile=profile, notes=notes2)
                 if clean2 or not clean:
-                    clean, errors = clean2, errors2
+                    clean, errors, clamp_notes = clean2, errors2, notes2
                     reply_used = reply2
                     if isinstance(reply2, dict):
                         agent_title = reply2.get("title") or agent_title
                         agent_desc = reply2.get("description") or agent_desc
+                        agent_summary = reply2.get("summary") or agent_summary
             logger.info("dashboard_validate", attempt=2, errors=[e["code"] for e in errors])
     except Exception as exc:  # noqa: BLE001 — any LLM failure -> deterministic fallback
         gen["notes"].append(f"LLM unavailable: {type(exc).__name__}")
@@ -677,16 +847,18 @@ def build_dashboard(
             gen["notes"].append("The AI reply could not be used; built an automatic dashboard.")
         logger.info("dashboard_fallback", reason=[e["code"] for e in errors])
         widgets = fallback["widgets"]
-        agent_title = agent_desc = None
+        agent_title = agent_desc = agent_summary = None
     else:
+        gen["notes"].extend(clamp_notes)
         widgets = list(clean)
         for kind in ("kpi", "chart"):
             if not any(w["kind"] == kind for w in widgets):
                 extra = next((w for w in fallback["widgets"] if w["kind"] == kind), None)
                 if extra is not None:
-                    widgets = widgets[: MAX_WIDGETS - 1] + [extra]
+                    # Added on the agent's behalf, so it ranks after everything it chose.
+                    widgets = widgets[: MAX_WIDGETS - 1] + [{**extra, "priority": MAX_WIDGETS + 1}]
                     gen["supplemented"].append(kind)
-        widgets = _unique_ids(widgets)
+        widgets = normalize_priorities(_unique_ids(widgets))
 
     final_title = (title or "").strip() or (
         agent_title.strip() if isinstance(agent_title, str) and agent_title.strip() else ""
@@ -695,13 +867,15 @@ def build_dashboard(
     description = agent_desc.strip()[:300] if isinstance(agent_desc, str) and agent_desc.strip() else None
 
     spec = {
-        "version": 1,
+        "version": 2,
         "title": final_title,
+        "summary": _clean_text(agent_summary, SUMMARY_MAX) or _auto_summary(profile),
         "description": description,
+        "filters": [],
         "widgets": assign_layout(widgets),
     }
     # Safety net: re-validate the final spec; drop anything that no longer validates.
-    safe, net_errors = validate_spec(spec, schema)
+    safe, net_errors = validate_spec(spec, schema, profile=profile)
     if net_errors or not safe:
         logger.warning("dashboard_final_validation", errors=[e["code"] for e in net_errors])
         if not safe:

@@ -1,6 +1,7 @@
-"""`/dashboards` routes (Phase 15, C40) — agent-built dashboards.
+"""`/dashboards` routes (Phase 15 C40, Phase 16 C41) — agent-built dashboards.
 
-Contract: `spec/api.md` -> "Agent-built Dashboards (C40, Phase 15)". A dashboard
+Contract: `spec/api.md` -> "Agent-built Dashboards (C40, Phase 15)". Stored v1
+specs are read as v2 (`upgrade_v1`) and rewritten as v2 on their next write. A dashboard
 belongs to ONE dataset; the row stores the validated spec (incl. layout) and the
 widget data is recomputed from the dataset's CURRENT file on every data fetch by
 the safe aggregation engine (`graph.dashboard_data`). The build runs the
@@ -22,8 +23,9 @@ from api._common import api_error, ok
 from db.models import DashboardRow, DatasetRow
 from db.session import get_session
 from graph import nodes as graph_nodes
-from graph.dashboard import build_dashboard, validate_layout
-from graph.dashboard_data import compute_widget_data
+from domain.dashboard import upgrade_v1
+from graph.dashboard import assign_layout, build_dashboard, normalize_priorities, validate_layout
+from graph.dashboard_data import build_insights, compute_widget_data
 from observability.events import get_logger
 
 router = APIRouter()
@@ -58,7 +60,7 @@ def _record(row: DashboardRow, filename: str | None) -> dict[str, Any]:
         "dataset_filename": filename,
         "title": row.title,
         "command": row.command,
-        "spec": row.spec_json,
+        "spec": upgrade_v1(row.spec_json),
         "generation": row.generation_json or {},
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
@@ -73,13 +75,28 @@ def _get_row(session: Session, dashboard_id: str) -> DashboardRow:
 
 
 def _data_payload(row: DashboardRow, df) -> dict[str, Any]:
+    spec = upgrade_v1(row.spec_json)
+    widgets = compute_widget_data(df, spec)
     return {
         "dashboard_id": row.id,
         "dataset_id": row.dataset_id,
         "row_count": int(len(df)),
         "computed_at": datetime.now(timezone.utc).isoformat(),
-        "widgets": compute_widget_data(df, row.spec_json),
+        "insights": build_insights(spec, widgets),
+        "widgets": widgets,
     }
+
+
+def _check_priority_order(order: Any, widget_ids: list[str]) -> list[str]:
+    """Every widget id exactly once, or 400 `invalid_priority`."""
+    if (
+        not isinstance(order, list)
+        or not all(isinstance(i, str) for i in order)
+        or len(order) != len(widget_ids)
+        or set(order) != set(widget_ids)
+    ):
+        raise api_error("invalid_priority", "priority_order must list every widget id exactly once.", 400)
+    return order
 
 
 def _commit(session: Session, what: str) -> None:
@@ -197,8 +214,8 @@ def patch_dashboard(
     session: Session = Depends(get_session),
 ) -> dict:
     row = _get_row(session, dashboard_id)
-    if not isinstance(body, dict) or ("title" not in body and "layout" not in body):
-        raise api_error("empty_patch", "Provide a title and/or a layout to update.", 400)
+    if not isinstance(body, dict) or not any(k in body for k in ("title", "layout", "priority_order")):
+        raise api_error("empty_patch", "Provide a title, a layout and/or a priority_order to update.", 400)
 
     new_title: str | None = None
     if "title" in body:
@@ -207,7 +224,16 @@ def patch_dashboard(
             raise api_error("invalid_title", f"Title must be 1-{_MAX_TITLE} characters.", 400)
         new_title = " ".join(t.split())
 
-    spec = copy.deepcopy(row.spec_json)
+    spec = copy.deepcopy(upgrade_v1(row.spec_json))
+    if "priority_order" in body:
+        order = _check_priority_order(body["priority_order"], [w["id"] for w in spec.get("widgets", [])])
+        rearrange = body.get("rearrange", True)
+        if not isinstance(rearrange, bool):
+            raise api_error("invalid_priority", "rearrange must be true or false.", 400)
+        ranks = {wid: rank for rank, wid in enumerate(order, start=1)}
+        widgets = normalize_priorities([{**w, "priority": ranks[w["id"]]} for w in spec["widgets"]])
+        # An explicit layout in the same request wins over the automatic re-pack.
+        spec["widgets"] = assign_layout(widgets) if rearrange and "layout" not in body else widgets
     if "layout" in body:
         ids = [w["id"] for w in spec.get("widgets", [])]
         clean, err = validate_layout(body["layout"], ids)

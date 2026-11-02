@@ -522,3 +522,162 @@ def test_migration_creates_dashboards_table(tmp_path, monkeypatch):
     command.downgrade(cfg, "f7a8b9c0d1e2")
     assert "dashboards" not in inspect(engine).get_table_names()
     engine.dispose()
+
+
+# --- C41: ranked insights, priority reorder, lazy v1 upgrade ---------------------
+
+
+RANKED = {
+    "title": "Ranked",
+    "summary": "  Where   revenue comes from. ",
+    "widgets": [
+        {"id": "t", "kind": "table", "title": "Top customers", "priority": 2,
+         "description": "Customers to look after.", "description_source": "user",
+         "table": {"group_by": ["customer_id"],
+                   "aggs": [{"field": "revenue", "agg": "sum", "alias": "revenue"}], "limit": 5}},
+        {"id": "k2", "kind": "kpi", "title": "Units", "priority": 3,
+         "kpi": {"field": "units", "agg": "sum", "format": "integer"}},
+        {"id": "k1", "kind": "kpi", "title": "Revenue", "priority": 1,
+         "description": "The headline number.",
+         "kpi": {"field": "revenue", "agg": "sum", "format": "currency"}},
+        {"id": "c", "kind": "chart", "title": "By customer", "priority": 4,
+         "chart_rationale": "A pie shows shares.",
+         "chart": {"type": "pie", "x": "customer_id", "y": {"field": "revenue", "agg": "sum"}}},
+    ],
+}
+
+
+def _build_ranked(api_client, dataset_id, monkeypatch):
+    calls = _fake_llm(monkeypatch, [json.dumps(RANKED)])
+    r = _create(api_client, dataset_id)
+    assert r.status_code == 200, r.text
+    return r.json()["data"], calls
+
+
+def _by_id(spec):
+    return {w["id"]: w for w in spec["widgets"]}
+
+
+def test_ranked_reply_produces_v2_spec_and_insights(api_client, dataset_id, monkeypatch):
+    body, calls = _build_ranked(api_client, dataset_id, monkeypatch)
+    assert len(calls) == 1  # no extra call for ranking or text
+    spec = body["dashboard"]["spec"]
+    assert spec["version"] == 2 and spec["summary"] == "Where revenue comes from."
+    w = _by_id(spec)
+    assert (w["k1"]["layout"]["x"], w["k1"]["layout"]["y"]) == (0, 0)  # priority 1 KPI top-left
+    assert w["k1"]["description_source"] == "agent"
+    assert w["k2"]["description_source"] == "auto" and w["k2"]["description"]
+    assert w["t"]["description_source"] == "agent"  # the LLM cannot claim user authorship
+    insights = body["data"]["insights"]
+    assert [i["widget_id"] for i in insights] == ["k1", "k2"]
+    assert insights[0]["why"] == "The headline number."
+    assert insights[0]["headline"] == body["data"]["widgets"]["k1"]["formatted"]
+    assert api_client.get(f"/dashboards/{body['dashboard']['id']}/data").json()["data"]["insights"] == insights
+
+
+def test_pie_over_many_categories_is_clamped_and_noted(api_client, dataset_id, monkeypatch):
+    body, _ = _build_ranked(api_client, dataset_id, monkeypatch)
+    chart = _by_id(body["dashboard"]["spec"])["c"]
+    assert chart["chart"]["type"] == "bar"
+    assert chart["chart_rationale"] != "A pie shows shares."
+    assert any("customer_id" in n for n in body["dashboard"]["generation"]["notes"])
+    assert body["data"]["widgets"]["c"]["status"] == "ok"
+
+
+def test_fallback_dashboard_is_v2_with_auto_text(api_client, dataset_id):
+    body = _create(api_client, dataset_id).json()["data"]  # stub provider -> fallback
+    spec = body["dashboard"]["spec"]
+    assert body["dashboard"]["generation"]["used_fallback"] is True
+    assert spec["version"] == 2 and spec["summary"]
+    assert sorted(w["priority"] for w in spec["widgets"]) == list(range(1, len(spec["widgets"]) + 1))
+    assert all(w["description_source"] == "auto" for w in spec["widgets"])
+    assert all(w["chart_rationale"] for w in spec["widgets"] if w["kind"] == "chart")
+    assert body["data"]["insights"][-1]["title"] == "Rows"
+
+
+def test_patch_priority_order_repacks_in_reading_order(api_client, dataset_id, monkeypatch):
+    body, calls = _build_ranked(api_client, dataset_id, monkeypatch)
+    did = body["dashboard"]["id"]
+    r = api_client.patch(f"/dashboards/{did}", json={"priority_order": ["k2", "c", "t", "k1"]})
+    assert r.status_code == 200, r.text
+    w = _by_id(r.json()["data"]["spec"])
+    assert [w[i]["priority"] for i in ("k2", "c", "t", "k1")] == [1, 2, 3, 4]
+    assert (w["k2"]["layout"]["x"], w["k2"]["layout"]["y"]) == (0, 0)
+    assert (w["k1"]["layout"]["x"], w["k1"]["layout"]["y"]) == (3, 0)
+    assert w["c"]["layout"]["y"] < w["t"]["layout"]["y"]  # charts + tables follow priority
+    assert len(calls) == 1
+    data = api_client.get(f"/dashboards/{did}/data").json()["data"]
+    assert [i["widget_id"] for i in data["insights"]] == ["k2", "k1"]
+
+
+def test_patch_priority_without_rearrange_keeps_layout(api_client, dataset_id, monkeypatch):
+    body, _ = _build_ranked(api_client, dataset_id, monkeypatch)
+    did = body["dashboard"]["id"]
+    before = {w["id"]: w["layout"] for w in body["dashboard"]["spec"]["widgets"]}
+    r = api_client.patch(
+        f"/dashboards/{did}", json={"priority_order": ["k2", "c", "t", "k1"], "rearrange": False}
+    )
+    assert r.status_code == 200, r.text
+    w = _by_id(r.json()["data"]["spec"])
+    assert {i: x["layout"] for i, x in w.items()} == before
+    assert w["k2"]["priority"] == 1
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"priority_order": ["k1", "k2", "t"]},  # incomplete
+        {"priority_order": ["k1", "k1", "t", "c"]},  # duplicate
+        {"priority_order": ["k1", "k2", "t", "nope"]},  # unknown id
+        {"priority_order": "k1"},  # not a list
+        {"priority_order": ["k1", "k2", "t", "c"], "rearrange": "yes"},
+    ],
+)
+def test_patch_invalid_priority_leaves_spec_unchanged(api_client, dataset_id, monkeypatch, patch):
+    body, _ = _build_ranked(api_client, dataset_id, monkeypatch)
+    did = body["dashboard"]["id"]
+    r = api_client.patch(f"/dashboards/{did}", json=patch)
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "invalid_priority"
+    assert api_client.get(f"/dashboards/{did}").json()["data"]["spec"] == body["dashboard"]["spec"]
+
+
+def test_stored_v1_dashboard_opens_as_v2_and_is_rewritten_on_write(api_client, dataset_id):
+    from db.models import DashboardRow
+    from db.session import create_db_session
+
+    v1 = {
+        "version": 1,
+        "title": "Old",
+        "description": None,
+        "widgets": [
+            {"id": "c", "kind": "chart", "title": "Chart", "filters": [],
+             "layout": {"x": 0, "y": 2, "w": 6, "h": 5},
+             "chart": {"type": "bar", "x": "region", "y": {"field": "revenue", "agg": "sum"}}},
+            {"id": "k", "kind": "kpi", "title": "Revenue", "filters": [],
+             "layout": {"x": 0, "y": 0, "w": 3, "h": 2},
+             "kpi": {"field": "revenue", "agg": "sum", "format": "number"}},
+        ],
+    }
+    with create_db_session() as s:
+        row = DashboardRow(dataset_id=dataset_id, title="Old", command="c", spec_json=v1, generation_json={})
+        s.add(row)
+        s.flush()
+        did = row.id
+
+    spec = api_client.get(f"/dashboards/{did}").json()["data"]["spec"]
+    assert spec["version"] == 2 and spec["summary"] is None
+    w = _by_id(spec)
+    assert (w["k"]["priority"], w["c"]["priority"]) == (1, 2)  # reading order of the stored layout
+    assert w["k"]["description_source"] == "auto" and w["k"]["description"]
+    data = api_client.get(f"/dashboards/{did}/data").json()["data"]
+    assert [i["widget_id"] for i in data["insights"]] == ["k"]
+    with create_db_session() as s:
+        assert s.get(DashboardRow, did).spec_json["version"] == 1  # reading never writes
+
+    r = api_client.patch(f"/dashboards/{did}", json={"priority_order": ["c", "k"], "rearrange": False})
+    assert r.status_code == 200, r.text
+    with create_db_session() as s:
+        stored = s.get(DashboardRow, did).spec_json
+    assert stored["version"] == 2
+    assert {x["id"]: x["priority"] for x in stored["widgets"]} == {"c": 1, "k": 2}

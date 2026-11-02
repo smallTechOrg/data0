@@ -21,6 +21,7 @@ from pandas.api import types as pdt
 from graph.dashboard_profile import looks_like_dates
 from graph.sandbox import _as_jsonable, _build_echart_option
 
+MAX_INSIGHTS = 6
 _AGG_FUNCS = {
     "sum": "sum",
     "mean": "mean",
@@ -494,3 +495,25 @@ def compute_widget(df: pd.DataFrame, widget: dict[str, Any]) -> dict[str, Any]:
 def compute_widget_data(df: pd.DataFrame, spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """`{widget_id: payload}` for every widget in the spec (never raises)."""
     return {w["id"]: compute_widget(df, w) for w in spec.get("widgets", [])}
+
+
+def build_insights(
+    spec: dict[str, Any], widget_data: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """KPI widgets in priority order (<= 6) as `{rank, widget_id, title, headline, why}` (C41)."""
+    kpis = [w for w in spec.get("widgets", []) if w.get("kind") == "kpi"]
+    kpis.sort(key=lambda w: w.get("priority") or float("inf"))
+    insights = []
+    for rank, w in enumerate(kpis[:MAX_INSIGHTS], start=1):
+        payload = widget_data.get(w["id"]) or {}
+        headline = payload.get("formatted") if payload.get("status") == "ok" else None
+        insights.append(
+            {
+                "rank": rank,
+                "widget_id": w["id"],
+                "title": w.get("title") or "",
+                "headline": headline or "—",
+                "why": w.get("description") or "",
+            }
+        )
+    return insights
