@@ -574,11 +574,18 @@ export interface DashboardFilter {
   value?: unknown
 }
 
+export type DescriptionSource = 'agent' | 'auto' | 'user'
+
 interface WidgetBase {
   id: string
   title: string
   layout: WidgetLayout
   filters?: DashboardFilter[]
+  /** Global rank, dense unique 1..N (1 = most important). v2 (C41). */
+  priority: number
+  /** One-line "why it matters" (<=200 chars). v2 (C41). */
+  description?: string | null
+  description_source?: DescriptionSource
 }
 
 export interface KpiWidgetDef extends WidgetBase {
@@ -594,6 +601,8 @@ export interface KpiWidgetDef extends WidgetBase {
 
 export interface ChartWidgetDef extends WidgetBase {
   kind: 'chart'
+  /** Why this chart type fits this data (<=140 chars). v2 (C41). */
+  chart_rationale?: string | null
   chart: {
     type: 'bar' | 'line' | 'area' | 'pie' | 'scatter' | 'histogram'
     x: string
@@ -622,9 +631,11 @@ export interface TableWidgetDef extends WidgetBase {
 export type DashboardWidget = KpiWidgetDef | ChartWidgetDef | TableWidgetDef
 
 export interface DashboardSpec {
-  version: 1
+  version: 1 | 2
   title: string
   description?: string | null
+  /** One-line dashboard summary (v2, C41); null for lazily-upgraded v1 specs. */
+  summary?: string | null
   widgets: DashboardWidget[]
 }
 
@@ -684,8 +695,18 @@ export type WidgetData =
     }
   | { kind: 'kpi' | 'chart' | 'table'; status: 'error'; message: string }
 
+export interface DashboardInsight {
+  rank: number
+  widget_id: string
+  title: string
+  headline: string
+  why: string
+}
+
 export interface DashboardData {
   dashboard_id: string
+  /** KPI widgets in priority order, <=6 (C41). */
+  insights?: DashboardInsight[]
   dataset_id: string
   row_count: number
   computed_at: string
@@ -700,6 +721,15 @@ export interface DashboardCreateResponse {
 export interface DashboardPatch {
   title?: string
   layout?: { id: string; x: number; y: number; w: number; h: number }[]
+  /** Every widget id exactly once, most important first (400 `invalid_priority` otherwise). */
+  priority_order?: string[]
+  /** Default true: re-pack layout in priority reading order. false changes ranks only. */
+  rearrange?: boolean
+}
+
+/** Build a PATCH body that reorders priority (C41). */
+export function priorityPatch(order: readonly string[], rearrange = true): DashboardPatch {
+  return { priority_order: [...order], rearrange }
 }
 
 // ---------------------------------------------------------------------------

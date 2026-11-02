@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   api,
   ApiError,
+  priorityPatch,
   type DashboardCreateResponse,
   type DashboardData,
   type DashboardRecord,
@@ -190,6 +191,21 @@ export function DashboardTab() {
     [record, refreshList],
   )
 
+  // Throws on failure: the panel stays open with the error and the draft order.
+  const onSavePriority = useCallback(
+    async (order: string[], rearrange: boolean) => {
+      if (!record) return
+      saveSeq.current += 1 // an in-flight layout save must not overwrite this result
+      const updated = await api.patchDashboard(record.id, priorityPatch(order, rearrange))
+      savedWidgets.current = updated.spec.widgets
+      pending.current = null
+      setRecord(prev => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev))
+      setSaveState('idle')
+      void refreshList()
+    },
+    [record, refreshList],
+  )
+
   const onDelete = useCallback(
     async (id: string) => {
       try {
@@ -241,6 +257,7 @@ export function DashboardTab() {
             onLayoutChange={onLayoutChange}
             onRetrySave={onRetrySave}
             onRename={onRename}
+            onSavePriority={onSavePriority}
           />
         ) : building || opening ? (
           <div

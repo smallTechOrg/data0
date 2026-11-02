@@ -27,6 +27,8 @@ export interface LayoutWidget {
   id: string
   kind: WidgetKind
   layout?: LayoutRect | null
+  /** Global rank (1 = most important); absent = equal rank (v1 behaviour). */
+  priority?: number | null
 }
 
 export interface LayoutPayloadItem extends LayoutRect {
@@ -93,6 +95,40 @@ export function packLayout<T extends LayoutWidget>(widgets: readonly T[]): T[] {
     placed.push(spot)
     return { ...widget, layout: spot }
   })
+}
+
+/**
+ * What the grid draws once `hiddenIds` moved to the headline row: the rest, in
+ * reading order, re-packed so no hole opens where those KPIs sat (a chart placed
+ * beside them must not float away from the left edge). Display only: the stored
+ * layouts, and what gets PATCHed, are untouched.
+ */
+export function gridWidgets<T extends LayoutWidget>(
+  widgets: readonly T[],
+  hiddenIds: ReadonlySet<string>,
+): T[] {
+  return packLayout(orderedByPosition(widgets.filter(w => !hiddenIds.has(w.id))))
+}
+
+/**
+ * Reading order v2 (mirrors backend `assign_layout` v2): KPIs by priority asc,
+ * then charts + tables merged by priority asc; stable, absent priority = equal.
+ */
+export function orderedByPriority<T extends LayoutWidget>(widgets: readonly T[]): T[] {
+  const rank = (w: T): number =>
+    typeof w.priority === 'number' && Number.isFinite(w.priority) ? w.priority : 0
+  const sorted = (list: { widget: T; index: number }[]): T[] =>
+    list.sort((a, b) => rank(a.widget) - rank(b.widget) || a.index - b.index).map(e => e.widget)
+  const indexed = widgets.map((widget, index) => ({ widget, index }))
+  return [
+    ...sorted(indexed.filter(e => e.widget.kind === 'kpi')),
+    ...sorted(indexed.filter(e => e.widget.kind !== 'kpi')),
+  ]
+}
+
+/** packLayout v2: re-order by priority (KPIs first) and first-fit pack. */
+export function packByPriority<T extends LayoutWidget>(widgets: readonly T[]): T[] {
+  return packLayout(orderedByPriority(widgets))
 }
 
 /**

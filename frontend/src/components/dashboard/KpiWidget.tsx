@@ -12,9 +12,7 @@ export function KpiWidget({ def, data }: { def: KpiWidgetDef; data: WidgetData |
   return (
     <div className="flex h-full flex-col justify-center">
       <div className="truncate text-3xl font-bold tracking-tight text-gray-900" title={text}>
-        {def.kpi.prefix ?? ''}
         {text}
-        {def.kpi.suffix ?? ''}
       </div>
       <div className="mt-1 truncate text-xs text-gray-500">{caption}</div>
     </div>

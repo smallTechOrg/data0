@@ -1,28 +1,33 @@
 'use client'
 
 import { useState, type CSSProperties } from 'react'
-import type { DashboardData, DashboardRecord, DashboardWidget } from '@/lib/api'
+import type { DashboardData, DashboardRecord, DashboardWidget, KpiWidgetDef } from '@/lib/api'
 import { announce } from '@/lib/announce'
 import {
   WIDTH_PRESETS,
+  gridWidgets,
   moveWidget,
   moveWidgetBy,
-  orderedByPosition,
   positionOf,
   setWidth,
 } from '@/lib/dashboardLayout'
+import { headlineKpis } from '@/lib/dashboardPriority'
 import { ChartWidget } from './ChartWidget'
 import { FieldsPanelStub } from './FieldsPanelStub'
+import { KeyInsights } from './KeyInsights'
 import { KpiWidget } from './KpiWidget'
+import { PriorityPanel } from './PriorityPanel'
 import { TableWidget } from './TableWidget'
+import { WidgetDescription } from './WidgetDescription'
 
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 const STUB_TIP = 'Coming in a later phase'
 
 /**
- * Canvas: header (title / command / save pill / badges / stubs) + the 12-column
- * widget grid with native HTML5 drag-and-drop and a keyboard alternative.
+ * Canvas: header (title / summary / command / save pill / badges / stubs), the
+ * "Key insights" row (top KPIs by priority), and the 12-column widget grid with
+ * native HTML5 drag-and-drop and a keyboard alternative.
  * Presentational: layout changes are reported via `onLayoutChange` (the tab
  * applies them optimistically, PATCHes once, and reverts on failure).
  */
@@ -35,6 +40,7 @@ export function DashboardCanvas({
   onLayoutChange,
   onRetrySave,
   onRename,
+  onSavePriority,
 }: {
   record: DashboardRecord
   data: DashboardData | null
@@ -44,6 +50,7 @@ export function DashboardCanvas({
   onLayoutChange: (widgets: DashboardWidget[]) => void
   onRetrySave: () => void
   onRename: (title: string) => Promise<void>
+  onSavePriority: (order: string[], rearrange: boolean) => Promise<void>
 }) {
   const widgets = record.spec.widgets
   const [dragId, setDragId] = useState<string | null>(null)
@@ -53,7 +60,15 @@ export function DashboardCanvas({
   const [renameError, setRenameError] = useState<string | null>(null)
 
   const gen = record.generation
-  const ordered = orderedByPosition(widgets)
+  const headline = headlineKpis(widgets) as KpiWidgetDef[]
+  const headlineIds = new Set(headline.map(w => w.id))
+  // KPIs in the headline row leave the grid.
+  const ordered = gridWidgets(widgets, headlineIds)
+
+  const announceMove = (next: DashboardWidget[], w: Pick<DashboardWidget, 'id' | 'title'>) => {
+    const inGrid = gridWidgets(next, headlineIds)
+    announce(`Moved ${w.title} to position ${positionOf(inGrid, w.id)} of ${inGrid.length}`)
+  }
 
   const commitRename = async () => {
     const next = draft.trim()
@@ -73,10 +88,12 @@ export function DashboardCanvas({
     else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') delta = 1
     if (delta === 0) return
     e.preventDefault()
+    const target = ordered.findIndex(o => o.id === w.id) + delta
+    if (target < 0 || target >= ordered.length) return // never step past a headline KPI
     const next = moveWidgetBy(widgets, w.id, delta)
     if (next.every((n, i) => n === widgets[i])) return
     onLayoutChange(next)
-    announce(`Moved ${w.title} to position ${positionOf(next, w.id)} of ${next.length}`)
+    announceMove(next, w)
   }
 
   const pill =
@@ -122,6 +139,7 @@ export function DashboardCanvas({
                 </button>
               </h2>
             )}
+            {record.spec.summary && <p className="mt-0.5 px-1 text-sm text-gray-700">{record.spec.summary}</p>}
             <p className="mt-0.5 truncate px-1 text-xs text-gray-500" title={record.command}>
               “{record.command}” · {record.dataset_filename}
             </p>
@@ -147,7 +165,8 @@ export function DashboardCanvas({
                 )}
               </span>
             )}
-            {(['+ Add widget', 'Export', 'Regenerate'] as const).map(label => (
+            <PriorityPanel widgets={widgets} onSave={onSavePriority} />
+            {(['+ Add widget', 'Regenerate', 'Filters', 'Templates', 'Connect API/DB', 'Export'] as const).map(label => (
               <button
                 key={label}
                 type="button"
@@ -189,6 +208,8 @@ export function DashboardCanvas({
         </p>
       )}
 
+      <KeyInsights kpis={headline} data={data} />
+
       <div className="dash-grid" role="list" aria-label="Dashboard widgets">
         {ordered.map((w, i) => {
           const l = w.layout
@@ -222,9 +243,9 @@ export function DashboardCanvas({
                 if (next.every((n, idx) => n === widgets[idx])) return
                 onLayoutChange(next)
                 const moved = widgets.find(x => x.id === from)
-                if (moved) announce(`Moved ${moved.title} to position ${positionOf(next, from)} of ${next.length}`)
+                if (moved) announceMove(next, moved)
               }}
-              className={`dash-widget flex min-h-0 flex-col overflow-hidden rounded-lg border bg-white shadow-sm ${
+              className={`dash-widget group flex min-h-0 flex-col overflow-hidden rounded-lg border bg-white shadow-sm ${
                 dropTarget ? 'border-indigo-500 outline outline-2 outline-indigo-400' : 'border-gray-200'
               } ${dragId === w.id ? 'opacity-50' : ''}`}
             >
@@ -254,6 +275,12 @@ export function DashboardCanvas({
                 <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-gray-800" title={w.title}>
                   {w.title}
                 </h3>
+                <span
+                  title="Priority rank (1 = most important)"
+                  className="shrink-0 text-[11px] font-semibold tabular-nums text-gray-400 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
+                >
+                  #{w.priority}
+                </span>
                 <div role="group" aria-label={`Width of ${w.title}`} className="flex overflow-hidden rounded border border-gray-200">
                   {(Object.keys(WIDTH_PRESETS) as (keyof typeof WIDTH_PRESETS)[]).map(k => {
                     const active = l.w === WIDTH_PRESETS[k]
@@ -285,6 +312,7 @@ export function DashboardCanvas({
                   ⋯
                 </button>
               </div>
+              <WidgetDescription widget={w} />
               <div className="min-h-0 flex-1 overflow-auto p-2">
                 {w.kind === 'kpi' && <KpiWidget def={w} data={wd} />}
                 {w.kind === 'chart' && <ChartWidget def={w} data={wd} index={i} />}

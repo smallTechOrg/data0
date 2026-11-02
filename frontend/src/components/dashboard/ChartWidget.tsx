@@ -20,5 +20,5 @@ export function ChartWidget({
   if (!data.option || !('series' in data.option)) {
     return <WidgetError message={`No chart could be drawn for "${def.title}".`} />
   }
-  return <EChart option={data.option} index={index} />
+  return <EChart option={data.option} index={index} fill />
 }

@@ -14,6 +14,9 @@ import {
   moveWidget,
   moveWidgetBy,
   orderedByPosition,
+  orderedByPriority,
+  packByPriority,
+  gridWidgets,
   packLayout,
   setWidth,
   toLayoutPayload,
@@ -57,6 +60,37 @@ test('packLayout equals the spec/api.md contract vector', () => {
     ['w6', 6, 2, 6, 5],
     ['w7', 0, 7, 12, 6],
   ])
+})
+
+test('packByPriority equals the spec/api.md v2 contract vector', () => {
+  const packed = packByPriority([
+    { id: 'kp2', kind: 'kpi', priority: 2 },
+    { id: 'kp1', kind: 'kpi', priority: 1 },
+    { id: 'ch4', kind: 'chart', priority: 4 },
+    { id: 'tb3', kind: 'table', priority: 3 },
+    { id: 'ch5', kind: 'chart', priority: 5 },
+  ])
+  assert.deepEqual(rects(packed), [
+    ['kp1', 0, 0, 3, 2],
+    ['kp2', 3, 0, 3, 2],
+    ['tb3', 0, 2, 12, 6],
+    ['ch4', 0, 8, 6, 5],
+    ['ch5', 6, 8, 6, 5],
+  ])
+  assertValid(packed)
+})
+
+test('packByPriority with absent priorities keeps the v1 vector', () => {
+  assert.deepEqual(rects(packByPriority(vector())), rects(packLayout(vector())))
+})
+
+test('orderedByPriority puts KPIs first, then others merged by priority', () => {
+  const ids = orderedByPriority([
+    { id: 'c1', kind: 'chart', priority: 1 },
+    { id: 'k9', kind: 'kpi', priority: 9 },
+    { id: 't2', kind: 'table', priority: 2 },
+  ]).map(w => w.id)
+  assert.deepEqual(ids, ['k9', 'c1', 't2'])
 })
 
 test('packLayout honours existing w/h and does not hoist kinds', () => {
@@ -163,4 +197,28 @@ test('randomized widget sets never overlap or exceed 12 columns', () => {
       assertValid(widgets)
     }
   }
+})
+
+test('gridWidgets closes the hole left by headline KPIs and keeps stored layouts', () => {
+  const widgets = [
+    { id: 'k1', kind: 'kpi', layout: { x: 0, y: 0, w: 3, h: 2 } },
+    { id: 'k2', kind: 'kpi', layout: { x: 3, y: 0, w: 3, h: 2 } },
+    { id: 'c1', kind: 'chart', layout: { x: 6, y: 0, w: 6, h: 5 } },
+    { id: 'c2', kind: 'chart', layout: { x: 0, y: 2, w: 6, h: 5 } },
+    { id: 't1', kind: 'table', layout: { x: 0, y: 7, w: 12, h: 6 } },
+  ]
+  const got = gridWidgets(widgets, new Set(['k1', 'k2']))
+  assert.deepEqual(
+    got.map(w => [w.id, w.layout.x, w.layout.y]),
+    [['c1', 0, 0], ['c2', 6, 0], ['t1', 0, 5]],
+  )
+  assert.deepEqual(widgets[2].layout, { x: 6, y: 0, w: 6, h: 5 })
+})
+
+test('gridWidgets keeps a KPI beyond the headline row', () => {
+  const widgets = [
+    { id: 'k1', kind: 'kpi', layout: { x: 0, y: 0, w: 3, h: 2 } },
+    { id: 'k5', kind: 'kpi', layout: { x: 3, y: 0, w: 3, h: 2 } },
+  ]
+  assert.deepEqual(gridWidgets(widgets, new Set(['k1'])).map(w => [w.id, w.layout.x]), [['k5', 0]])
 })
