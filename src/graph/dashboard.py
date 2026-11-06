@@ -31,6 +31,7 @@ from domain.dashboard import (
     Widget,
 )
 from graph.dashboard_charts import clamp_chart_type, find_column, is_ordered, rationale_for
+from graph.dashboard_insights import detect_domain, domain_hint
 from graph.dashboard_profile import columns_schema_for, profile_dataframe
 from llm.client import LLMClient
 from observability.events import get_logger
@@ -691,7 +692,7 @@ class DashboardBuild:
     df: pd.DataFrame | None = field(default=None, repr=False)
 
 
-def _build_prompt(command: str, profile_text: str, notes: str) -> str:
+def _build_prompt(command: str, profile_text: str, notes: str, hint: str = "") -> str:
     parts = [
         f"{DASHBOARD_TAG}\n",
         f"## User command\n{command.strip()}\n",
@@ -700,8 +701,10 @@ def _build_prompt(command: str, profile_text: str, notes: str) -> str:
     notes = _notes_text(notes)
     if notes:
         parts.append(f"## Dataset notes\n{notes}\n")
+    if hint:
+        parts.append(f"## Dataset type\n{hint}\n")
     parts.append(
-        "Reply with ONLY a JSON object {\"title\": ..., \"summary\": ..., \"description\": ..., \"widgets\": [...]}. "
+        "Reply with ONLY a JSON object {\"title\": ...,\"summary\": ..., \"description\": ..., \"widgets\": [...]}. "
         "Every widget has a unique priority (1 = most important) and a description; charts also have chart_rationale. "
         "NO layout coordinates. 4-10 widgets; at least one kpi and one chart unless the data cannot support them."
     )
@@ -786,7 +789,7 @@ def build_dashboard(
     reply_used: Any = None
 
     system = _PROMPT_PATH.read_text(encoding="utf-8").strip()
-    prompt = _build_prompt(command, profile["text"], notes)
+    prompt = _build_prompt(command, profile["text"], notes, domain_hint(detect_domain(df)))
     try:
         client = LLMClient()
         gen["model"] = getattr(client, "model", "") or getattr(client, "provider", "") or ""
@@ -926,3 +929,84 @@ def _raw_title(reply: Any, idx: int) -> str:
     except (TypeError, KeyError, IndexError, AttributeError):
         return ""
     return " ".join(title.split())[:80] if isinstance(title, str) else ""
+
+
+_REFINE_SYSTEM_SUFFIX = (
+    "\n\nYou are now EDITING an existing dashboard. Apply the user's request to the current "
+    "dashboard: keep widgets the user did not mention, change/add/remove only what they asked for. "
+    "Return the FULL updated JSON object (all widgets that should remain) and add a field "
+    "\"reply\": ONE short plain-text sentence saying what you changed (no result values). "
+    "If the request cannot be done with the available columns, return the dashboard unchanged "
+    "and say why in \"reply\"."
+)
+
+
+def _refine_prompt(message: str, current: dict[str, Any], profile_text: str, notes: str, hint: str = "") -> str:
+    keep = {
+        "title": current.get("title"),
+        "summary": current.get("summary"),
+        "widgets": [
+            {k: v for k, v in w.items() if k not in ("layout", "description_source")}
+            for w in current.get("widgets", [])
+        ],
+    }
+    parts = [
+        f"{DASHBOARD_TAG}\n",
+        f"## User request (edit the dashboard)\n{message.strip()}\n",
+        f"## Current dashboard (JSON)\n{json.dumps(keep, default=str)[:12000]}\n",
+        f"## Dataset profile (JSON; use ONLY these column names)\n{profile_text}\n",
+    ]
+    notes = _notes_text(notes)
+    if notes:
+        parts.append(f"## Dataset notes\n{notes}\n")
+    if hint:
+        parts.append(f"## Dataset type\n{hint}\n")
+    parts.append(
+        "Reply with ONLY a JSON object {\"title\",\"summary\", \"reply\", \"widgets\": [...]}. "
+        "Every widget has a unique priority (1 = most important). NO layout coordinates."
+    )
+    return "\n".join(parts)
+
+
+def refine_dashboard(
+    message: str,
+    current_spec: dict[str, Any],
+    *,
+    df: pd.DataFrame,
+    notes: str = "",
+) -> tuple[dict[str, Any] | None, str, int, int]:
+    """Edit an existing dashboard from a chat message.
+
+    Returns `(new_spec | None, assistant_reply, tokens_in, tokens_out)`. `None` means
+    the spec is unchanged (LLM failure or an unusable reply) — never raises for LLM issues.
+    """
+    profile = profile_dataframe(df, notes)
+    schema = profile["columns_schema"]
+    system = _PROMPT_PATH.read_text(encoding="utf-8").strip() + _REFINE_SYSTEM_SUFFIX
+    prompt = _refine_prompt(message, current_spec, profile["text"], notes, domain_hint(detect_domain(df)))
+    try:
+        client = LLMClient()
+        text, tin, tout = _call_llm(client, prompt, system)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("dashboard_refine_llm_failed", error=str(exc)[:200])
+        return None, "I couldn't reach the AI just now, so the dashboard is unchanged.", 0, 0
+
+    reply = _extract_json(text)
+    if reply is _NOPARSE or not isinstance(reply, dict):
+        return None, "I couldn't understand how to apply that, so the dashboard is unchanged.", tin, tout
+    clean, errors = validate_spec(_agent_reply(reply), schema, profile=profile)
+    if not clean:
+        return None, "That change didn't fit the data's columns, so the dashboard is unchanged.", tin, tout
+
+    said = _clean_text(reply.get("reply"), 300) or "Updated the dashboard."
+    if errors:
+        said += f" ({len(errors)} suggested widget{'s' if len(errors) != 1 else ''} couldn't be built and {'were' if len(errors) != 1 else 'was'} skipped.)"
+    title = _clean_text(reply.get("title"), 80) or current_spec.get("title") or "Dashboard"
+    spec = {
+        **current_spec,
+        "title": " ".join(str(title).split())[:80],
+        "summary": _clean_text(reply.get("summary"), SUMMARY_MAX) or current_spec.get("summary"),
+        "widgets": assign_layout(normalize_priorities(_unique_ids(clean))),
+    }
+    DashboardSpec.model_validate(spec)
+    return spec, said, tin, tout

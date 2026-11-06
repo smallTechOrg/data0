@@ -681,3 +681,106 @@ def test_stored_v1_dashboard_opens_as_v2_and_is_rewritten_on_write(api_client, d
         stored = s.get(DashboardRow, did).spec_json
     assert stored["version"] == 2
     assert {x["id"]: x["priority"] for x in stored["widgets"]} == {"c": 1, "k": 2}
+
+
+# --- chat: edit an existing dashboard ----------------------------------------
+
+
+def _chat(client, dash_id, message="remove the table"):
+    return client.post(f"/dashboards/{dash_id}/chat", json={"message": message})
+
+
+def test_chat_edits_dashboard_and_persists(api_client, dataset_id, monkeypatch):
+    _fake_llm(monkeypatch, [json.dumps(GOOD)])
+    dash_id = _create(api_client, dataset_id).json()["data"]["dashboard"]["id"]
+
+    edited = {**GOOD, "title": "Sales (no table)", "reply": "Removed the table.",
+              "widgets": [w for w in GOOD["widgets"] if w["kind"] != "table"]}
+    calls = _fake_llm(monkeypatch, [json.dumps(edited)])
+    r = _chat(api_client, dash_id)
+    assert r.status_code == 200, r.text
+    body = r.json()["data"]
+    assert len(calls) == 1 and "Current dashboard" in calls[0]
+    assert body["changed"] is True and body["reply"] == "Removed the table."
+    assert _kinds(body["dashboard"]["spec"]) == ["kpi", "chart"]
+    assert set(body["data"]["widgets"]) == {"w1", "w2"}
+    got = api_client.get(f"/dashboards/{dash_id}").json()["data"]
+    assert got["title"] == "Sales (no table)" and _kinds(got["spec"]) == ["kpi", "chart"]
+
+
+def test_chat_unusable_reply_leaves_dashboard_unchanged(api_client, dataset_id, monkeypatch):
+    _fake_llm(monkeypatch, [json.dumps(GOOD)])
+    dash_id = _create(api_client, dataset_id).json()["data"]["dashboard"]["id"]
+    _fake_llm(monkeypatch, ["not json at all"])
+    r = _chat(api_client, dash_id)
+    assert r.status_code == 200
+    body = r.json()["data"]
+    assert body["changed"] is False and "unchanged" in body["reply"]
+    assert _kinds(body["dashboard"]["spec"]) == ["kpi", "chart", "table"]
+
+
+def test_chat_validation_errors(api_client, dataset_id, monkeypatch):
+    _fake_llm(monkeypatch, [json.dumps(GOOD)])
+    dash_id = _create(api_client, dataset_id).json()["data"]["dashboard"]["id"]
+    assert _chat(api_client, dash_id, "   ").status_code == 400
+    assert _chat(api_client, "nope").status_code == 404
+
+
+# --- dataset type + AI insights ----------------------------------------------
+
+
+def test_detect_domain_variants():
+    from graph.dashboard_insights import detect_domain
+
+    assert detect_domain(_sales_df())["key"] == "sales"
+    hr = pd.DataFrame({"employee_id": [1], "Department": ["A"], "salary": [1.0], "hire_date": ["2020-01-01"]})
+    assert detect_domain(hr)["key"] == "hr"
+    stock = pd.DataFrame({"Date": ["2024-01-01"], "Open": [1.0], "High": [2.0], "Low": [1.0], "Close": [2.0], "Volume": [10]})
+    assert detect_domain(stock)["key"] == "stock_market"
+    assert detect_domain(pd.DataFrame({"foo": [1], "bar": [2]}))["key"] == "general"
+
+
+def test_data_payload_has_domain_overview_and_insights(api_client, dataset_id, monkeypatch):
+    _fake_llm(monkeypatch, [json.dumps(GOOD)])
+    data = _create(api_client, dataset_id).json()["data"]["data"]
+    assert data["domain"]["key"] == "sales" and data["domain"]["label"] == "Sales"
+    assert data["overview"]["rows"] == 300 and data["overview"]["completeness"] == 100.0
+    texts = [i["text"] for i in data["ai_insights"]]
+    assert any("Revenue by region" in t and "%" in t for t in texts), texts
+
+
+# --- domain hint reaches the prompt ------------------------------------------
+
+
+def _hint_sales_df():
+    return pd.DataFrame({
+        "order_id": [1, 2, 3, 4],
+        "product": ["a", "b", "a", "c"],
+        "region": ["N", "S", "N", "E"],
+        "revenue": [10.0, 20.0, 30.0, 40.0],
+        "quantity": [1, 2, 3, 4],
+    })
+
+
+def test_domain_hint_in_build_and_refine_prompts(monkeypatch):
+    import graph.dashboard as dash
+    from graph.dashboard_insights import detect_domain, domain_hint
+
+    df = _hint_sales_df()
+    hint = domain_hint(detect_domain(df))
+    assert hint and "Sales" in hint
+
+    calls = _fake_llm(monkeypatch, [json.dumps(GOOD)])
+    dash.build_dashboard("ds", "show revenue by region", df=df)
+    assert "## Dataset type" in calls[0] and hint in calls[0]
+
+    calls = _fake_llm(monkeypatch, [json.dumps(GOOD)])
+    dash.refine_dashboard("remove the table", GOOD, df=df)
+    assert "## Dataset type" in calls[0] and hint in calls[0]
+
+
+def test_no_dataset_type_section_for_general_data():
+    import graph.dashboard as dash
+
+    assert "## Dataset type" not in dash._build_prompt("x", "{}", "")
+    assert "## Dataset type" not in dash._refine_prompt("x", GOOD, "{}", "")

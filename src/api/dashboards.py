@@ -24,8 +24,15 @@ from db.models import DashboardRow, DatasetRow
 from db.session import get_session
 from graph import nodes as graph_nodes
 from domain.dashboard import upgrade_v1
-from graph.dashboard import assign_layout, build_dashboard, normalize_priorities, validate_layout
+from graph.dashboard import (
+    assign_layout,
+    build_dashboard,
+    normalize_priorities,
+    refine_dashboard,
+    validate_layout,
+)
 from graph.dashboard_data import build_insights, compute_widget_data
+from graph.dashboard_insights import build_ai_insights, detect_domain, overview
 from observability.events import get_logger
 
 router = APIRouter()
@@ -33,6 +40,10 @@ logger = get_logger("api.dashboards")
 
 _MAX_COMMAND = 1000
 _MAX_TITLE = 80
+
+
+class DashboardChat(BaseModel):
+    message: str = ""
 
 
 class DashboardCreate(BaseModel):
@@ -77,7 +88,11 @@ def _get_row(session: Session, dashboard_id: str) -> DashboardRow:
 def _data_payload(row: DashboardRow, df) -> dict[str, Any]:
     spec = upgrade_v1(row.spec_json)
     widgets = compute_widget_data(df, spec)
+    ov = overview(df)
     return {
+        "domain": detect_domain(df),
+        "overview": ov,
+        "ai_insights": build_ai_insights(df, spec, ov),
         "dashboard_id": row.id,
         "dataset_id": row.dataset_id,
         "row_count": int(len(df)),
@@ -251,6 +266,47 @@ def patch_dashboard(
     row.updated_at = datetime.now(timezone.utc)
     _commit(session, "patch")
     return ok(_record(row, _filename(session, row.dataset_id)))
+
+
+@router.post("/dashboards/{dashboard_id}/chat")
+def chat_dashboard(
+    dashboard_id: str,
+    body: DashboardChat,
+    session: Session = Depends(get_session),
+) -> dict:
+    """Edit the dashboard from a plain-English message; unchanged spec if the AI can't."""
+    row = _get_row(session, dashboard_id)
+    message = (body.message or "").strip()
+    if not message:
+        raise api_error("empty_message", "Tell me what to change.", 400)
+    if len(message) > _MAX_COMMAND:
+        raise api_error("message_too_long", f"Message must be at most {_MAX_COMMAND} characters.", 400)
+    ds = session.get(DatasetRow, row.dataset_id)
+    if ds is None:
+        raise api_error("dataset_not_found", f"Dataset {row.dataset_id} not found", 404)
+    try:
+        df = graph_nodes._load_dataframe(row.dataset_id)
+    except Exception as exc:  # noqa: BLE001
+        raise api_error("dashboard_failed", f"Could not read the dataset file: {exc}", 500)
+
+    notes = graph_nodes._facts_as_notes(ds.context_facts or [])
+    new_spec, reply, _tin, _tout = refine_dashboard(
+        message, copy.deepcopy(upgrade_v1(row.spec_json)), df=df, notes=notes
+    )
+    changed = new_spec is not None
+    if changed:
+        row.spec_json = new_spec
+        row.title = str(new_spec.get("title") or row.title)[:_MAX_TITLE]
+        row.updated_at = datetime.now(timezone.utc)
+        _commit(session, "chat")
+    return ok(
+        {
+            "reply": reply,
+            "changed": changed,
+            "dashboard": _record(row, ds.filename),
+            "data": _data_payload(row, df),
+        }
+    )
 
 
 @router.delete("/dashboards/{dashboard_id}")
