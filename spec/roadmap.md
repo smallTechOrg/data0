@@ -442,6 +442,12 @@ Today these users either learn pandas/SQL, wait on an analyst, or fight with spr
   - `slice-16d` (engine + routes) — `src/graph/dashboard_data.py` (`build_insights`), `src/api/dashboards.py` (`PATCH priority_order/rearrange`, `insights` in create/data responses, lazy v1→v2 on read), `tests/unit/test_dashboards_api.py` (extend). **Deps: 16a.**
   - `slice-16e` (frontend lib + types) — `frontend/src/lib/api.ts` (v2 types, `priority_order` patch), `frontend/src/lib/dashboardPriority.ts` (`reorderPriority`, `headlineKpis`) + `dashboardPriority.test.mjs`, `dashboardLayout.ts` (`packLayout` v2 order = priority) + extended `dashboardLayout.test.mjs` (v2 vector). **Deps: none** (codes to `spec/api.md`).
   - `slice-16f` (frontend components) — `frontend/src/components/dashboard/KeyInsights.tsx`, `PriorityPanel.tsx` (NEW), `DashboardCanvas.tsx`, `KpiWidget.tsx`, `ChartWidget.tsx`, `TableWidget.tsx` (description + rationale + rank chip). **Deps: 16e** (types/functions only).
+  - **Phase 16 additions as built (not in the original slice plan; code-derived):**
+    - `slice-16g` (AI insights engine) — NEW `src/graph/dashboard_insights.py` (`detect_domain`, `domain_hint`, `overview`, `build_ai_insights`); `src/api/dashboards.py` (`domain`/`overview`/`ai_insights` in the data payload). **Deps: 16d** (data payload).
+    - `slice-16h` (chat edit) — `src/graph/dashboard.py` (`refine_dashboard`, `_refine_prompt`, Dataset-type prompt section in build + refine), `src/api/dashboards.py` (`POST /dashboards/{id}/chat`), `tests/unit/test_dashboards_api.py` (extend). **Deps: 16c, 16g** (hint).
+    - `slice-16i` (workspace UI) — NEW `frontend/src/components/dashboard/DashboardChat.tsx`, `InsightsPanel.tsx`, `WorkspacePanel.tsx`; `DashboardTab.tsx` (3-column `.dash-layout-chat`, `onChatUpdated`), `DashboardCanvas.tsx` (domain strip), `frontend/src/lib/api.ts` (`chatDashboard`, `DashboardDomain`, `DashboardOverview`, `AiInsight`, `DashboardChatResponse`), `frontend/src/app/globals.css` (`dx-*`). **Deps: 16e, 16h** (contract only).
+    - Spec: `spec/api.md` (chat route, data fields), `spec/agent.md`, `spec/ui.md`, [dashboard-insights-priority.md](capabilities/dashboard-insights-priority.md).
+    > **Assumed:** these are additions to C41 (no new capability number); the real-key gate is unchanged (chat is covered by offline `TestClient` tests with a patched `refine_dashboard`; one real chat call is optional).
 - **Gate command:**
 
   ```bash

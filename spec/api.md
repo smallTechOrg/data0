@@ -423,6 +423,21 @@ New validation codes: `invalid_priority`, `invalid_widget`, `invalid_filter`, `t
 **Phase 16 changes to existing routes**
 - `POST /datasets/{id}/dashboards`: returns spec v2; `data.insights` added. `data` object gains `insights: [{rank, widget_id, title, headline, why}]` (KPI widgets in priority order, ≤6).
 - `PATCH /dashboards/{id}` body additionally accepts `priority_order: [widget_id…]` (every id once) and `rearrange: bool` (default true). Errors: `400 invalid_priority`. Response `ok(dashboard)`; the client refetches `/data` for `insights`.
+- `data` object (returned by `POST /datasets/{id}/dashboards`, `GET /dashboards/{id}/data` and `POST /dashboards/{id}/chat`) additionally carries three deterministic, LLM-free fields, recomputed from the dataset's current file on every call:
+  - `domain`: `{key, label, confidence, matched, focus}` — dataset type guessed from column-name tokens. `key` ∈ `sales | stock_market | hr | finance | ecommerce | general`; `confidence` 0..1 (`min(1, matched_count/5)`, rounded to 2 dp); `matched` = up to 6 matched keywords; `focus` = what such dashboards usually show. `general` (confidence 0, `matched: []`) when fewer than 2 keywords match (or stock columns lack price/ticker evidence).
+  - `overview`: `{rows, columns, missing_cells, completeness (percent, 1 dp), duplicate_rows}`.
+  - `ai_insights`: `[{kind: trend|peak|leader|quality|outlier, tone: positive|negative|neutral|warning, widget_id: string|null, text}]`, ≤8, ordered by chart-widget priority then data-quality items. `text` states only values computed from the data (leader and share, change first→last period, peak/low period, missing-value columns, duplicate rows, extreme-value count); never a cause. A check that fails is skipped, never an error.
+
+#### `POST /dashboards/{id}/chat` (Phase 16 addition, C41)
+Body `{message: string}` (trimmed, 1–1000 chars). Edits the dashboard from a plain-English request: one LLM call (`refine_dashboard`, `spec/agent.md`). Returns `ok({reply, changed, dashboard, data})` — `reply` is one short sentence; `changed` is true only when a valid revised spec was persisted; `dashboard` is the (possibly updated) record; `data` is the freshly computed data object. An unusable/failed LLM reply is still HTTP 200 with `changed:false`, the stored spec untouched (so `updated_at` is unchanged) and `reply` explaining why. A change replaces the widget set (priorities re-normalised, layout re-assigned server-side), updates `title`, bumps `updated_at`.
+
+| Status | Condition |
+|--------|-----------|
+| 404 | `dashboard_not_found` / `dataset_not_found` |
+| 400 | `empty_message` (blank/whitespace) / `message_too_long` (>1000 chars) |
+| 500 | `dashboard_failed` (dataset file unreadable) / `write_failed` (commit failure, rolled back) |
+
+> **Assumed:** `write_failed` applies to chat because the route shares the `_commit` helper (code-derived).
 
 #### Phase 17 (C42 + C43)
 

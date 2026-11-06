@@ -48,6 +48,24 @@ The agent ranks every widget of a dashboard by importance and writes a short "wh
 - [ ] A stored v1 dashboard opens as v2 (priorities by reading order) without error.
 - [ ] UI: "Key insights" row shows numbered KPI cards with the why-line; each widget shows its description (and chart rationale under chart titles); a priority panel reorders ranks.
 
+## Phase 16 additions (as built): AI workspace — domain, data insights, chat edit
+
+Extends C41 beyond the original scope; code is the source (`src/graph/dashboard_insights.py`, `refine_dashboard`, `POST /dashboards/{id}/chat`). Contracts: `spec/api.md` (data fields + chat route), `spec/agent.md` (Phase 16 additions), `spec/ui.md` (three-column layout).
+
+**Business rules**
+- `domain` is detected from column names only (≥2 keyword matches, else `general`); a non-general hint is added to the build and refine prompts as `## Dataset type`; no data values are sent through it.
+- `ai_insights` (≤8) and `overview` are deterministic and LLM-free, computed on the full dataset; text states only computed values, never causes — the no-stated-findings rule above holds.
+- Chat edit costs 1 LLM call, is re-validated like a build, never accepts LLM layout, and on any unusable reply leaves the stored dashboard untouched (`changed:false`, HTTP 200).
+
+**Success Criteria (additions)**
+- [ ] `GET /dashboards/{id}/data` returns `domain`, `overview` and `ai_insights` (≤8); a sales-like column set yields `domain.key=="sales"`, and a set with <2 keyword matches yields `general` with `confidence` 0.
+- [ ] `overview.rows`/`columns`/`missing_cells`/`duplicate_rows` equal the pandas values for the dataset; `completeness` = 100·(1 − missing/cells) to 1 dp.
+- [ ] Every `ai_insights` text number can be reproduced from the dataframe (e.g. leader share and first→last % change); no insight contains a causal claim; a fixture with >5% missing in a column yields a `quality`/`warning` insight naming it.
+- [ ] `POST /dashboards/{id}/chat` with a valid message returns `{reply, changed, dashboard, data}`; with `refine_dashboard` returning a spec, `changed:true`, the row's spec/title/`updated_at` are updated and layout is server-assigned.
+- [ ] Chat with an unusable LLM reply (unparseable / zero valid widgets / LLM error) returns HTTP 200 `changed:false` and the stored spec is byte-identical.
+- [ ] Chat errors: blank message → 400 `empty_message`; 1001 chars → 400 `message_too_long`; unknown dashboard → 404 `dashboard_not_found`; missing dataset → 404 `dataset_not_found`; unreadable file → 500 `dashboard_failed`.
+- [ ] UI: AI workspace shows AI Insights and Chat & edit tabs; a changed chat reply updates the canvas without reload and shows "Dashboard updated"; the domain badge and record/column/completeness pills render in the canvas header.
+
 ## Assumed decisions (consolidated for C41–C47)
 > **Assumed:** (1) **Chart rationale is a separate `chart_rationale` field** (displayed directly under the widget description, same text block) rather than folded into `description`, so the insight text stays about the data and the chart justification can be regenerated deterministically after a rebind without an LLM call.
 > **Assumed:** (2) **Priority is global**; the headline-row numbers 1..N are display positions of the KPIs, not the global priority.
