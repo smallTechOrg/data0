@@ -13,7 +13,6 @@ import {
 } from '@/lib/dashboardLayout'
 import { headlineKpis } from '@/lib/dashboardPriority'
 import { ChartWidget } from './ChartWidget'
-import { FieldsPanelStub } from './FieldsPanelStub'
 import { KeyInsights } from './KeyInsights'
 import { KpiWidget } from './KpiWidget'
 import { PriorityPanel } from './PriorityPanel'
@@ -39,6 +38,7 @@ export function DashboardCanvas({
   onRetrySave,
   onRename,
   onSavePriority,
+  onSave,
 }: {
   record: DashboardRecord
   data: DashboardData | null
@@ -49,6 +49,7 @@ export function DashboardCanvas({
   onRetrySave: () => void
   onRename: (title: string) => Promise<void>
   onSavePriority: (order: string[], rearrange: boolean) => Promise<void>
+  onSave: () => void
 }) {
   const widgets = record.spec.widgets
   const [dragId, setDragId] = useState<string | null>(null)
@@ -101,7 +102,7 @@ export function DashboardCanvas({
         ? { text: 'Couldn’t save — retry', cls: 'border-red-200 bg-red-50 text-red-700' }
         : saveState === 'saved'
           ? { text: 'Layout saved ✓', cls: 'border-green-200 bg-green-50 text-green-700' }
-          : null
+          : { text: 'Saved ✓', cls: 'border-green-200 bg-green-50 text-green-700' }
 
   return (
     <div>
@@ -138,29 +139,8 @@ export function DashboardCanvas({
               </h2>
             )}
             {record.spec.summary && <p className="mt-1 px-1 text-sm opacity-80">{record.spec.summary}</p>}
-            {data?.domain && (
-              <div className="mt-2 flex flex-wrap items-center gap-2 px-1">
-                <span
-                  className="dx-badge"
-                  title={
-                    data.domain.key === 'general'
-                      ? 'No specific dataset type recognised, so this is a general dashboard'
-                      : `Detected from columns: ${data.domain.matched.join(', ')}`
-                  }
-                >
-                  ◈ {data.domain.label} dataset
-                </span>
-                {data.overview && (
-                  <>
-                    <span className="dx-pill">{data.overview.rows.toLocaleString()} records</span>
-                    <span className="dx-pill">{data.overview.columns} columns</span>
-                    <span className="dx-pill">{data.overview.completeness}% complete</span>
-                  </>
-                )}
-              </div>
-            )}
             <p className="mt-1 truncate px-1 text-xs opacity-50" title={record.command}>
-              “{record.command}” · {record.dataset_filename}
+              Source: {record.dataset_filename}
             </p>
             {renameError && (
               <p role="alert" className="px-1 text-xs text-red-700">
@@ -184,6 +164,14 @@ export function DashboardCanvas({
                 )}
               </span>
             )}
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={saveState === 'saving'}
+              className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+            >
+              {saveState === 'saving' ? 'Saving…' : 'Save dashboard'}
+            </button>
             <PriorityPanel widgets={widgets} onSave={onSavePriority} />
           </div>
         </div>
@@ -321,9 +309,6 @@ export function DashboardCanvas({
         })}
       </div>
 
-      <div className="mt-3">
-        <FieldsPanelStub datasetId={record.dataset_id} />
-      </div>
     </div>
   )
 }

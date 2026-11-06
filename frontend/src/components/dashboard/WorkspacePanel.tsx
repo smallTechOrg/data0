@@ -25,7 +25,6 @@ export function WorkspacePanel({
         </span>
         <div>
           <h3 className="text-sm font-semibold">AI workspace</h3>
-          <p className="text-[11px] opacity-60">Insights from your data, and edit by chat.</p>
         </div>
       </div>
       <div role="tablist" className="dx-tabs">

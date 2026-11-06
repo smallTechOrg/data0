@@ -272,6 +272,7 @@ export function DashboardTab() {
             onRetrySave={onRetrySave}
             onRename={onRename}
             onSavePriority={onSavePriority}
+            onSave={() => void persist(record.id, record.spec.widgets)}
           />
         ) : building || opening ? (
           <div
