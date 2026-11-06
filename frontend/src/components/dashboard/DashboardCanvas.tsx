@@ -22,8 +22,6 @@ import { WidgetDescription } from './WidgetDescription'
 
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
-const STUB_TIP = 'Coming in a later phase'
-
 /**
  * Canvas: header (title / summary / command / save pill / badges / stubs), the
  * "Key insights" row (top KPIs by priority), and the 12-column widget grid with
@@ -107,7 +105,7 @@ export function DashboardCanvas({
 
   return (
     <div>
-      <header className="mb-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+      <header className="dx-header">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             {editing ? (
@@ -125,7 +123,7 @@ export function DashboardCanvas({
                 className="w-full rounded-md border border-indigo-400 px-2 py-1 text-lg font-semibold text-gray-900"
               />
             ) : (
-              <h2 className="text-lg font-semibold text-gray-900">
+              <h2 className="text-2xl font-bold tracking-tight">
                 <button
                   type="button"
                   title="Click to rename"
@@ -133,14 +131,35 @@ export function DashboardCanvas({
                     setDraft(record.title)
                     setEditing(true)
                   }}
-                  className="rounded px-1 text-left hover:bg-gray-100"
+                  className="rounded px-1 text-left hover:bg-black/5"
                 >
                   {record.title}
                 </button>
               </h2>
             )}
-            {record.spec.summary && <p className="mt-0.5 px-1 text-sm text-gray-700">{record.spec.summary}</p>}
-            <p className="mt-0.5 truncate px-1 text-xs text-gray-500" title={record.command}>
+            {record.spec.summary && <p className="mt-1 px-1 text-sm opacity-80">{record.spec.summary}</p>}
+            {data?.domain && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 px-1">
+                <span
+                  className="dx-badge"
+                  title={
+                    data.domain.key === 'general'
+                      ? 'No specific dataset type recognised, so this is a general dashboard'
+                      : `Detected from columns: ${data.domain.matched.join(', ')}`
+                  }
+                >
+                  ◈ {data.domain.label} dataset
+                </span>
+                {data.overview && (
+                  <>
+                    <span className="dx-pill">{data.overview.rows.toLocaleString()} records</span>
+                    <span className="dx-pill">{data.overview.columns} columns</span>
+                    <span className="dx-pill">{data.overview.completeness}% complete</span>
+                  </>
+                )}
+              </div>
+            )}
+            <p className="mt-1 truncate px-1 text-xs opacity-50" title={record.command}>
               “{record.command}” · {record.dataset_filename}
             </p>
             {renameError && (
@@ -166,18 +185,6 @@ export function DashboardCanvas({
               </span>
             )}
             <PriorityPanel widgets={widgets} onSave={onSavePriority} />
-            {(['+ Add widget', 'Regenerate', 'Filters', 'Templates', 'Connect API/DB', 'Export'] as const).map(label => (
-              <button
-                key={label}
-                type="button"
-                disabled
-                title={STUB_TIP}
-                aria-label={`${label} — ${STUB_TIP.toLowerCase()}`}
-                className="cursor-not-allowed rounded-md border border-dashed border-gray-300 px-2.5 py-1 text-xs text-gray-400"
-              >
-                {label}
-              </button>
-            ))}
           </div>
         </div>
 
@@ -245,11 +252,11 @@ export function DashboardCanvas({
                 const moved = widgets.find(x => x.id === from)
                 if (moved) announceMove(next, moved)
               }}
-              className={`dash-widget group flex min-h-0 flex-col overflow-hidden rounded-lg border bg-white shadow-sm ${
-                dropTarget ? 'border-indigo-500 outline outline-2 outline-indigo-400' : 'border-gray-200'
+              className={`dash-widget dx-card group flex min-h-0 flex-col overflow-hidden ${
+                dropTarget ? 'dx-drop' : ''
               } ${dragId === w.id ? 'opacity-50' : ''}`}
             >
-              <div className="flex items-center gap-2 border-b border-gray-100 px-2 py-1.5">
+              <div className="dx-card-head">
                 <span
                   role="button"
                   tabIndex={0}
@@ -268,20 +275,20 @@ export function DashboardCanvas({
                     setOverId(null)
                   }}
                   onKeyDown={e => keyMove(e, w)}
-                  className="cursor-grab select-none rounded px-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 active:cursor-grabbing"
+                  className="dx-tool cursor-grab select-none rounded px-1 active:cursor-grabbing"
                 >
                   ⠿
                 </span>
-                <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-gray-800" title={w.title}>
+                <h3 className="min-w-0 flex-1 truncate text-sm font-semibold" title={w.title}>
                   {w.title}
                 </h3>
                 <span
                   title="Priority rank (1 = most important)"
-                  className="shrink-0 text-[11px] font-semibold tabular-nums text-gray-400 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
+                  className="dx-tool shrink-0 text-[11px] font-semibold tabular-nums"
                 >
                   #{w.priority}
                 </span>
-                <div role="group" aria-label={`Width of ${w.title}`} className="flex overflow-hidden rounded border border-gray-200">
+                <div role="group" aria-label={`Width of ${w.title}`} className="dx-tool flex overflow-hidden rounded border border-gray-200/40">
                   {(Object.keys(WIDTH_PRESETS) as (keyof typeof WIDTH_PRESETS)[]).map(k => {
                     const active = l.w === WIDTH_PRESETS[k]
                     return (
@@ -302,18 +309,9 @@ export function DashboardCanvas({
                     )
                   })}
                 </div>
-                <button
-                  type="button"
-                  disabled
-                  title={STUB_TIP}
-                  aria-label={`Edit widget — ${STUB_TIP.toLowerCase()}`}
-                  className="cursor-not-allowed rounded px-1 text-gray-300"
-                >
-                  ⋯
-                </button>
               </div>
               <WidgetDescription widget={w} />
-              <div className="min-h-0 flex-1 overflow-auto p-2">
+              <div className="min-h-0 flex-1 overflow-auto p-3">
                 {w.kind === 'kpi' && <KpiWidget def={w} data={wd} />}
                 {w.kind === 'chart' && <ChartWidget def={w} data={wd} index={i} />}
                 {w.kind === 'table' && <TableWidget data={wd} />}

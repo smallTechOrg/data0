@@ -5,6 +5,7 @@ import {
   api,
   ApiError,
   priorityPatch,
+  type DashboardChatResponse,
   type DashboardCreateResponse,
   type DashboardData,
   type DashboardRecord,
@@ -14,6 +15,7 @@ import {
 import { toLayoutPayload } from '@/lib/dashboardLayout'
 import { CreateDashboardCard } from './CreateDashboardCard'
 import { DashboardCanvas, type SaveState } from './DashboardCanvas'
+import { WorkspacePanel } from './WorkspacePanel'
 import { SavedDashboards } from './SavedDashboards'
 
 const LAST_OPEN_KEY = 'dashboard:lastOpenId'
@@ -135,6 +137,18 @@ export function DashboardTab() {
     [refreshList],
   )
 
+  const onChatUpdated = useCallback(
+    (res: DashboardChatResponse) => {
+      setRecord(res.dashboard)
+      setData(res.data)
+      setDataError(null)
+      setSaveState('idle')
+      savedWidgets.current = res.dashboard.spec.widgets
+      void refreshList()
+    },
+    [refreshList],
+  )
+
   const persist = useCallback(
     async (id: string, widgets: DashboardWidget[]) => {
       const seq = ++saveSeq.current
@@ -228,7 +242,7 @@ export function DashboardTab() {
   )
 
   return (
-    <div className="dash-layout">
+    <div className={`dash-layout${record ? ' dash-layout-chat' : ''}`}>
       <div className="space-y-4">
         <CreateDashboardCard onBuilt={onBuilt} onBuildingChange={setBuilding} />
         <SavedDashboards
@@ -272,6 +286,8 @@ export function DashboardTab() {
           </div>
         )}
       </div>
+
+      {record && <WorkspacePanel dashboardId={record.id} data={data} onUpdated={onChatUpdated} />}
     </div>
   )
 }

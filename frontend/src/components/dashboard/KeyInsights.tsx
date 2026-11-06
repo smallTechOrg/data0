@@ -11,8 +11,7 @@ import { AutoTag } from './WidgetDescription'
 export function KeyInsights({ kpis, data }: { kpis: KpiWidgetDef[]; data: DashboardData | null }) {
   if (kpis.length === 0) return null
   return (
-    <section aria-label="Key insights" className="mb-3">
-      <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">Key insights</h3>
+    <section aria-label="Key insights" className="mb-4">
       <ol className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {kpis.map((kpi, i) => {
           const wd = data?.widgets[kpi.id]
@@ -20,30 +19,23 @@ export function KeyInsights({ kpis, data }: { kpis: KpiWidgetDef[]; data: Dashbo
             <li
               key={kpi.id}
               data-widget-id={kpi.id}
-              className={`flex min-w-0 flex-col rounded-lg border p-3 shadow-sm ${
-                i === 0 ? 'border-indigo-300 bg-indigo-100' : 'border-gray-200 bg-white'
-              }`}
+              className={`dx-card dx-kpi flex min-w-0 flex-col p-4 ${i === 0 ? 'dx-kpi-hero' : ''}`}
             >
               <div className="flex items-center gap-2">
-                <span
-                  aria-label={`Rank ${i + 1}`}
-                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
-                    i === 0 ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'
-                  }`}
-                >
+                <span aria-label={`Rank ${i + 1}`} className="dx-kpi-rank">
                   {i + 1}
                 </span>
-                <h4 className="min-w-0 truncate text-xs font-medium text-gray-700" title={kpi.title}>
+                <h4 className="min-w-0 truncate text-xs font-medium opacity-70" title={kpi.title}>
                   {kpi.title}
                 </h4>
               </div>
-              <div className="mt-1.5 min-h-[2.25rem]">
+              <div className="mt-3 min-h-[2.5rem]">
                 {!wd ? (
                   <div className="h-8 animate-pulse rounded bg-gray-100" aria-label="Loading" />
                 ) : wd.status === 'error' ? (
                   <WidgetError message={wd.message} />
                 ) : wd.kind === 'kpi' ? (
-                  <div className="truncate text-2xl font-bold tracking-tight text-gray-900" title={wd.formatted}>
+                  <div className="truncate text-3xl font-bold tracking-tight" title={wd.formatted}>
                     {wd.value === null || wd.value === undefined ? '—' : wd.formatted || '—'}
                   </div>
                 ) : (
@@ -51,7 +43,7 @@ export function KeyInsights({ kpis, data }: { kpis: KpiWidgetDef[]; data: Dashbo
                 )}
               </div>
               {kpi.description && (
-                <p className="mt-1 text-xs leading-snug text-gray-500">
+                <p className="mt-2 text-xs leading-snug opacity-55">
                   {kpi.description}
                   {kpi.description_source === 'auto' && <AutoTag />}
                 </p>

@@ -703,7 +703,35 @@ export interface DashboardInsight {
   why: string
 }
 
+export interface DashboardDomain {
+  key: string
+  label: string
+  confidence: number
+  matched: string[]
+  focus: string
+}
+
+export interface DashboardOverview {
+  rows: number
+  columns: number
+  missing_cells: number
+  completeness: number
+  duplicate_rows: number
+}
+
+export interface AiInsight {
+  kind: 'trend' | 'peak' | 'leader' | 'quality' | 'outlier'
+  tone: 'positive' | 'negative' | 'neutral' | 'warning'
+  widget_id: string | null
+  text: string
+}
+
 export interface DashboardData {
+  /** Dataset type guessed from the columns (sales, hr, finance, stock market, ...). */
+  domain?: DashboardDomain
+  overview?: DashboardOverview
+  /** Fact-only findings computed from the data. */
+  ai_insights?: AiInsight[]
   dashboard_id: string
   /** KPI widgets in priority order, <=6 (C41). */
   insights?: DashboardInsight[]
@@ -714,6 +742,13 @@ export interface DashboardData {
 }
 
 export interface DashboardCreateResponse {
+  dashboard: DashboardRecord
+  data: DashboardData
+}
+
+export interface DashboardChatResponse {
+  reply: string
+  changed: boolean
   dashboard: DashboardRecord
   data: DashboardData
 }
@@ -976,6 +1011,10 @@ export const api = {
   /** POST /datasets/{id}/dashboards — synchronous build (5–20 s); returns record + widget data. */
   createDashboard: (datasetId: string, body: { command: string; title?: string }) =>
     postJson<DashboardCreateResponse>(`/datasets/${encodeURIComponent(datasetId)}/dashboards`, body),
+
+  /** POST /dashboards/{id}/chat — edit the dashboard from a plain-English message. */
+  chatDashboard: (id: string, message: string) =>
+    postJson<DashboardChatResponse>(`/dashboards/${encodeURIComponent(id)}/chat`, { message }),
 
   /** GET /dashboards[?dataset_id] — summaries, most recently updated first. */
   listDashboards: (datasetId?: string) =>
