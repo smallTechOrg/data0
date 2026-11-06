@@ -170,13 +170,13 @@ def test_assign_layout_v2_contract_vector():
 # --- fallback ----------------------------------------------------------------
 
 
-def test_fallback_ranks_measure_kpis_then_charts_then_table_then_rows():
+def test_fallback_ranks_measure_kpis_then_charts_then_table_without_row_count():
     spec = fallback_spec(profile_dataframe(_df()), "x")
     assert spec["version"] == 2 and spec["summary"]
     by_rank = sorted(spec["widgets"], key=lambda w: w["priority"])
     assert _ranks(by_rank) == list(range(1, len(by_rank) + 1))
-    assert by_rank[-1]["title"] == "Rows"
-    kinds = [w["kind"] for w in by_rank[:-1]]
+    assert not any(w["kind"] == "kpi" and w["kpi"]["field"] is None for w in by_rank)
+    kinds = [w["kind"] for w in by_rank]
     assert kinds == sorted(kinds, key=["kpi", "chart", "table"].index)
     assert all(w["description"] for w in spec["widgets"])
 

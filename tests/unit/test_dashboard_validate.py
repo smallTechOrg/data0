@@ -295,16 +295,16 @@ def test_fallback_spec_has_kpi_chart_table_and_valid_fields():
     assert kinds.count("kpi") >= 2 and "chart" in kinds and "table" in kinds
     clean, errors = validate_spec(spec, profile["columns_schema"])
     assert errors == [] and len(clean) == len(spec["widgets"])
-    # first KPI is the row count; the id column is never summed
-    assert spec["widgets"][0]["kpi"]["field"] is None
+    # no plain row-count KPI; the id column is never summed
+    assert all(w["kpi"]["field"] is not None for w in spec["widgets"] if w["kind"] == "kpi")
     summed = [
         w["kpi"]["field"] for w in spec["widgets"] if w["kind"] == "kpi" and w["kpi"]["field"]
     ]
     assert "order_id" not in summed and "revenue" in summed
 
 
-def test_fallback_spec_degenerate_dataset_still_has_kpi_and_table():
+def test_fallback_spec_degenerate_dataset_still_has_a_table():
     df = pd.DataFrame({"notes": [f"free text number {i} " * 6 for i in range(50)]})
     spec = fallback_spec(profile_dataframe(df), "x")
     kinds = [w["kind"] for w in spec["widgets"]]
-    assert "kpi" in kinds and "table" in kinds
+    assert "table" in kinds and "kpi" not in kinds  # no measure -> no meaningless KPI

@@ -581,18 +581,24 @@ def assign_layout(widgets: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 
 
+def _drop_unrequested_row_count(widgets: list[dict[str, Any]], command: str) -> list[dict[str, Any]]:
+    """Drop plain row-count KPIs ("Total records") unless the user asked for a count."""
+    if re.search(r"(count|rows?|records?|how many|number of)", command or "", re.I):
+        return widgets
+    kept = [
+        w for w in widgets
+        if not (w.get("kind") == "kpi" and w["kpi"].get("field") is None and w["kpi"].get("agg") == "count")
+    ]
+    return kept or widgets
+
+
 def fallback_spec(profile: dict[str, Any], command: str = "") -> dict[str, Any]:
     """Deterministic dashboard from the profile alone (no LLM). Layout unassigned."""
     cols = profile["columns"]
     measures = [c["name"] for c in cols if c["role"] == "measure"]
     dims = [c["name"] for c in cols if c["role"] == "dimension"]
     times = [c["name"] for c in cols if c["role"] == "time"]
-    widgets: list[dict[str, Any]] = [
-        {
-            "id": "k1", "kind": "kpi", "title": "Rows",
-            "kpi": {"field": None, "agg": "count", "format": "integer"},
-        }
-    ]
+    widgets: list[dict[str, Any]] = []
     for i, m in enumerate(measures[:3]):
         widgets.append(
             {
@@ -632,8 +638,8 @@ def fallback_spec(profile: dict[str, Any], command: str = "") -> dict[str, Any]:
             "table": {"columns": names, "limit": 10},
         }
     )
-    # Ranking: measure KPIs -> charts -> table -> the Rows KPI.
-    ranked = sorted(widgets, key=lambda w: (w["id"] == "k1", _KIND_ORDER[w["kind"]]))
+    # Ranking: measure KPIs -> charts -> table. No plain row-count KPI: it is noise.
+    ranked = sorted(widgets, key=lambda w: _KIND_ORDER[w["kind"]])
     for rank, w in enumerate(ranked, start=1):
         w["priority"] = rank
     clean, _errors = validate_spec({"widgets": widgets}, profile["columns_schema"], profile=profile)
@@ -853,7 +859,7 @@ def build_dashboard(
         agent_title = agent_desc = agent_summary = None
     else:
         gen["notes"].extend(clamp_notes)
-        widgets = list(clean)
+        widgets = _drop_unrequested_row_count(list(clean), command)
         for kind in ("kpi", "chart"):
             if not any(w["kind"] == kind for w in widgets):
                 extra = next((w for w in fallback["widgets"] if w["kind"] == kind), None)

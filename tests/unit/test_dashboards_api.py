@@ -592,7 +592,7 @@ def test_fallback_dashboard_is_v2_with_auto_text(api_client, dataset_id):
     assert sorted(w["priority"] for w in spec["widgets"]) == list(range(1, len(spec["widgets"]) + 1))
     assert all(w["description_source"] == "auto" for w in spec["widgets"])
     assert all(w["chart_rationale"] for w in spec["widgets"] if w["kind"] == "chart")
-    assert body["data"]["insights"][-1]["title"] == "Rows"
+    assert all(i["title"] != "Rows" for i in body["data"]["insights"])
 
 
 def test_patch_priority_order_repacks_in_reading_order(api_client, dataset_id, monkeypatch):

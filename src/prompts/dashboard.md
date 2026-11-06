@@ -13,7 +13,7 @@ Per-widget ranking and explanation fields
 - `chart_rationale` (charts only): ONE plain-text sentence (max 140 chars) saying why this chart type fits THIS data, citing the column role or cardinality, e.g. "order_date is a time column, so a line shows the trend." Omit it for kpi and table widgets.
 
 How to rank (decide priority by decision value to the user's command)
-1. The headline KPIs that directly answer the request come first (priority 1, 2, 3...). Measure KPIs (totals, averages) outrank a plain row count; a "Rows" count KPI goes last among KPIs.
+1. The headline KPIs that directly answer the request come first (priority 1, 2, 3...). Measure KPIs (totals, averages) only. Do NOT add a plain row-count KPI ("Total records", "Rows") unless the user asks for a count.
 2. Next, the chart that best answers the request (the main trend, comparison or breakdown), then supporting charts, ordered by how much they help a decision.
 3. Detail tables come last (a table the user explicitly asked for, such as "top 10 ...", may rank above weak supporting charts).
 4. KPIs, charts and tables share ONE global ranking; the server lays widgets out in reading order from it.
