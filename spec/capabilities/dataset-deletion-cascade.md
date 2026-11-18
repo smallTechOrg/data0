@@ -23,8 +23,10 @@ Deletes a dataset and cascades to its sessions, runs, on-disk files, and recursi
 - Cascade: sessions, runs, files, AND recursively any derived dataset whose `derived_from_dataset_ids` include the deleted id (transitively).
 - `DELETE /datasets` deletes all with the same cascade.
 - 409 `dataset_in_use` when the rules forbid deletion.
+- **C40 extension (Phase 15):** the cascade also deletes every `dashboards` row whose `dataset_id` is the deleted id (for derived children too). Deleting a dashboard alone never touches the dataset.
 
 ## Success Criteria
 - [ ] Deleting a dataset removes its runs, its sessions, and its CSV+Parquet files.
 - [ ] Deleting a parent dataset also deletes its derived children (recursively).
 - [ ] Deleting a missing id returns 404.
+- [ ] Deleting a dataset also deletes its dashboards (C40).

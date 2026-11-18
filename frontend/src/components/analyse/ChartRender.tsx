@@ -96,7 +96,16 @@ function parseOptions(charts?: string[]): EChartsOption[] {
 }
 
 /** A single chart drawn into a responsive div via ECharts' imperative API. */
-function EChart({ option, index }: { option: EChartsOption; index: number }) {
+export function EChart({
+  option,
+  index,
+  fill = false,
+}: {
+  option: EChartsOption
+  index: number
+  /** Fill a fixed-height parent (dashboard cards) instead of using the default height. */
+  fill?: boolean
+}) {
   const ref = useRef<HTMLDivElement>(null)
   // Captured once the chart is initialised, so the toolbar can export it.
   const chartRef = useRef<echarts.ECharts | null>(null)
@@ -169,7 +178,7 @@ function EChart({ option, index }: { option: EChartsOption; index: number }) {
     'rounded border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700'
 
   return (
-    <div>
+    <div className={fill ? 'flex h-full min-h-0 flex-col' : undefined}>
       <div className="mb-1 flex justify-end gap-1.5">
         <button type="button" onClick={() => void copyPng()} className={btn}>
           {copied ? 'Copied' : 'Copy'}
@@ -185,7 +194,7 @@ function EChart({ option, index }: { option: EChartsOption; index: number }) {
         ref={ref}
         role="img"
         aria-label={`Chart ${index + 1}`}
-        className="min-h-[18rem] w-full overflow-hidden rounded-md border border-gray-200 bg-white"
+        className={`${fill ? 'min-h-0 flex-1' : 'min-h-[18rem]'} w-full overflow-hidden rounded-md border border-gray-200 bg-white`}
       />
     </div>
   )

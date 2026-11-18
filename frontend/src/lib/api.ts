@@ -556,6 +556,218 @@ export interface StarterSuggestionsResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Agent-built dashboards (C40, Phase 15) — mirrors spec/api.md "Dashboard spec v1"
+// ---------------------------------------------------------------------------
+
+export interface WidgetLayout {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export type DashboardAgg = 'sum' | 'mean' | 'median' | 'min' | 'max' | 'count' | 'nunique'
+
+export interface DashboardFilter {
+  field: string
+  op: 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'not_null'
+  value?: unknown
+}
+
+export type DescriptionSource = 'agent' | 'auto' | 'user'
+
+interface WidgetBase {
+  id: string
+  title: string
+  layout: WidgetLayout
+  filters?: DashboardFilter[]
+  /** Global rank, dense unique 1..N (1 = most important). v2 (C41). */
+  priority: number
+  /** One-line "why it matters" (<=200 chars). v2 (C41). */
+  description?: string | null
+  description_source?: DescriptionSource
+}
+
+export interface KpiWidgetDef extends WidgetBase {
+  kind: 'kpi'
+  kpi: {
+    field: string | null
+    agg: DashboardAgg
+    format?: 'number' | 'integer' | 'currency' | 'percent'
+    prefix?: string
+    suffix?: string
+  }
+}
+
+export interface ChartWidgetDef extends WidgetBase {
+  kind: 'chart'
+  /** Why this chart type fits this data (<=140 chars). v2 (C41). */
+  chart_rationale?: string | null
+  chart: {
+    type: 'bar' | 'line' | 'area' | 'pie' | 'scatter' | 'histogram'
+    x: string
+    y?: { field: string | null; agg: DashboardAgg | 'none' } | null
+    series_by?: string | null
+    time_grain?: 'day' | 'week' | 'month' | 'quarter' | 'year' | null
+    sort?: 'x_asc' | 'x_desc' | 'y_asc' | 'y_desc' | null
+    limit?: number | null
+    bins?: number | null
+  }
+}
+
+export interface TableWidgetDef extends WidgetBase {
+  kind: 'table'
+  table: {
+    columns?: string[]
+    group_by?: string[]
+    aggs?: { field: string | null; agg: DashboardAgg; alias?: string }[]
+    sort_by?: string | null
+    sort_dir?: 'asc' | 'desc' | null
+    limit?: number | null
+  }
+}
+
+/** Discriminated union on `kind`. */
+export type DashboardWidget = KpiWidgetDef | ChartWidgetDef | TableWidgetDef
+
+export interface DashboardSpec {
+  version: 1 | 2
+  title: string
+  description?: string | null
+  /** One-line dashboard summary (v2, C41); null for lazily-upgraded v1 specs. */
+  summary?: string | null
+  widgets: DashboardWidget[]
+}
+
+export interface DashboardGeneration {
+  used_fallback: boolean
+  repaired: boolean
+  supplemented: string[]
+  dropped_widgets: { title: string; reason: string }[]
+  notes: string[]
+  model?: string | null
+  tokens_input?: number
+  tokens_output?: number
+  duration_ms?: number
+}
+
+export interface DashboardRecord {
+  id: string
+  dataset_id: string
+  dataset_filename: string
+  title: string
+  command: string
+  spec: DashboardSpec
+  generation: DashboardGeneration
+  created_at: string
+  updated_at: string
+}
+
+export interface DashboardSummary {
+  id: string
+  dataset_id: string
+  dataset_filename: string
+  title: string
+  command: string
+  widget_count: number
+  used_fallback: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type WidgetData =
+  | {
+      kind: 'kpi'
+      status: 'ok'
+      label: string
+      value: number | null
+      formatted: string
+      format?: string
+      caption?: string
+    }
+  | { kind: 'chart'; status: 'ok'; option: Record<string, unknown> }
+  | {
+      kind: 'table'
+      status: 'ok'
+      columns: string[]
+      rows: unknown[][]
+      truncated: boolean
+    }
+  | { kind: 'kpi' | 'chart' | 'table'; status: 'error'; message: string }
+
+export interface DashboardInsight {
+  rank: number
+  widget_id: string
+  title: string
+  headline: string
+  why: string
+}
+
+export interface DashboardDomain {
+  key: string
+  label: string
+  confidence: number
+  matched: string[]
+  focus: string
+}
+
+export interface DashboardOverview {
+  rows: number
+  columns: number
+  missing_cells: number
+  completeness: number
+  duplicate_rows: number
+}
+
+export interface AiInsight {
+  kind: 'trend' | 'peak' | 'leader' | 'quality' | 'outlier'
+  tone: 'positive' | 'negative' | 'neutral' | 'warning'
+  widget_id: string | null
+  text: string
+}
+
+export interface DashboardData {
+  /** Dataset type guessed from the columns (sales, hr, finance, stock market, ...). */
+  domain?: DashboardDomain
+  overview?: DashboardOverview
+  /** Fact-only findings computed from the data. */
+  ai_insights?: AiInsight[]
+  dashboard_id: string
+  /** KPI widgets in priority order, <=6 (C41). */
+  insights?: DashboardInsight[]
+  dataset_id: string
+  row_count: number
+  computed_at: string
+  widgets: Record<string, WidgetData>
+}
+
+export interface DashboardCreateResponse {
+  dashboard: DashboardRecord
+  data: DashboardData
+}
+
+export interface DashboardChatResponse {
+  reply: string
+  changed: boolean
+  dashboard: DashboardRecord
+  data: DashboardData
+}
+
+export interface DashboardPatch {
+  title?: string
+  layout?: { id: string; x: number; y: number; w: number; h: number }[]
+  /** Every widget id exactly once, most important first (400 `invalid_priority` otherwise). */
+  priority_order?: string[]
+  /** Default true: re-pack layout in priority reading order. false changes ranks only. */
+  rearrange?: boolean
+}
+
+/** Build a PATCH body that reorders priority (C41). */
+export function priorityPatch(order: readonly string[], rearrange = true): DashboardPatch {
+  return { priority_order: [...order], rearrange }
+}
+
+// ---------------------------------------------------------------------------
 // Endpoint wrappers (Phase 2 surface)
 // ---------------------------------------------------------------------------
 
@@ -793,4 +1005,33 @@ export const api = {
      */
     starters: () => getJson<StarterSuggestionsResponse>('/suggestions/starters'),
   },
+
+  // --- Agent-built dashboards (C40, Phase 15) --------------------------------
+
+  /** POST /datasets/{id}/dashboards — synchronous build (5–20 s); returns record + widget data. */
+  createDashboard: (datasetId: string, body: { command: string; title?: string }) =>
+    postJson<DashboardCreateResponse>(`/datasets/${encodeURIComponent(datasetId)}/dashboards`, body),
+
+  /** POST /dashboards/{id}/chat — edit the dashboard from a plain-English message. */
+  chatDashboard: (id: string, message: string) =>
+    postJson<DashboardChatResponse>(`/dashboards/${encodeURIComponent(id)}/chat`, { message }),
+
+  /** GET /dashboards[?dataset_id] — summaries, most recently updated first. */
+  listDashboards: (datasetId?: string) =>
+    getJson<DashboardSummary[]>(
+      datasetId ? `/dashboards?dataset_id=${encodeURIComponent(datasetId)}` : '/dashboards',
+    ),
+
+  getDashboard: (id: string) => getJson<DashboardRecord>(`/dashboards/${encodeURIComponent(id)}`),
+
+  /** GET /dashboards/{id}/data — widgets recomputed from the dataset's current file. */
+  getDashboardData: (id: string) =>
+    getJson<DashboardData>(`/dashboards/${encodeURIComponent(id)}/data`),
+
+  /** PATCH /dashboards/{id} — title and/or full layout (400 `invalid_layout` leaves it unchanged). */
+  patchDashboard: (id: string, patch: DashboardPatch) =>
+    patchJson<DashboardRecord>(`/dashboards/${encodeURIComponent(id)}`, patch),
+
+  deleteDashboard: (id: string) =>
+    del<{ deleted: boolean }>(`/dashboards/${encodeURIComponent(id)}`),
 }

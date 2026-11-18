@@ -5,11 +5,12 @@ import { StubBanner } from '@/components/StubBanner'
 import { ThemeControls } from '@/components/ThemeControls'
 import { AnalyseTab } from '@/components/analyse/AnalyseTab'
 import { DatabaseTab } from '@/components/database/DatabaseTab'
+import { DashboardTab } from '@/components/dashboard/DashboardTab'
 import { MemoryModal } from '@/components/analyse/MemoryModal'
 import { api } from '@/lib/api'
 import { DEFAULT_ACCENT, DEFAULT_DENSITY, DEFAULT_THEME, initTheme, type ThemePrefs } from '@/lib/theme'
 
-type Tab = 'analyse' | 'database'
+type Tab = 'analyse' | 'database' | 'dashboard'
 
 /**
  * AppShell — the shell for the Data Analysis Agent.
@@ -124,6 +125,12 @@ export function AppShell() {
                 active={tab === 'analyse'}
                 onClick={() => setTab('analyse')}
               />
+              <TabButton
+                id="tab-dashboard"
+                label="Dashboard"
+                active={tab === 'dashboard'}
+                onClick={() => setTab('dashboard')}
+              />
             </div>
           </div>
 
@@ -170,6 +177,16 @@ export function AppShell() {
           hidden={tab !== 'database'}
         >
           {tab === 'database' && <DatabaseTab />}
+        </div>
+        {/* Dashboard (C40) also stays MOUNTED so the open dashboard and an
+            in-flight build survive a trip to another tab. */}
+        <div
+          role="tabpanel"
+          id="panel-dashboard"
+          aria-labelledby="tab-dashboard"
+          hidden={tab !== 'dashboard'}
+        >
+          <DashboardTab />
         </div>
       </main>
 

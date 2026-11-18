@@ -6,7 +6,7 @@
 
 ## UI Type
 
-Web dashboard (single-page, two tabs), served single-origin by FastAPI.
+Web dashboard (single-page, three tabs — Database, Analyse, Dashboard), served single-origin by FastAPI.
 
 ## Tech Stack
 
@@ -16,7 +16,7 @@ Next.js 15 + React 19 + TypeScript (existing `frontend/`), static-exported to `f
 
 - **Header:** app name + tagline; a **Project notes** button opens the global-memory modal (memory/C29); a **yellow stub-mode banner** is shown when `GET /health` reports `provider == "stub"` (so demo output is never mistaken for real output); a **theme toggle** (C34, Phase 7) — a single light/dark icon button — sits in the header's right-hand utility area alongside the Live badge and Project-notes button. Accent (indigo) and density (compact) are fixed product decisions with no picker UI — see [capabilities/theming.md](capabilities/theming.md).
 - **Layout:** two-panel responsive shell; ≤960px stacks panels, ≤640px stacks cards.
-- **Tabs:** `[Database]` (default) and `[Analyse]`.
+- **Tabs:** `[Database]` (default), `[Analyse]`, and `[Dashboard]` (C40, Phase 15 — a third pill after Analyse; `Tab = 'analyse' | 'database' | 'dashboard'` in `AppShell.tsx`). Like Analyse, the Dashboard panel stays MOUNTED across tab switches (hidden, not unmounted) so the open dashboard and an in-flight build survive a trip to another tab.
 
 ## Views / Screens
 
@@ -45,6 +45,61 @@ Next.js 15 + React 19 + TypeScript (existing `frontend/`), static-exported to `f
 - **Dataset strip:** horizontal chips (uploaded / derived + stale), uploaded first; click = `selectDataset`.
 
 **Actions available:** select dataset, pan/zoom/fit the diagram, edit/generate notes, clean, re-derive, delete, clear database.
+
+### Screen: Dashboard tab (C40, Phase 15)
+
+**Purpose:** turn a data file + a plain-English command into an agent-built dashboard, then arrange it by drag-and-drop. Components in `frontend/src/components/dashboard/`.
+
+**Layout:** two-panel responsive shell like the other tabs — a left column (≈340px; stacks above the canvas at ≤960px) holding **Create** + **Saved dashboards**, and the main **canvas**.
+
+**Key elements:**
+- **Create dashboard card** (real): (1) **Data** — a dataset `<select>` of all datasets (`filename · rows×cols`, from `GET /datasets`) PLUS the existing **`<UploadCard onUploaded>`** embedded under an "or upload a file" disclosure (drag-drop CSV/TSV/TXT/JSON/Excel; the multi-sheet picker (C38) and 409 resolver work unchanged). When `onUploaded` fires, the card re-fetches `GET /datasets` and **auto-selects the newest dataset(s)** (set-difference against the previous id list; with several new sheets it selects the first and the rest remain in the select). (2) **Command** — a textarea ("e.g. Show revenue by region, a monthly trend and my top 10 customers"; Cmd/Ctrl+Enter submits; ≤1000 chars with a counter). (3) **Build dashboard** button → `POST /datasets/{id}/dashboards`; while in flight: spinner + "Profiling your data and designing the dashboard… (usually 5–20 s)" and the button disabled (no cancel in this phase). Errors (400/404/500) render as an inline banner; the form keeps its values. With zero datasets: "Upload a file to get started" and the button is disabled.
+- **Saved dashboards list** (real): `GET /dashboards` rows — title, dataset filename, relative time, widget count; click opens (fetches `GET /dashboards/{id}` + `/data`); trash icon with inline confirm → `DELETE /dashboards/{id}`. The newest build is opened automatically.
+- **Canvas header** (real): the dashboard title (click-to-edit inline → `PATCH {title}` on blur/Enter), the original command as a quiet subtitle, the dataset filename, a **save-state pill** ("Layout saved ✓" / "Saving…" / "Couldn't save — retry"), and — when `generation.used_fallback` — an amber badge **"Automatic dashboard — the AI response couldn't be used"** (never silent). If `generation.dropped_widgets` is non-empty, a collapsible "N suggested widgets were skipped" note lists the reasons.
+- **Widget grid** (real): a CSS grid of 12 equal columns (`grid-template-columns: repeat(12, 1fr)`, `grid-auto-rows: 72px`, gap 12px); each widget is placed with `grid-column: x+1 / span w; grid-row: y+1 / span h`. At ≤960px the grid collapses to ONE column in layout order (reading order = row-major by `y` then `x`); drag still works and reorders. Widget card chrome: header = **drag handle** (⠿, `draggable`, `cursor: grab`, `aria-label="Move widget: <title>"`) + title + a small **size** control (S / M / L → `w` = 3 / 6 / 12, KPI keeps `h`, chart/table keep `h`; resize is deliberately minimal) ; body by kind:
+  - **KPI** — large formatted value, caption ("sum of revenue"), empty value shows "—".
+  - **Chart** — the ECharts `option` rendered by the existing `EChart` renderer (exported from `ChartRender.tsx`; theme-aware, includes its Copy/PNG/JPEG toolbar), re-sizes with the card.
+  - **Table** — scrollable, sticky header, right-aligned numerics, "Showing N rows" footer (and "(truncated)" when `truncated`).
+  - A widget with `status:"error"` renders its `message` in a red inline panel; siblings are unaffected. Loading: skeleton cards while `/data` is in flight.
+- **Drag-to-rearrange** (real, native HTML5 DnD — no library): dragging a widget's handle over another widget highlights a drop slot (outline); **drop = move the dragged widget to the target's position in the ordering** (insert before the target), then the client **re-packs** the whole layout with `packLayout` (the same algorithm as the backend's `assign_layout`, `frontend/src/lib/dashboardLayout.ts`) and applies it optimistically; ONE `PATCH /dashboards/{id} {layout}` is sent per drop (failure → revert to the last saved layout + the save-state pill shows the error). The size control re-packs and PATCHes the same way. **Keyboard alternative** (a11y): with the handle focused, ArrowLeft/ArrowUp = move earlier, ArrowRight/ArrowDown = move later in the ordering (same re-pack + PATCH), each announced through `announce()` ("Moved Monthly revenue to position 3 of 7"). Layout persists across reload (reopen the dashboard from the list; the last-opened dashboard id is remembered in `sessionStorage`).
+- **Fields panel (LABELLED STUB until Phase 17):** a collapsed-by-default "Fields" card listing the dataset's columns as chips (name + dtype dot) with a visible tag **"Drag fields onto widgets to reconfigure — coming in a later phase"**; chips are NOT draggable and have `aria-disabled="true"`. **Phase 17: chips become draggable** (see "Phase 17" below).
+- **Other LABELLED STUBS (disabled, tooltip "Coming in a later phase"):** **+ Add widget**, widget **⋯ / Edit** menu, **Regenerate** with a new command (all go real in Phase 17), and **Export** (PNG / PDF / HTML — stays a stub; Power BI / Tableau export is out of scope for the whole series). They render the intended layout and are never mistaken for bugs.
+
+#### Dashboard tab — Power-BI-grade extensions (Phases 16–19)
+
+Visual polish per `harness/patterns/ui-ux.md` (theme tokens from C34, 8px spacing scale, restrained accent colour, clear type hierarchy, skeleton loaders, focus rings, `announce()` for a11y). Components in `frontend/src/components/dashboard/`.
+
+**Phase 16 — ranked insights (C41), all REAL:**
+- **Summary line** under the title (`spec.summary`).
+- **"Key insights" headline row** above the grid: up to 4 KPI cards numbered **1..N** (circled number badge), each = big value, KPI label, and a one-line "why it matters" (`description`) in muted text; the #1 card is accent-tinted and sits top-left. KPIs beyond 4 appear in the normal grid.
+- Every widget header shows an info-tooltip/inline line with its `description`; chart widgets show `chart_rationale` as a small muted "Why a bar chart: …" line beneath the description (collapsible via a chevron to reduce clutter). `description_source="auto"` renders a subtle "auto" tag.
+- **Priority panel** (button "Priority" in the canvas header → popover/side drawer): a numbered list of all widgets, reorderable by drag handle or Up/Down buttons (keyboard accessible); "Save order" → `PATCH {priority_order, rearrange}` with a checkbox "Re-arrange layout to match (default on)". Widgets show a small "#rank" chip on hover/focus (global priority).
+- Fallback ("automatic dashboard") badge unchanged; auto text is visibly tagged.
+- **Power-BI-style three-column layout (Phase 16 addition, REAL; as built):** once a dashboard is open the tab uses `.dash-layout-chat` = left column (≈280px: Create + Saved dashboards) | canvas (flexible) | right **AI workspace** (≈320px). At ≤1280px the workspace drops below the canvas, full width, 420px tall; at ≤960px everything is one column.
+  - **Canvas header domain strip:** a badge "◈ <Label> dataset" (tooltip "Detected from columns: …", or "No specific dataset type recognised, so this is a general dashboard" for `general`) plus pills "N records", "N columns", "N% complete" (from `data.domain` / `data.overview`).
+  - **`WorkspacePanel`** (`aside`, aria-label "AI workspace", header "AI workspace — Insights from your data, and edit by chat."): a two-tab `tablist` — **AI Insights** (with a count badge of `ai_insights`) and **Chat & edit**. Insights is the default tab; both panes stay mounted (state survives tab switches).
+  - **`InsightsPanel`:** four overview tiles (records, columns, % complete, duplicates) then "What the data shows" — a list of `ai_insights`, each with a tone icon (↗ positive, ↘ negative, ! warning, • neutral) and its `text`; empty state "No notable patterns found for the current widgets."; loading state "Loading insights…"; footnote "Computed directly from your data. Ask the chat to dig deeper." Never shows an LLM-written finding.
+  - **`DashboardChat`:** a log (`role="log"`, aria-live polite) of user/assistant bubbles and a single-line input (≤1000 chars, placeholder "e.g. add revenue by region") with Send. Empty state offers four suggestion chips (e.g. "Add a chart of the top 10 categories", "Make the main chart a line chart", "Remove the table", "Show averages instead of totals") that send on click. While in flight: "Updating the dashboard…" and the input is disabled. A reply with `changed:true` shows a "Dashboard updated" tag and replaces the on-screen dashboard + data (no refetch) via `onUpdated`; `changed:false` shows the reply only. API errors are shown as an assistant bubble (server message, or "Couldn't reach the server — is the server running?"). Switching dashboards clears the conversation (history is per open dashboard, not persisted).
+  - > **Assumed:** chat history is client-side only (not stored server-side) — inferred from the component state; `onChatUpdated` in the tab applies the returned `dashboard` and `data` (not read in detail).
+- Still stubs in Phase 16 (labelled): Fields drag, + Add widget, ⋯ menu, Regenerate, Filters bar, Templates, Connect API/DB, Export.
+
+**Phase 17 — editing (C42) + filters (C43), REAL:**
+- **+ Add widget** (canvas header): modal with kind picker (KPI / Chart / Table), title, field + aggregation selects (dtype-filtered), chart-type chooser showing ranked suggestions with rationale; errors from `invalid_widget` shown inline; Save → `POST …/widgets`.
+- **Widget "⋯" menu:** Edit (same modal prefilled; includes description text, limit/sort, widget filters, "Ignore dashboard filters"), Change chart type (suggestions list from `chart-suggestions`; invalid types disabled with reason), Remove (inline confirm).
+- **Fields panel goes live:** chips draggable; while dragging, each widget shows labelled drop zones for its valid slots ("Y axis", "X axis", "Group by", "Value"…; invalid slots dimmed with the reason); drop → `PATCH …/widgets/{wid} {bind}`; the widget shows a skeleton then the recomputed result; on `invalid_widget` a toast offers "Switch to <suggested chart>". Keyboard alternative: select a chip, then the widget's "Bind field…" menu item.
+- **Regenerate…** (canvas header): popover with a command textarea, mode radio (Replace everything / Add to this dashboard), then an "Undo" button (restore-previous) shown after a replace for the session.
+- **Filter bar** above the Key-insights row: a control per filter (multiselect chips, range slider, date-range inputs), "+ Add filter" (field picker), "Reset", active-filter count badge, a "Filtered: N of M rows" indicator; changes refetch `/data?filters=` (debounced 300 ms), "Save as default" persists via `PATCH {filters}`.
+- Export stays a labelled stub.
+
+**Phase 18 — templates (C44):** canvas header **Save as template** (name + description). New left-column card **Templates** (list: name, required-column count, updated; Delete; Rename). **Apply template…** flow = (1) choose template + target dataset (existing select, or the embedded UploadCard to bring a new file); (2) **Binding review** table (`POST /templates/{id}/validate`): rows required column → matched column, status chip (green exact/snapped, blue mapped, amber suggested with a dropdown of candidates to confirm, red missing / incompatible with the reason), live "N of M bound"; the **Apply** button stays disabled until the report is ok; (3) result opens the new dashboard with a "From template: <name>" tag. An "Update existing dashboard" checkbox sets `replace_dashboard_id`. **External API:** a small "API access" popover on the canvas header shows the dashboard's `/external/v1/...` URLs with Copy buttons and the status of the key ("External API disabled — set AGENT_EXTERNAL_API_KEY"); the key itself is never displayed.
+
+**Phase 19 — data sources (C46/C47):** the Create card's Data section gains a segmented control **File | REST API | SQL database**. *REST API* form: URL, optional bearer token (password field), headers (name/value rows), query params, records path (auto-detect hint); **Test** → preview table (≤20 rows + inferred dtypes) → name → **Create dataset**. *SQL database* form: connection string (password field + "use a read-only role" reminder), Table | Query tabs (monospace textarea), **Test** → preview → **Create**. Both show an inline note about whether credentials will be stored ("Stored encrypted" vs "Not stored — you'll be asked again on refresh", from `GET /data-sources/status`). Disabled features show an explanatory empty state, not an error. Sourced datasets show a source chip + "Refresh data" button on the canvas header (with last-refreshed time, "Snapshot truncated" warning, and on completion a toast summarising `schema_diff` / `needs_attention` dashboards). The Saved list shows a small icon for API/DB-sourced dashboards.
+
+**Actions available:** pick or upload a dataset, type a command, build, open/delete saved dashboards, rename, drag-rearrange (mouse or keyboard), change widget width, copy/download a chart image (existing toolbar).
+
+**States:** empty (no dashboards yet → helper text "Pick a dataset, describe the dashboard you want, press Build"), building, ready, fallback badge, per-widget error, save error. Network/5xx → inline banner "is the server running?" (same convention as other cards).
+
+**Frontend contract notes:** `frontend/src/lib/api.ts` gains `createDashboard(datasetId, {command,title?})`, `listDashboards(datasetId?)`, `getDashboard(id)`, `getDashboardData(id)`, `patchDashboard(id,{title?,layout?})`, `deleteDashboard(id)` and the TS types `DashboardSpec`, `DashboardWidget` (discriminated union on `kind`), `WidgetLayout`, `DashboardRecord`, `DashboardData`, `WidgetData` mirroring `spec/api.md` → "Dashboard spec v1". `dashboardLayout.ts` is a pure module (no React): the "ordering" is widgets sorted by `(y, x)`; `packLayout(widgets)` (identical first-fit algorithm to the backend `assign_layout`, honoring each widget's existing `w`/`h`, but NOT re-sorting by kind — re-packing keeps the given order; the KPI→chart→table hoist applies only on creation), `moveWidget(widgets, fromId, toId)`, `setWidth(widgets, id, w)`, `toLayoutPayload(widgets)` — unit-tested with `node --test` (the `starters.test.mjs` pattern).
 
 ## Modals
 
@@ -77,5 +132,7 @@ All `.modal-overlay`, backdrop + Escape close, focus first element: `memory-moda
 | Database tab (ER diagram, description) | labelled stub | labelled stub | labelled stub | **real** |
 | Clean / Re-derive / Generate notes | labelled stub | labelled stub | labelled stub | **real** |
 | Theme toggle (C34; accent/density are fixed, not live controls) | n/a (not built yet) | n/a | n/a | n/a — ships fully real in **Phase 7**, no stub stage |
+
+**Phase 15 (C40):** the Dashboard tab ships real (create/build/open/delete/rename/drag-rearrange/width) with the labelled stubs listed in its section above (Fields panel, + Add widget, Edit menu, Export, Regenerate); it has no earlier-phase stub stage (new surface, like Phase 7). **Phases 16–19** progressively turn those stubs real (16: ranked insights; 17: add/edit/remove/rebind/regenerate + filters; 18: templates + API-access popover; 19: REST API and SQL sources); at each phase the not-yet-built surfaces (and Export, permanently) stay visibly labelled stubs.
 
 A labelled stub renders the intended layout with a visible "coming in a later phase" tag so it is never mistaken for a bug. Phase 7 (theming, C34) is the one exception to the phased stub-to-real pattern above: it has no earlier phases to appear in, and ships fully functional the moment it lands — see [capabilities/theming.md](capabilities/theming.md) and `spec/roadmap.md` → Phase 7.

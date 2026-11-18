@@ -25,7 +25,7 @@ A registered data file (uploaded or derived) the agent can query.
 | content_hash | Text | yes | sha256 of file bytes (duplicate detection, C10) |
 | format | Text | yes | `csv` \| `tsv` \| `txt` \| `json` \| `excel` |
 | context | Text | no | User/auto notes, ≤ 4000 chars (C12) |
-| origin | Text | yes | `uploaded` \| `derived` \| `connected` (C36 — pulled from an external database, Phase 9) |
+| origin | Text | yes | `uploaded` \| `derived` \| `connected` (C36 — pulled from an external database, Phase 9; also C47 SQL sources) \| `api` (C46 — REST API snapshot, Phase 19) |
 | derived_from_run_id | Text | no | The `query_runs.id` that produced this derived dataset |
 | derived_from_dataset_ids | JSON | no | Parent dataset IDs (lineage, C25) |
 | derivation_code | Text | no | The pandas code that produced it (re-derive, C25) |
@@ -92,16 +92,75 @@ Key/value app settings and persistent memory.
 
 **Reserved keys:** `global_memory` (authoritative memory text, ≤ 4000 chars enforced at `PATCH /memory`; injected into every `plan_action` prompt via `get_memory_block()` — facts-only once `global_memory_facts` exist, raw-text fallback otherwise, never both), `global_memory_facts` (C31 compressed facts JSON, ≤ 20), `llm_model`, `max_iterations`.
 
+### Entity: `dashboards` (`DashboardRow`)
+
+C40 (Phase 15) — an agent-built dashboard over ONE dataset: the validated spec (widgets + field bindings + grid layout) plus how it was generated. Widget DATA is never stored — it is recomputed from the dataset file on each `GET /dashboards/{id}/data`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | Text (uuid) | yes | Primary key (`_uuid`) |
+| dataset_id | Text | yes | The dataset the dashboard is built on (→ `datasets.id`, enforced in code) |
+| title | Text | yes | Display title (agent-proposed or user-supplied; editable via `PATCH`; ≤80 chars) |
+| command | Text | yes | The user's natural-language command (≤1000 chars), kept for display/regeneration |
+| spec_json | JSON | yes | The **Dashboard spec v1** object (`version`, `title`, `description?`, `widgets[]` each with its `layout {x,y,w,h}`) — schema in `spec/api.md` → "Dashboard spec v1". The single source of truth for layout; `PATCH` rewrites `widgets[].layout` here |
+| generation_json | JSON | no | `{used_fallback, repaired, supplemented[], dropped_widgets[], notes[], model, tokens_input, tokens_output, duration_ms}` |
+| tokens_input | Integer | yes | LLM prompt tokens spent building it (0 on a pure fallback); `server_default 0` |
+| tokens_output | Integer | yes | LLM completion tokens spent building it; `server_default 0` |
+| created_at | TIMESTAMP(tz) | yes | `_now` default |
+| updated_at | TIMESTAMP(tz) | yes | `_now` default + onupdate (bumped by `PATCH`) |
+
+**Migration:** one new Alembic revision creating the `dashboards` table (down-revision = the CURRENT head at build time — `f7a8b9c0d1e2` as of this spec; the builder must confirm by content with `uv run alembic heads`, since earlier roadmap text cites older heads). Index on `dataset_id`. No FK constraints (repo convention). Model added to `src/db/models.py` extending `Base`, so the `_isolated_db` fixture picks it up automatically.
+
+**Extensions to `dashboards` (C41–C47):**
+- `spec_json` holds **Dashboard spec v2** from Phase 16 (per-widget `priority`, `description`, `description_source`, `chart_rationale`; top-level `summary`, and from Phase 17 `filters`) — no schema change; v1 JSON is lazily upgraded on read (`spec/api.md`).
+- `previous_spec_json` (JSON, nullable) — **Phase 17 migration**: one-level undo snapshot written by `regenerate` and `apply … replace_dashboard_id`.
+- `template_id` (Text, nullable) — **Phase 18 migration**: the template a dashboard was applied from (→ `dashboard_templates.id`, code-enforced; not cascaded — deleting a template leaves the dashboard).
+
+### Entity: `dashboard_templates` (`DashboardTemplateRow`) — Phase 18 (C44)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | Text (uuid) | yes | Primary key |
+| name | Text | yes | ≤80 chars |
+| description | Text | no | ≤300 chars |
+| spec_json | JSON | yes | Dashboard spec v2 copy (with layout and priorities) |
+| schema_json | JSON | yes | `required_schema[]` = `[{name, dtype_class, roles[]}]` |
+| source_dashboard_id | Text | no | Informational; no cascade |
+| created_at / updated_at | TIMESTAMP(tz) | yes | `_now` default / + onupdate |
+
+### Entity: `data_sources` (`DataSourceRow`) — Phase 19 (C46/C47)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | Text (uuid) | yes | Primary key |
+| kind | Text | yes | `api` \| `sql` |
+| name | Text | yes | ≤80 chars |
+| dataset_id | Text | yes | The dataset this source feeds (→ `datasets.id`; cascade-deleted with it) |
+| config_json | JSON | yes | NON-secret config only: `api` → `{url (no query secrets), records_path, header_names[], param_names[]}`; `sql` → `{type, uri_display, table?, query?}` |
+| secret_enc | Text | no | Fernet-encrypted JSON blob of secrets (header values, bearer token, secret query params, or DB URI). `null` when `AGENT_SECRET_KEY` unset or `save_secret=false`; NEVER serialised in any API response or log |
+| secret_stored | Boolean | yes | Whether `secret_enc` is populated |
+| last_refreshed_at | TIMESTAMP(tz) | no | Last successful pull |
+| last_status | Text | no | `ok` \| `error` |
+| last_error | Text | no | Credential-free message |
+| truncated | Boolean | yes | Last snapshot hit the row cap; default false |
+| created_at / updated_at | TIMESTAMP(tz) | yes | as above |
+
+`datasets` gains **`source_id`** (Text, nullable, → `data_sources.id`) and a new `origin` value **`api`** (Phase 19 migration). SQL sources reuse `origin="connected"` and `source_type="postgresql"` (C36) with `source_uri_raw` left NULL (the secret lives in `data_sources`). One Alembic revision per phase as stated in the series assumptions (17, 18, 19; Phase 16 has none).
+
 ### Relationships
 
 Enforced in code only (no FK constraints):
+
+- `dashboards.dataset_id` → `datasets.id` (cascade-deleted with the dataset, C15 extension)
+- `data_sources.dataset_id` → `datasets.id` (cascade: deleting a dataset deletes its `data_sources` row; deleting a data source keeps the dataset)
+- `dashboards.template_id` → `dashboard_templates.id` (no cascade)
 
 - `query_runs.dataset_id` → `datasets.id`
 - `query_runs.session_id` → `conversation_sessions.id`
 - `conversation_sessions.dataset_id` → `datasets.id`
 - `datasets.derived_from_run_id` → `query_runs.id`; `datasets.derived_from_dataset_ids[]` → `datasets.id` (lineage)
 
-**Cascade delete (C15):** deleting a dataset cascades to its sessions, runs, and on-disk files (CSV + Parquet) **and recursively deletes derived datasets whose `derived_from_dataset_ids` include it** (and their children, transitively). `DELETE /datasets` deletes all with the same cascade.
+**Cascade delete (C15):** deleting a dataset cascades to its sessions, runs, **dashboards (C40)**, and on-disk files (CSV + Parquet) **and recursively deletes derived datasets whose `derived_from_dataset_ids` include it** (and their children, transitively). `DELETE /datasets` deletes all with the same cascade.
 
 ## dtype-alias table (for `columns_schema` in `GET /datasets/{id}`)
 
@@ -117,7 +176,7 @@ Enforced in code only (no FK constraints):
 
 ## Data Lifecycle
 
-- **Created:** a `datasets` row on upload (origin=uploaded — incl. one row PER IMPORTED SHEET of a multi-sheet Excel workbook via `POST /upload/sheets`, C38: per-sheet `content_hash` over the sheet's canonical CSV serialization, filename `workbook.xlsx — Sheet`, provenance columns reused from C36, NO new columns/migration) or on `save_dataset` (origin=derived). A `query_runs` row per `/ask` (or a thin row for a clarification). A `conversation_sessions` row when a session is started. `settings` rows on first write of a key.
+- **Created:** a `datasets` row on upload (origin=uploaded — incl. one row PER IMPORTED SHEET of a multi-sheet Excel workbook via `POST /upload/sheets`, C38: per-sheet `content_hash` over the sheet's canonical CSV serialization, filename `workbook.xlsx — Sheet`, provenance columns reused from C36, NO new columns/migration) or on `save_dataset` (origin=derived). A `dashboards` row per `POST /datasets/{id}/dashboards` (C40; updated by `PATCH` title/layout, deleted by `DELETE /dashboards/{id}` or its dataset's cascade). A `query_runs` row per `/ask` (or a thin row for a clarification). A `conversation_sessions` row when a session is started. `settings` rows on first write of a key.
 - **Updated:** `datasets.context`/`context_facts`/`auto_notes_status` via describe/compress/PATCH; counts on clean/apply and re-derive; `query_runs.iteration_count` per step (live); `updated_at` on touch.
 - **Deleted:** only on explicit user action (DELETE dataset/session/all). **No TTL / no auto-expiry** — datasets persist indefinitely.
 

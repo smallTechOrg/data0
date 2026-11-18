@@ -294,6 +294,201 @@ Manual re-sync (mirrors the Phase 4 `/datasets/{id}/re-derive` pattern — see `
 | 400 | `not_connected` — dataset's `origin` is not `connected` |
 | 400 | `resync_error` — the pull failed (credential-free message) |
 
+### Agent-built Dashboards (C40, Phase 15)
+
+> Routes live in a NEW `src/api/dashboards.py` router, registered in `create_app()`. A dashboard belongs to exactly ONE dataset; the dashboard row stores the validated spec (incl. layout) and is re-computed against the dataset on every data fetch. Mechanism, fallback rules and the no-LLM-code decision: `spec/capabilities/dashboard-builder.md` + `spec/agent.md` → "Dashboard builder pipeline (C40)". All responses use the standard `ok()` / `api_error()` envelopes.
+
+#### Dashboard spec v1 (the validated contract — `dashboards.spec_json`)
+
+```json
+{
+  "version": 1,
+  "title": "Sales overview",
+  "description": "Revenue, units and top customers (optional, ≤300 chars)",
+  "widgets": [
+    {"id": "w1", "kind": "kpi", "title": "Total revenue",
+     "layout": {"x": 0, "y": 0, "w": 3, "h": 2},
+     "filters": [],
+     "kpi": {"field": "revenue", "agg": "sum", "format": "currency"}},
+    {"id": "w2", "kind": "chart", "title": "Revenue by region",
+     "layout": {"x": 0, "y": 2, "w": 6, "h": 5},
+     "chart": {"type": "bar", "x": "region",
+               "y": {"field": "revenue", "agg": "sum"},
+               "series_by": null, "time_grain": null, "sort": "y_desc", "limit": 10}},
+    {"id": "w3", "kind": "chart", "title": "Monthly revenue",
+     "layout": {"x": 6, "y": 2, "w": 6, "h": 5},
+     "chart": {"type": "line", "x": "order_date",
+               "y": {"field": "revenue", "agg": "sum"},
+               "series_by": null, "time_grain": "month", "sort": "x_asc", "limit": 50}},
+    {"id": "w4", "kind": "table", "title": "Top 10 customers by revenue",
+     "layout": {"x": 0, "y": 7, "w": 12, "h": 6},
+     "table": {"group_by": ["customer_id"],
+               "aggs": [{"field": "revenue", "agg": "sum", "alias": "revenue"}],
+               "sort_by": "revenue", "sort_dir": "desc", "limit": 10}}
+  ]
+}
+```
+
+| Element | Rule |
+|---------|------|
+| top level | `version` = `1`; `title` 1–80 chars; `description` ≤300 chars optional; `widgets` 1–12 items |
+| widget common | `id` unique, `^[a-z][a-z0-9_-]{0,31}$` (server assigns `w1…wN` when missing/duplicate); `kind` ∈ `kpi`\|`chart`\|`table`; `title` 1–80 chars; exactly the ONE config block matching `kind` (`kpi`/`chart`/`table`), other blocks absent; `filters` ≤5 items (optional, default `[]`); `layout` `{x,y,w,h}` integers on a **12-column grid** |
+| filter | `{field, op, value}`; `op` ∈ `eq ne gt gte lt lte in not_null`; `in` takes a list (≤50), `not_null` takes no `value`; `field` must exist; a filter whose `value` can't be coerced to the field's dtype is a validation error |
+| `kpi` | `{field: string\|null, agg, format?, prefix?, suffix?}`; `agg` ∈ `sum mean median min max count nunique`; `field: null` allowed only with `agg:"count"` (row count); `format` ∈ `number\|integer\|currency\|percent` (default `number`); `prefix`/`suffix` ≤8 chars |
+| `chart` | `{type, x, y?, series_by?, time_grain?, sort?, limit?, bins?}`; `type` ∈ `bar line area pie scatter histogram`; `x` = a field; `y` = `{field: string\|null, agg}` — required except for `histogram`; `agg` ∈ the KPI set, or `none` (scatter only; raw points, ≤2000 sampled evenly); `series_by` = optional categorical field (bar/line/area only; ≤8 distinct values kept, rest → "Other"); `time_grain` ∈ `day week month quarter year` — only when `x` is datetime (default chosen from the date span if omitted); `sort` ∈ `x_asc x_desc y_asc y_desc` (default `y_desc` for bar/pie, `x_asc` for line/area); `limit` 1–50 (default 20) = max categories/points after sort; `bins` 5–50 (default 20) for `histogram` (x numeric) |
+| `table` | RAW mode: `{columns: [field…]}` (1–12 fields, first `limit` rows after `sort_by`); GROUPED mode: `{group_by: [field…] (1–3), aggs: [{field, agg, alias?}…] (1–6)}`; the modes are mutually exclusive; `sort_by` = a column/alias name (optional); `sort_dir` ∈ `asc\|desc` (default `desc` when grouped, `asc` raw); `limit` 1–50 (default 10) |
+| field binding | a **real column name** of the dataset. Validation snaps a unique case/whitespace-insensitive match to the exact name; otherwise error `unknown_field`. dtype classes come from the `columns_schema` aliases (`integer/float` = numeric, `datetime`, `text/category/boolean` = categorical; object columns that parse as dates ≥95% are treated as `datetime`) |
+| dtype rules | `sum mean median` → numeric only; `min max` → numeric or datetime; `count nunique` → any; `line/area` x → datetime (or numeric, ordered); `histogram` x → numeric; `pie` x → categorical; `scatter` x,y → numeric |
+| `layout` | `x ≥ 0`, `1 ≤ w ≤ 12`, `x + w ≤ 12`, `1 ≤ h ≤ 12`, `y ≥ 0`; widgets must not overlap (rectangles `[x,x+w)×[y,y+h)` pairwise disjoint) |
+
+**Validation error codes** (used in the repair prompt and in `generation.dropped_widgets[].reason`): `bad_json`, `bad_shape`, `unknown_kind`, `unknown_field`, `bad_agg`, `agg_dtype_mismatch`, `bad_chart_type`, `axis_dtype_mismatch`, `bad_filter`, `bad_table_mode`, `duplicate_id`, `too_many_widgets`, `out_of_range` (clamped where possible instead of rejected: `limit`, `bins`, `title` length).
+
+**Default layout assignment** (backend `assign_layout`; the frontend `packLayout` MUST implement the identical algorithm — contract vector below): order widgets KPI → chart → table (stable within a kind); default sizes kpi `3×2`, chart `6×5`, table `12×6` (a widget keeps its `w`/`h` if it already has one); for each widget in order pick the smallest `y`, then smallest `x`, at which `[x,x+w)×[y,y+h)` is inside `0…12` columns and overlaps no already-placed widget. Contract vector: widgets `[kpi,kpi,kpi,kpi,chart,chart,table]` → `kpi(0,0) kpi(3,0) kpi(6,0) kpi(9,0) chart(0,2) chart(6,2) table(0,7)` (all as `w×h` above).
+
+#### Dashboard record (the response object, `dashboard`)
+
+```json
+{"id": "…", "dataset_id": "…", "dataset_filename": "sales.csv",
+ "title": "Sales overview", "command": "revenue by region and a monthly trend…",
+ "spec": { "...Dashboard spec v1..." },
+ "generation": {"used_fallback": false, "repaired": false, "supplemented": [],
+                "dropped_widgets": [{"title": "Churn rate", "reason": "unknown_field: churn"}],
+                "notes": [], "model": "gemini-3.1-flash-lite",
+                "tokens_input": 2210, "tokens_output": 640, "duration_ms": 6120},
+ "created_at": "…", "updated_at": "…"}
+```
+
+#### Widget data (the `data` object)
+
+```json
+{"dashboard_id": "…", "dataset_id": "…", "row_count": 1200, "computed_at": "…",
+ "widgets": {
+   "w1": {"kind": "kpi", "status": "ok", "label": "Total revenue", "value": 1234567.8,
+          "formatted": "$1,234,568", "format": "currency", "caption": "sum of revenue"},
+   "w2": {"kind": "chart", "status": "ok", "option": { "...ECharts option with a series key..." }},
+   "w4": {"kind": "table", "status": "ok", "columns": ["customer_id","revenue"],
+          "rows": [["C-1042", 83211.5]], "truncated": false},
+   "w9": {"kind": "chart", "status": "error", "message": "Column 'discount' no longer exists."}}}
+```
+
+KPI `value` is `null` (with `status:"ok"`, `formatted:"—"`) when the filtered frame is empty. Table cells follow the preview formatting (floats rounded to 4 dp, whole floats → int, NaN → null). Chart `option` values go through the same JSON-safe coercion as the sandbox `echart` helper (NaN → null, Timestamp → ISO string).
+
+### `POST /datasets/{id}/dashboards`
+Body `{command, title?}`. Runs the dashboard-builder pipeline synchronously (profile → one LLM call → validate/repair → assign layout; deterministic fallback on any LLM/parse failure) and persists a new `dashboards` row. Returns `ok({dashboard, data})` — the record AND the computed widget data in one round trip (HTTP 200). A degraded run (`generation.used_fallback=true`) is still a 200. Typically 5–20 s with a live provider (one call, +1 on repair) — no progress polling; the UI shows a spinner. Never Fast-Mode-gated.
+
+| Status | Condition |
+|--------|-----------|
+| 404 | `dataset_not_found` |
+| 400 | `empty_command` (blank/whitespace) / `command_too_long` (>1000 chars) / `empty_dataset` (0 rows or 0 columns) |
+| 500 | `dashboard_failed` (dataset file unreadable) / `write_failed` (`session.commit()` failure — rolled back, no phantom dashboard) |
+
+### `GET /dashboards`
+Optional query `dataset_id`. Summaries, most-recently-updated first: `[{id, dataset_id, dataset_filename, title, command, widget_count, used_fallback, created_at, updated_at}]`. Always 200 (empty list when none; entries whose dataset row is gone cannot exist — the cascade removes them).
+
+### `GET /dashboards/{id}`
+Returns `ok(dashboard)` (the record above). **404** `dashboard_not_found`.
+
+### `GET /dashboards/{id}/data`
+Recomputes every widget from the dataset's CURRENT file (safe pandas aggregation — `spec/agent.md`) and returns `ok(data)`. Per-widget failures are `status:"error"` entries, not HTTP errors. **404** `dashboard_not_found` / **404** `dataset_not_found` (defensive; cascade normally prevents it) / **500** `dashboard_failed` (dataset file unreadable).
+
+### `PATCH /dashboards/{id}`
+Body (all optional, at least one required): `{title?: string (1–80), layout?: [{id, x, y, w, h}, …]}`. `layout` must list EVERY widget id exactly once with integer coordinates satisfying the `layout` rules above (bounds + no overlap); it replaces `spec.widgets[].layout` atomically and bumps `updated_at`. Widget definitions (kind/bindings/filters) are NOT editable in this phase — only `title` and layout (field-drag reconfigure is Phase 16+). Returns `ok(dashboard)`.
+
+| Status | Condition |
+|--------|-----------|
+| 404 | `dashboard_not_found` |
+| 400 | `empty_patch` (no recognised field) / `invalid_title` / `invalid_layout` (unknown/missing/duplicate widget id, out of bounds, or overlap — stored layout unchanged) |
+| 500 | `write_failed` |
+
+### `DELETE /dashboards/{id}`
+Deletes the dashboard row only (the dataset is untouched). Returns `ok({deleted: true})`. **404** `dashboard_not_found`. Deleting a dataset (`DELETE /datasets/{id}` / `DELETE /datasets`) also deletes its dashboards (C15 extension).
+
+### Power-BI-grade dashboard extensions (C41–C47, Phases 16–19)
+
+> Each subsection is tagged with its delivering phase. All routes use `ok()` / `api_error()`. Capability rules: `spec/capabilities/dashboard-insights-priority.md` (series assumptions), `dashboard-widget-editing.md`, `dashboard-filters.md`, `dashboard-templates.md`, `dashboard-external-api.md`, `api-data-source.md`, `sql-data-source.md`.
+
+#### Dashboard spec v2 (Phase 16, C41) — supersedes v1; v1 specs are read as v2 (lazy upgrade, see C41)
+
+Same as v1 plus (all new fields optional on input; server always emits them):
+
+| Element | Rule |
+|---------|------|
+| top level | `version` = `2`; `summary` ≤200 chars (one-line headline of the dashboard); `filters` (Phase 17, C43) `[{id, field, control: select\|multiselect\|range\|date_range, value?}]` ≤5 |
+| widget | `priority` int, dense unique 1..N (1 = most important); `description` ≤200 chars (why it matters); `description_source` ∈ `agent\|auto\|user`; `chart_rationale` ≤140 chars (charts only: why this chart type for this data); `ignore_dashboard_filters` bool (Phase 17) |
+| LLM reply grammar | `{title, summary, description, widgets:[{kind, title, priority, description, chart_rationale?, …config}]}` — still NO coordinates |
+| `assign_layout` v2 | order = `kpi` by priority asc, then `chart`+`table` merged by priority asc (stable); sizes/first-fit identical to v1. **Contract vector v2:** widgets `[kpi p2, kpi p1, chart p4, table p3, chart p5]` → order `kpi p1 (0,0), kpi p2 (3,0), table p3 (0,2), chart p4 (0,8), chart p5 (6,8)` (kpi 3×2, table 12×6, chart 6×5). The v1 vector holds when all priorities are equal/absent. |
+
+New validation codes: `invalid_priority`, `invalid_widget`, `invalid_filter`, `too_many_widgets` (existing), `last_widget`, `nothing_to_restore`, `binding_mismatch`.
+
+**Phase 16 changes to existing routes**
+- `POST /datasets/{id}/dashboards`: returns spec v2; `data.insights` added. `data` object gains `insights: [{rank, widget_id, title, headline, why}]` (KPI widgets in priority order, ≤6).
+- `PATCH /dashboards/{id}` body additionally accepts `priority_order: [widget_id…]` (every id once) and `rearrange: bool` (default true). Errors: `400 invalid_priority`. Response `ok(dashboard)`; the client refetches `/data` for `insights`.
+- `data` object (returned by `POST /datasets/{id}/dashboards`, `GET /dashboards/{id}/data` and `POST /dashboards/{id}/chat`) additionally carries three deterministic, LLM-free fields, recomputed from the dataset's current file on every call:
+  - `domain`: `{key, label, confidence, matched, focus}` — dataset type guessed from column-name tokens. `key` ∈ `sales | stock_market | hr | finance | ecommerce | general`; `confidence` 0..1 (`min(1, matched_count/5)`, rounded to 2 dp); `matched` = up to 6 matched keywords; `focus` = what such dashboards usually show. `general` (confidence 0, `matched: []`) when fewer than 2 keywords match (or stock columns lack price/ticker evidence).
+  - `overview`: `{rows, columns, missing_cells, completeness (percent, 1 dp), duplicate_rows}`.
+  - `ai_insights`: `[{kind: trend|peak|leader|quality|outlier, tone: positive|negative|neutral|warning, widget_id: string|null, text}]`, ≤8, ordered by chart-widget priority then data-quality items. `text` states only values computed from the data (leader and share, change first→last period, peak/low period, missing-value columns, duplicate rows, extreme-value count); never a cause. A check that fails is skipped, never an error.
+
+#### `POST /dashboards/{id}/chat` (Phase 16 addition, C41)
+Body `{message: string}` (trimmed, 1–1000 chars). Edits the dashboard from a plain-English request: one LLM call (`refine_dashboard`, `spec/agent.md`). Returns `ok({reply, changed, dashboard, data})` — `reply` is one short sentence; `changed` is true only when a valid revised spec was persisted; `dashboard` is the (possibly updated) record; `data` is the freshly computed data object. An unusable/failed LLM reply is still HTTP 200 with `changed:false`, the stored spec untouched (so `updated_at` is unchanged) and `reply` explaining why. A change replaces the widget set (priorities re-normalised, layout re-assigned server-side), updates `title`, bumps `updated_at`.
+
+| Status | Condition |
+|--------|-----------|
+| 404 | `dashboard_not_found` / `dataset_not_found` |
+| 400 | `empty_message` (blank/whitespace) / `message_too_long` (>1000 chars) |
+| 500 | `dashboard_failed` (dataset file unreadable) / `write_failed` (commit failure, rolled back) |
+
+> **Assumed:** `write_failed` applies to chat because the route shares the `_commit` helper (code-derived).
+
+#### Phase 17 (C42 + C43)
+
+| Route | Body | Result / errors |
+|-------|------|-----------------|
+| `POST /dashboards/{id}/widgets` | `{kind, title, kpi\|chart\|table, description?, filters?, ignore_dashboard_filters?}` | `ok({dashboard, widget_id, widget_data})`; `400 invalid_widget` (errors[]), `400 too_many_widgets` |
+| `PATCH /dashboards/{id}/widgets/{wid}` | `{title?, description?, kpi?\|chart?\|table? (shallow merge), filters?, ignore_dashboard_filters?, bind?: {slot, field, agg?}}` | `ok({dashboard, widget_data})`; `400 invalid_widget` `{errors[], suggested_chart_types[]}`; `404 widget_not_found`. **No LLM.** Slots: `kpi.field chart.x chart.y chart.series_by table.group_by table.agg table.columns` |
+| `DELETE /dashboards/{id}/widgets/{wid}` | — | `ok({dashboard})`; `400 last_widget`; `404 widget_not_found` |
+| `GET /dashboards/{id}/widgets/{wid}/chart-suggestions` | — | `ok([{type, score, rationale, valid}])` (deterministic rule table) |
+| `POST /dashboards/{id}/regenerate` | `{command, mode?: "replace"\|"add", keep_title?: bool}` | `ok({dashboard, data})`; LLM pipeline as create (fallback never 5xx); stores `previous_spec_json`; errors as create (`empty_command`, `command_too_long`, `500 dashboard_failed`/`write_failed`) |
+| `POST /dashboards/{id}/restore-previous` | — | swaps spec ↔ previous; `ok({dashboard, data})`; `400 nothing_to_restore` |
+| `PATCH /dashboards/{id}` | adds `filters: [...]` (persisted defaults) | `400 invalid_filter` |
+| `GET /dashboards/{id}/data?filters=<json>` | `[{id, value}]` ≤2000 chars, non-persistent override | `data` gains `filters_applied`, `filter_options`, `row_count_filtered` |
+
+#### Phase 18 (C44 templates + C45 external API)
+
+| Route | Body | Result / errors |
+|-------|------|-----------------|
+| `POST /dashboards/{id}/template` | `{name, description?}` | `ok(template)` (201-style 200); `404 dashboard_not_found`; `400 invalid_name` |
+| `GET /templates` · `GET /templates/{id}` | — | summaries `[{id, name, description, required_columns:int, updated_at}]` / full template `{…, spec, required_schema[]}` |
+| `PATCH /templates/{id}` · `DELETE /templates/{id}` | `{name?, description?}` | `404 template_not_found` |
+| `POST /templates/{id}/validate` | `{dataset_id, mapping?}` | `ok(binding_report)` (always 200 when the dataset exists) |
+| `POST /templates/{id}/apply` | `{dataset_id, mapping?, title?, replace_dashboard_id?}` | `ok({dashboard, data, binding_report})`; `422 binding_mismatch` body = `{code, message, report}`; `400 empty_dataset`; `404 template_not_found`/`dataset_not_found`/`dashboard_not_found`; **no LLM call** |
+
+`required_schema[]` item: `{name, dtype_class: "numeric"|"datetime"|"categorical", roles: ["kpi.field", …]}`. `binding_report` shape: see C44.
+
+**External read API (C45)** — prefix `/external/v1`, GET only, `Authorization: Bearer <AGENT_EXTERNAL_API_KEY>` or `X-API-Key`:
+
+| Route | Returns |
+|-------|---------|
+| `GET /external/v1/dashboards` | `[{id, title, summary, widget_count, dataset_filename, updated_at}]` |
+| `GET /external/v1/dashboards/{id}` | `{id, title, spec (v2), required_schema[], updated_at}` |
+| `GET /external/v1/dashboards/{id}/data[?filters=]` | the `data` object (as `GET /dashboards/{id}/data`); supports `ETag`/`If-None-Match` → `304` |
+| `GET /external/v1/templates/{id}` | `{id, name, spec, required_schema[]}` |
+
+Errors: `403 external_api_disabled` (key env unset), `401 unauthorized`, `404 …_not_found`, `405` on non-GET. Never returned: `generation`, token counts, `command`, file paths, any source/credential data.
+
+#### Phase 19 (C46 REST API source + C47 SQL source)
+
+Gates: `AGENT_ENABLE_API_SOURCES` (API) / `AGENT_ENABLE_DB_CONNECTORS` (SQL) → else `403 sources_disabled` / `403 connectors_disabled`. `GET /data-sources/status` → `{api_enabled, sql_enabled, secrets_persisted: bool}` (true iff `AGENT_SECRET_KEY` set).
+
+| Route | Body | Result / errors |
+|-------|------|-----------------|
+| `POST /data-sources/check` | API: `{kind:"api", url, headers?, bearer_token?, query_params?, records_path?}`; SQL: `{kind:"sql", type:"postgresql", uri, table? \| query?}` | `ok(preview)`; nothing persisted; `400 url_blocked`/`not_json`/`response_too_large`/`source_fetch_failed`/`connection_failed`/`query_rejected`/`query_failed` |
+| `POST /data-sources` | check body + `{name, save_secret?}` | `ok({source, dataset})` — `source` = `{id, kind, name, dataset_id, config (non-secret), secret_stored, last_refreshed_at, last_status}`; `dataset` = the `_list_item` shape |
+| `GET /data-sources` · `GET /data-sources/{id}` | — | sources (never any secret/URI-with-credentials); `404 source_not_found` |
+| `POST /data-sources/{id}/refresh` | `{secret?}` | `ok({dataset, schema_diff, dashboards_affected[]})`; `400 secret_required`; previous snapshot kept on any failure |
+| `DELETE /data-sources/{id}` | — | removes source + encrypted secret, KEEPS the dataset; `ok({deleted:true})` |
+
+Datasets created this way appear in `GET /datasets` with `origin` = `api` (API) or `connected` (SQL), `source_type`, and `source_uri_display` (no credentials, no query string); `source_id` is exposed, secrets never.
+
 ## Authentication
 
-None — single local user. No API keys, sessions, or tokens for callers. Provider keys live in `.env` and never leave the server. Database connection URIs (C36) follow the same never-returned-by-any-API discipline as provider keys — see `spec/capabilities/external-db-connectors.md` → "Credential Hygiene".
+None for the application API — single local user. No API keys, sessions, or tokens for callers. **Exception (Phase 18, C45):** the `/external/v1/*` read-only surface is protected by a shared secret `AGENT_EXTERNAL_API_KEY` (disabled when unset); it is the only surface intended to be reachable by other applications. Provider keys live in `.env` and never leave the server. Data-source credentials (C46/C47: API tokens/headers, DB URIs) are secrets: never returned by any route, never logged; stored only Fernet-encrypted when `AGENT_SECRET_KEY` is set (otherwise not stored). Database connection URIs (C36) follow the same never-returned-by-any-API discipline as provider keys — see `spec/capabilities/external-db-connectors.md` → "Credential Hygiene".
