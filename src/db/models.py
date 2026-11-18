@@ -125,32 +125,3 @@ class SettingRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, default=_now, onupdate=_now
     )
-
-
-class DashboardRow(Base):
-    """C40 (Phase 15) — an agent-built dashboard over ONE dataset.
-
-    `spec_json` is the validated Dashboard spec v1 (widgets + field bindings +
-    grid layout); widget DATA is never stored (recomputed per open).
-    """
-
-    __tablename__ = "dashboards"
-
-    id: Mapped[str] = mapped_column(Text, primary_key=True, default=_uuid)
-    dataset_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
-    title: Mapped[str] = mapped_column(Text, nullable=False)
-    command: Mapped[str] = mapped_column(Text, nullable=False)
-    spec_json: Mapped[Any] = mapped_column(JSON, nullable=False)
-    generation_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
-    tokens_input: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0"
-    )
-    tokens_output: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0"
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False, default=_now
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False, default=_now, onupdate=_now
-    )

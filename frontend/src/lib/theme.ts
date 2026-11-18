@@ -38,15 +38,6 @@ function isTheme(value: string | null): value is Theme {
   return value === 'light' || value === 'dark'
 }
 
-/** `window.localStorage`, or undefined when absent. Merely reading it can throw when storage is denied. */
-function browserStorage(): Storage | undefined {
-  try {
-    return typeof window !== 'undefined' ? window.localStorage : undefined
-  } catch {
-    return undefined
-  }
-}
-
 /**
  * Reads persisted preferences from `localStorage`, falling back to defaults
  * for any key that is absent or holds an unrecognised value. Safe to call in
@@ -60,7 +51,7 @@ function browserStorage(): Storage | undefined {
  * the CSS remap, which still key off them.
  */
 export function readStoredPrefs(storage?: Storage): ThemePrefs {
-  const store = storage ?? browserStorage()
+  const store = storage ?? (typeof window !== 'undefined' ? window.localStorage : undefined)
 
   if (!store) {
     return { theme: DEFAULT_THEME, accent: DEFAULT_ACCENT, density: DEFAULT_DENSITY }
@@ -87,7 +78,7 @@ export function storePref<K extends keyof ThemePrefs>(
   value: ThemePrefs[K],
   storage?: Storage,
 ): void {
-  const store = storage ?? browserStorage()
+  const store = storage ?? (typeof window !== 'undefined' ? window.localStorage : undefined)
   if (!store) return
   try {
     store.setItem(STORAGE_KEYS[key], value)

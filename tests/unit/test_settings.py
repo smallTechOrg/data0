@@ -63,8 +63,6 @@ def test_new_settings_defaults(monkeypatch, tmp_path):
     # ensure no override leaks in
     monkeypatch.delenv("AGENT_OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("AGENT_MAX_ITERATIONS", raising=False)
-    # run from an empty dir so the developer's real .env isn't picked up
-    monkeypatch.chdir(tmp_path)
 
     import config.settings as m
     m._settings = None

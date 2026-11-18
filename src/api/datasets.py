@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from api._common import ok, api_error
 from api._parquet import _safe_to_parquet
-from db.models import ConversationSessionRow, DashboardRow, DatasetRow, QueryRunRow
+from db.models import ConversationSessionRow, DatasetRow, QueryRunRow
 from db.session import get_session
 from graph.derived import (
     _columns_json,
@@ -401,11 +401,6 @@ def _delete_one(session: Session, dataset_id: str) -> int:
     for r in runs_to_delete:
         session.delete(r)
     _delete_sessions_referencing(session, dataset_id)
-    # C40: a dataset's dashboards go with it (deleting a dashboard never the reverse).
-    for dash in session.execute(
-        select(DashboardRow).where(DashboardRow.dataset_id == dataset_id)
-    ).scalars().all():
-        session.delete(dash)
     session.delete(row)
     # Evict any cached DataFrame so a session that already loaded this dataset
     # falls through to a real "not found" instead of serving stale data (C27).
@@ -467,9 +462,6 @@ def delete_all_datasets(session: Session = Depends(get_session)) -> dict:
     sessions = session.execute(select(ConversationSessionRow)).scalars().all()
     for s in sessions:
         session.delete(s)
-    # C40: with no datasets left, no dashboard may reference one.
-    for dash in session.execute(select(DashboardRow)).scalars().all():
-        session.delete(dash)
     logger.info(
         "datasets_deleted_all",
         count=len(rows),
